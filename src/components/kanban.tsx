@@ -6,8 +6,9 @@
  *   - has unresolved blockedBy dependencies
  *   - in_progress but agent is idle/dead (waiting for permission, crashed, etc.)
  *
- * Swimlane: 1-line compact cards, projects as rows
- * Column-first: 3-line rich cards (DONE always 1-line)
+ * Alignment strategy: every cell uses <Box width={n}> to guarantee exact
+ * column widths. <Text wrap="truncate"> handles CJK/emoji truncation.
+ * Separator chars ("│ ") are outside cells, so cell widths don't drift.
  */
 import React from "react";
 import { Box, Text, useStdout } from "ink";
@@ -31,29 +32,23 @@ const COLUMN_CONFIG: Record<KanbanColumn, { label: string; color: string; bold: 
 
 // Classify a task into a kanban column based on priority rules
 function classifyTask(task: DisplayTask, project: ViewProject): KanbanColumn {
-  // 1. completed or gone → DONE
   if (task.status === "completed" || task.gone) return "done";
-  // 2. has unresolved blockedBy → NEEDS INPUT
   if (task.blockedBy) return "needs_input";
-  // 3. in_progress + agent idle/dead → NEEDS INPUT
   if (task.status === "in_progress" && task.owner) {
     const agent = project.agentDetails.find((a) => a.name === task.owner);
     if (agent && agent.processState !== "running") return "needs_input";
   }
-  // 4. in_progress → DOING
   if (task.status === "in_progress") return "doing";
-  // 5. pending → TODO
   return "todo";
 }
 
-// Build deduplicated buckets: classify tasks and deduplicate by task ID
+// Build deduplicated buckets per column
 function buildBuckets(project: ViewProject): Record<KanbanColumn, DisplayTask[]> {
   const buckets: Record<KanbanColumn, DisplayTask[]> = {
     todo: [], needs_input: [], doing: [], done: [],
   };
   const seen = new Set<string>();
   for (const task of project.tasks) {
-    // Dedup by task ID — first occurrence wins (live items are ordered before gone)
     const key = `${task.id}-${task.gone ? "g" : "l"}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -75,27 +70,17 @@ function accentColor(column: KanbanColumn, task: DisplayTask): string {
 
 // ─── Compact Card (1-line, used in swimlane + DONE column) ───
 
-function CompactCard({
-  task,
-  column,
-  width,
-}: {
+function CompactCard({ task, column }: {
   task: DisplayTask;
   column: KanbanColumn;
-  width: number;
 }) {
   const accent = accentColor(column, task);
   const isGone = !!task.gone;
   const isDone = column === "done";
-  const contentW = Math.max(4, width - 3); // "┃ " = 2 chars + 1 buffer
-
   const idStr = `#${task.id.length > 5 ? task.id.slice(0, 4) + "…" : task.id}`;
-  const remainW = contentW - idStr.length - 1;
-  const subject = task.subject.slice(0, Math.max(0, remainW));
-  const line = `${idStr} ${subject}`;
 
   return (
-    <Box width={width}>
+    <Text wrap="truncate">
       <Text color={accent}>┃ </Text>
       <Text
         color={isDone || isGone ? C.dim : C.text}
@@ -103,104 +88,52 @@ function CompactCard({
         dimColor={isGone}
         strikethrough={isDone || isGone}
       >
-        {line.padEnd(contentW).slice(0, contentW)}
+        {idStr} {task.subject}
       </Text>
-    </Box>
+    </Text>
   );
 }
 
 // ─── Rich Card (3-line, used in column-first for active tasks) ─
 
-function RichCard({
-  task,
-  column,
-  width,
-}: {
+function RichCard({ task, column, width }: {
   task: DisplayTask;
   column: KanbanColumn;
   width: number;
 }) {
   const accent = accentColor(column, task);
-  const contentW = Math.max(4, width - 3);
-
-  // Line 1: #ID + agent badge (right-aligned)
   const idStr = `#${task.id.length > 5 ? task.id.slice(0, 4) + "…" : task.id}`;
   const badge = task.owner ? task.owner.slice(0, 8).toUpperCase() : "";
-  const idPad = Math.max(0, contentW - idStr.length - badge.length);
-
-  // Line 2: Subject
-  const subjectStr = task.subject.slice(0, contentW);
-
-  // Line 3: Dwell time + dependency info
   const dwell = formatDwell(task.statusChangedAt);
-  const metaParts: string[] = [];
-  if (dwell) metaParts.push(dwell);
-  if (task.blockedBy) metaParts.push(`⊘#${task.blockedBy}`);
-  const metaStr = metaParts.join("  ").slice(0, contentW);
+  const meta = [dwell, task.blockedBy ? `⊘#${task.blockedBy}` : ""].filter(Boolean).join("  ");
 
   return (
     <Box flexDirection="column" width={width}>
-      <Box>
+      <Text wrap="truncate">
         <Text color={accent}>┃ </Text>
         <Text color={C.accent}>{idStr}</Text>
-        <Text>{" ".repeat(idPad)}</Text>
-        {badge && <Text color={C.dim}>{badge}</Text>}
-      </Box>
-      <Box>
+        {badge && <Text color={C.dim}>{" ".repeat(Math.max(1, width - idStr.length - badge.length - 2))}{badge}</Text>}
+      </Text>
+      <Text wrap="truncate">
         <Text color={accent}>┃ </Text>
-        <Text color={C.text} bold={column === "doing"}>
-          {subjectStr.padEnd(contentW).slice(0, contentW)}
-        </Text>
-      </Box>
-      <Box>
+        <Text color={C.text} bold={column === "doing"}>{task.subject}</Text>
+      </Text>
+      <Text wrap="truncate">
         <Text color={accent}>┃ </Text>
-        <Text color={task.blockedBy ? C.error : C.dim}>
-          {metaStr.padEnd(contentW).slice(0, contentW)}
-        </Text>
-      </Box>
+        <Text color={task.blockedBy ? C.error : C.dim}>{meta}</Text>
+      </Text>
     </Box>
   );
 }
 
-// ─── KanbanHeader ────────────────────────────────────────────
+// ─── Column separator ("│ " in content, "┼─" in divider) ─────
 
-function KanbanHeader({
-  counts,
-  activeCols,
-  colWidths,
-  labelW,
-  isSwimLane,
-}: {
-  counts: Record<KanbanColumn, number>;
-  activeCols: KanbanColumn[];
-  colWidths: number[];
-  labelW: number;
-  isSwimLane: boolean;
-}) {
-  return (
-    <Box>
-      {isSwimLane && (
-        <>
-          <Text color={C.subtext} bold>{"PROJECTS".padEnd(labelW)}</Text>
-          <Text color={C.dim}>│ </Text>
-        </>
-      )}
-      {activeCols.map((col, i) => {
-        const cfg = COLUMN_CONFIG[col];
-        const w = colWidths[i];
-        const countStr = String(counts[col]).padStart(3);
-        const labelStr = cfg.label.padEnd(Math.max(0, w - 6));
-        return (
-          <React.Fragment key={col}>
-            {i > 0 && <Text color={C.dim}>│ </Text>}
-            <Text color={cfg.color} bold={cfg.bold}>{labelStr}</Text>
-            <Text color={C.dim}>{countStr}  </Text>
-          </React.Fragment>
-        );
-      })}
-    </Box>
-  );
+// Renders a vertical separator between columns
+function Sep() {
+  return <Text color={C.dim}>│ </Text>;
 }
+
+const SEP_W = 2; // display width of "│ "
 
 // ─── SwimLaneLayout (1-line compact cards) ───────────────────
 
@@ -224,48 +157,43 @@ function SwimLaneLayout({
 
         return (
           <Box key={project.projectPath} flexDirection="column">
-            {/* Separator */}
-            <Box>
-              <Text color={C.dim}>
-                {"─".repeat(labelW)}┼{activeCols.map((_, i) => "─".repeat(colWidths[i])).join("┼")}
-              </Text>
-            </Box>
+            {/* Horizontal divider — matches column positions exactly */}
+            <Text color={C.dim}>
+              {"─".repeat(labelW)}
+              {activeCols.map((_, i) => "┼" + "─".repeat(colWidths[i] + 1)).join("")}
+            </Text>
 
             {/* 1 row per task slot */}
             {Array.from({ length: maxRows }, (_, ri) => {
-              // Left label: row 0 = name, row 1 = branch, row 2 = agents
               let leftText = "";
               let leftColor = C.text;
               if (ri === 0) {
-                leftText = project.name.length > labelW - 1
-                  ? project.name.slice(0, labelW - 2) + "…"
-                  : project.name;
+                leftText = project.name;
                 leftColor = isActive ? C.success : C.subtext;
               } else if (ri === 1) {
-                leftText = `⎇ ${project.branch}`;
+                leftText = `⎇${project.branch}`;
                 leftColor = C.accent;
-              } else if (ri === 2 && project.agentDetails.length > 0) {
-                const running = project.agentDetails.filter((a) => a.processState === "running").length;
-                leftText = `${running}/${project.agentDetails.length} agents`;
-                leftColor = C.dim;
               }
 
               return (
                 <Box key={ri}>
-                  <Text color={leftColor} bold={ri === 0}>
-                    {leftText.padEnd(labelW).slice(0, labelW)}
-                  </Text>
-                  <Text color={C.dim}>│ </Text>
+                  {/* Label cell — fixed width, truncated by Box */}
+                  <Box width={labelW}>
+                    <Text wrap="truncate" color={leftColor} bold={ri === 0}>
+                      {leftText}
+                    </Text>
+                  </Box>
+                  {/* Data columns */}
                   {activeCols.map((col, ci) => {
                     const task = buckets[col][ri];
                     return (
                       <React.Fragment key={col}>
-                        {ci > 0 && <Text color={C.dim}>│ </Text>}
-                        {task ? (
-                          <CompactCard task={task} column={col} width={colWidths[ci]} />
-                        ) : (
-                          <Text>{" ".repeat(colWidths[ci])}</Text>
-                        )}
+                        <Sep />
+                        <Box width={colWidths[ci]}>
+                          {task ? (
+                            <CompactCard task={task} column={col} />
+                          ) : null}
+                        </Box>
                       </React.Fragment>
                     );
                   })}
@@ -314,23 +242,21 @@ function ColumnFirstLayout({
 
     for (const group of columnGroups[col]) {
       if (multiProject) {
-        const name = group.project.name.slice(0, w - 4);
-        const dashW = Math.max(1, Math.floor((w - name.length - 2) / 2));
         elements.push(
-          <Text key={`hdr-${group.project.projectPath}-${col}`} color={C.dim}>
-            {"─".repeat(dashW)} {name} {"─".repeat(dashW)}
+          <Text key={`hdr-${group.project.projectPath}-${col}`} wrap="truncate" color={C.dim}>
+            {"─── "}{group.project.name}{" ───"}
           </Text>
         );
       }
       for (const task of group.tasks) {
         const key = `${group.project.projectPath}-${task.id}-${col}`;
         if (isDone) {
-          // DONE tasks: always compact 1-line
           elements.push(
-            <CompactCard key={key} task={task} column={col} width={w} />
+            <Box key={key} width={w}>
+              <CompactCard task={task} column={col} />
+            </Box>
           );
         } else {
-          // Active tasks: rich 3-line card
           elements.push(
             <RichCard key={key} task={task} column={col} width={w} />
           );
@@ -378,24 +304,29 @@ export function KanbanView({
   // Active columns: filter DONE when hidden
   const activeCols = hideDone ? ALL_COLUMNS.filter((c) => c !== "done") : ALL_COLUMNS;
   const numCols = activeCols.length;
-  const separatorW = numCols - 1; // "│" between columns
 
-  // Responsive column widths (computed for activeCols only)
+  // Panel takes 4 chars (2 borders + 2 paddingX)
+  const contentW = cols - 4;
+
+  // Column widths — every cell, header, and divider uses these exact values
   let labelW = 0;
   let colWidths: number[];
 
   if (layout === "swimlane") {
-    labelW = Math.max(12, Math.floor(cols * 0.15));
-    const available = cols - labelW - separatorW * 2 - 4; // "│ " per sep = 2 chars, panel padding = 4
-    const perCol = Math.max(14, Math.floor(available / numCols));
+    labelW = Math.min(18, Math.max(12, Math.floor(contentW * 0.15)));
+    // numCols separators of SEP_W each (label│col + col│col + ...)
+    const colAvail = contentW - labelW - numCols * SEP_W;
+    const perCol = Math.max(12, Math.floor(colAvail / numCols));
     colWidths = activeCols.map(() => perCol);
   } else {
-    const available = cols - separatorW - 4;
-    const perCol = Math.max(14, Math.floor(available / numCols));
+    // Column-first: "│" (1 char) between columns only
+    const sepTotal = numCols - 1;
+    const colAvail = contentW - sepTotal;
+    const perCol = Math.max(12, Math.floor(colAvail / numCols));
     colWidths = activeCols.map(() => perCol);
   }
 
-  // Count tasks per column (always count all 4 for header display)
+  // Count tasks per column
   const counts: Record<KanbanColumn, number> = { todo: 0, needs_input: 0, doing: 0, done: 0 };
   for (const project of projects) {
     const seen = new Set<string>();
@@ -416,13 +347,34 @@ export function KanbanView({
       title={`KANBAN ${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
       flexGrow={1}
     >
-      <KanbanHeader
-        counts={counts}
-        activeCols={activeCols}
-        colWidths={colWidths}
-        labelW={labelW}
-        isSwimLane={layout === "swimlane"}
-      />
+      {/* Header row — uses identical Box widths as content cells */}
+      <Box>
+        {layout === "swimlane" && (
+          <>
+            <Box width={labelW}>
+              <Text color={C.subtext} bold>PROJECTS</Text>
+            </Box>
+            <Sep />
+          </>
+        )}
+        {activeCols.map((col, ci) => {
+          const cfg = COLUMN_CONFIG[col];
+          const w = colWidths[ci];
+          const countStr = String(counts[col]);
+          const gap = Math.max(1, w - cfg.label.length - countStr.length);
+          return (
+            <React.Fragment key={col}>
+              {ci > 0 && <Sep />}
+              <Box width={w}>
+                <Text>
+                  <Text color={cfg.color} bold={cfg.bold}>{cfg.label}</Text>
+                  <Text color={C.dim}>{" ".repeat(gap)}{countStr}</Text>
+                </Text>
+              </Box>
+            </React.Fragment>
+          );
+        })}
+      </Box>
 
       {layout === "swimlane" ? (
         <SwimLaneLayout
