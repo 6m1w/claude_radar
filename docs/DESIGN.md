@@ -55,37 +55,41 @@ Navigation: `j/k` moves cursor in PROJECTS, `Enter` drills into Project Detail v
 Deep dive into a single project. Reached by pressing `Enter` on a project in Dashboard.
 
 ```
-╭─ claude_monitor ─────────────────────╮╭─ GIT HISTORY ────────────────────────╮
-│                                      ││                                      │
-│  ⎇ main │ 1 agent │ 2m ago          ││  ● faf45fa docs: update PRD          │
-│  [============>........] 3/5  60%    ││  │                                   │
-│                                      ││  ● e4bc709 fix: replace chokidar    │
-│  ◍ main                              ││  │                                   │
-│    ✓ #1 Setup Ink + TypeScript       ││  ● eaa40ec docs: update PRD          │
-│    ✓ #2 Session index resolver       ││  │                                   │
-│    ✓ #3 Polling watcher              ││  ● ce5ef2d fix: resolve project      │
-│    ▶ #4 Design hacker UI theme       ││  │   names for unindexed sessions    │
-│    ○ #5 Keyboard navigation          ││  │                                   │
-│                                      ││  ● 96e90e6 feat: add project         │
-│                                      ││      context via sessions-index      │
-╰──────────────────────────────────────╯╰──────────────────────────────────────╯
-╭─ TASK DETAIL ────────────────────────────────────────────────────────────────╮
-│  ▶ #4 Design hacker UI theme                                                 │
-│  owner: main │ status: active │ blocked_by: none                             │
-│  description: Implement Catppuccin Mocha palette, multi-panel layout...      │
-╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Tasks ──────────────────╮╭─ Git History ─────────────╮╭─ PRD / Docs ─────────────╮
+│                           ││                           ││                           │
+│  ⎇ main │ 1 agent │ 2m   ││  ● faf45fa docs: update   ││  # Claude Monitor        │
+│  [==========>....] 3/5    ││  │         PRD             ││                           │
+│                           ││  ● e4bc709 fix: replace    ││  TUI dashboard for       │
+│  ◍ main                   ││  │         chokidar        ││  monitoring Claude Code   │
+│    ✓ #1 Setup Ink + TS    ││  ● eaa40ec docs: update    ││  agent tasks and todos.  │
+│    ✓ #2 Session index     ││  │         PRD             ││                           │
+│    ✓ #3 Polling watcher   ││  ● ce5ef2d fix: resolve    ││  ## Tech Stack           │
+│    ▶ #4 Design hacker UI  ││  │   project names         ││  - TypeScript + Ink      │
+│    ○ #5 Keyboard nav      ││  ● 96e90e6 feat: add       ││  - 1s poll + snapshot    │
+│                           ││      project context       ││  - Catppuccin Mocha      │
+╰───────────────────────────╯╰───────────────────────────╯╰───────────────────────────╯
+╭─ Task Detail ────────────────────────────────────────────────────────────────────────╮
+│  ▶ #4 Design hacker UI theme                                                         │
+│  owner: main │ status: active │ blocked_by: none                                     │
+│  description: Implement Catppuccin Mocha palette, multi-panel layout...               │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 Key features:
-- **Left**: Task list with agent grouping (same as current)
-- **Right**: Git history with commit graph (vertical line + dots)
+- **Left**: Task list with agent grouping
+- **Center**: Git history with commit graph (3-5 recent commits, colored by type)
+- **Right**: Project docs — reads `docs/PRD.md`, `CLAUDE.md`, or `README.md` from project directory
 - **Bottom**: Selected task's full detail (description, owner, blockers)
 
-Navigation: `j/k` moves task cursor, `Enter` shows task detail, `Esc` back to Dashboard.
+PRD panel data source: `{projectPath}/docs/PRD.md` → `{projectPath}/CLAUDE.md` → `{projectPath}/README.md` (first found). Rendered as plain text with basic markdown highlighting (headers bold, lists indented). Scrollable with `j/k` when panel focused.
+
+Navigation: `j/k` moves task cursor, `1-3` to focus panels, `Enter` shows task detail, `Esc` back to Dashboard.
 
 ### View 3: Focus / Kanban
 
-Multi-project kanban for parallel development monitoring. Shows agents as columns.
+Multi-project kanban for parallel development monitoring. Two layout modes toggled with `s`.
+
+**Layout A: By Agent** (default) — each agent is a column, tasks listed vertically.
 
 ```
 ╭─ FOCUS: 2 projects, 4 agents ───────────────────────────────────────────────╮
@@ -105,14 +109,32 @@ Multi-project kanban for parallel development monitoring. Shows agents as column
 │  │ ▶ User dashboard ││ ▶ Migrations     ││ ○ E2E tests      │               │
 │  │ ○ API endpoints  ││                  ││                   │               │
 │  └──────────────────┘└──────────────────┘└───────────────────┘               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+**Layout B: Swimlane** — columns are TODO / DOING / DONE. All tasks from all agents in the selected project(s), sorted into status columns.
+
+```
+╭─ FOCUS: outclaws ⎇ main ────────────────────────────────────────────────────╮
 │                                                                              │
+│  ┌─ TODO ───────────┐┌─ DOING ──────────┐┌─ DONE ───────────┐              │
+│  │                   ││                   ││                   │              │
+│  │ ○ API endpoints   ││ ▶ User dashboard  ││ ✓ Auth module     │              │
+│  │   └ stream-a      ││   └ stream-a      ││   └ stream-a      │              │
+│  │ ○ E2E tests       ││ ▶ Migrations      ││ ✓ DB schema       │              │
+│  │   └ stream-c      ││   └ stream-b      ││   └ stream-b      │              │
+│  │ ⊘ Unit tests      ││                   ││                   │              │
+│  │   └ stream-c      ││                   ││                   │              │
+│  │                   ││                   ││                   │              │
+│  └───────────────────┘└───────────────────┘└───────────────────┘              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
 Key features:
-- Agents as side-by-side columns within each project
+- `s` toggles between agent layout and swimlane layout
 - Projects stacked vertically
 - Only shows projects with `status != "done"` by default (toggle with `h`)
+- Swimlane DONE column requires local persistence (tasks disappear from Claude Code after completion)
 
 Access: `Tab` from Dashboard, or `f` to filter which projects appear.
 
@@ -125,6 +147,38 @@ Access: `Tab` from Dashboard, or `f` to filter which projects appear.
      │                    │
      Tab ◂────────────▸ Focus/Kanban
 ```
+
+## Data Capture Scope
+
+### What IS captured (structured data)
+
+| Source | Data | Fields |
+|--------|------|--------|
+| `~/.claude/todos/{session}-agent-*.json` | TodoWrite items | `content`, `status` (pending/in_progress/completed), `activeForm` |
+| `~/.claude/tasks/{session}/*.json` | TaskCreate items | `id`, `subject`, `description`, `status`, `owner`, `blocks`, `blockedBy` |
+| `~/.claude/projects/*/sessions-index.json` | Session metadata | `sessionId`, `projectPath`, `summary`, `gitBranch` |
+| `git log` (per projectPath) | Commit history | hash, message, timestamp |
+| `{projectPath}/docs/PRD.md` etc. | Project documentation | raw file content |
+
+### What is NOT captured
+
+| Data | Location | Why not |
+|------|----------|---------|
+| Claude's questions to user (AskUserQuestion) | JSONL conversation log | Not structured — mixed into full conversation stream |
+| User's answers/choices | JSONL conversation log | Same — would need full JSONL parsing |
+| Tool calls (Read, Edit, Bash...) | JSONL conversation log | Too granular, not useful for task-level monitoring |
+| Claude's thinking/reasoning | JSONL conversation log | Internal to the model |
+
+### Persistence Strategy
+
+Claude Code deletes task files when tasks are completed or sessions end. To keep history:
+
+1. **Snapshot on every poll** — when scanner finds data, save a copy to `~/.claude-monitor/snapshots/{sessionId}.json`
+2. **Merge on read** — on startup, load both live data (`~/.claude/`) and snapshots, merge by sessionId
+3. **DONE column** — only possible with snapshots. Without persistence, completed tasks vanish.
+4. **Stale detection** — if a snapshot exists but no live data, mark session as "archived"
+
+This is critical for the swimlane DONE column and for showing historical sessions.
 
 ## Components
 
@@ -142,7 +196,7 @@ Data source: Run `git log --oneline -N` against the project's directory.
 
 - Color commits by type: `feat` green, `fix` yellow, `docs` blue, `chore` dim
 - Show branch name if not main
-- Limit to 8-10 most recent commits (scrollable with j/k when panel focused)
+- Show 3-5 most recent commits (scrollable with j/k when panel focused)
 
 ### Progress Bars
 
@@ -307,9 +361,9 @@ git log (per project dir)  ──────────┘                    
 | P3 | Local snapshot persistence | All | Medium |
 | P3 | Status badges (build/deploy) | Dashboard | Low (needs hooks) |
 
-## Open Questions
+## Resolved Decisions
 
-1. **Terminal size**: Minimum supported terminal width? 80 cols? 120 cols?
-2. **Refresh rate**: Keep 1s polling or make configurable?
-3. **Git history depth**: How many commits to show? Performance concern for large repos.
-4. **Multi-select in Focus**: Free selection or preset groups (e.g., "all active")?
+1. **Terminal size**: Minimum 80 cols × 24 rows (13" screen half-width). Panels reflow at narrow widths.
+2. **Refresh rate**: 1s polling for now. May make configurable later.
+3. **Git history depth**: 3-5 most recent commits. Keeps panel compact, avoids perf issues on large repos.
+4. **Multi-select in Focus**: Default shows all active projects. `f` opens filter to toggle individual projects on/off.
