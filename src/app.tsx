@@ -326,10 +326,9 @@ export function App() {
 
   return (
     <Box flexDirection="column" height={termRows} paddingBottom={1}>
-      {/* Row A: Compressed overview bar (2 lines → single compact row) */}
+      {/* Row A: Compressed overview bar */}
       <Box paddingX={1} height={2}>
-        {/* Left: stats + progress */}
-        <Box>
+        <Text wrap="truncate">
           <Text color={C.text} bold>{String(totalProjects)}</Text>
           <Text color={C.subtext}> projects  </Text>
           <Text color={totalActive > 0 ? C.warning : C.text} bold>{String(totalActive)}</Text>
@@ -337,29 +336,31 @@ export function App() {
           <Text color={C.text} bold>{String(totalTasks)}</Text>
           <Text color={C.subtext}> tasks  </Text>
           {totalTasks > 0 && <Progress done={totalDone} total={totalTasks} width={12} />}
-        </Box>
-        {/* Separator */}
-        {activeProjects.length > 0 && (
-          <Box>
-            <Text color={C.dim}>  │  </Text>
-            {/* Right: active agent summaries (max 3) */}
-            {activeProjects.slice(0, 3).map((p, i) => {
-              const doing = p.tasks.find((t) => t.status === "in_progress");
-              return (
-                <Box key={i}>
-                  {i > 0 && <Text color={C.dim}>  </Text>}
-                  <Text color={C.warning}>{I.working} </Text>
-                  <Text color={C.subtext}>{p.name.slice(0, 10)}</Text>
-                  <Text color={C.dim}>:</Text>
-                  <Text color={C.text}>{doing ? `#${doing.id}` : "active"}</Text>
-                </Box>
-              );
-            })}
-            {activeProjects.length > 3 && (
-              <Text color={C.dim}>  +{activeProjects.length - 3}</Text>
-            )}
-          </Box>
-        )}
+          {/* Active project summaries */}
+          {activeProjects.length > 0 && (
+            <>
+              <Text color={C.dim}>  │ </Text>
+              {activeProjects.slice(0, 3).map((p, i) => {
+                const doing = p.tasks.find((t) => t.status === "in_progress");
+                const name = p.name.length > 16 ? p.name.slice(0, 15) + "…" : p.name;
+                return (
+                  <Text key={i}>
+                    {i > 0 && <Text color={C.dim}> </Text>}
+                    <Text color={C.warning}>{I.working}</Text>
+                    <Text color={C.subtext}>{name}</Text>
+                    {doing && <Text color={C.text}> #{doing.id}</Text>}
+                  </Text>
+                );
+              })}
+              {activeProjects.length > 3 && (
+                <Text color={C.dim}> +{activeProjects.length - 3}</Text>
+              )}
+            </>
+          )}
+          {activeProjects.length === 0 && totalProjects > 0 && (
+            <Text color={C.dim}>  │  all idle</Text>
+          )}
+        </Text>
       </Box>
 
       {/* Row B: Projects + Tasks — fills remaining space */}
@@ -661,7 +662,7 @@ function RightPanel({
             .reverse()
             .slice(0, 8)
             .map((evt, i) => (
-              <Box key={i}>
+              <Text key={i} wrap="truncate">
                 <Text color={evt.isError ? C.error : C.dim}>
                   {formatRelativeTime(evt.ts).padStart(4)}
                 </Text>
@@ -669,7 +670,7 @@ function RightPanel({
                 <Text color={activityColor(evt.toolName, !!evt.isError)}>
                   {evt.summary}
                 </Text>
-              </Box>
+              </Text>
             ))}
         </>
       )}
