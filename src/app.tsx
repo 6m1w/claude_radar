@@ -89,10 +89,20 @@ export function App() {
   const totalTasks = projects.reduce((s, p) => s + p.totalTasks, 0);
   const totalCompleted = projects.reduce((s, p) => s + p.completedTasks, 0);
   const totalAgents = new Set(projects.flatMap((p) => p.agents)).size;
+  const totalActiveSessions = projects.reduce((s, p) => s + p.activeSessions, 0);
 
-  // Active agent+task pairs
+  // Active sessions and tasks
   const activePairs: { projectName: string; agent: string; label: string; time: string }[] = [];
+  // Show projects with active Claude sessions
   for (const p of projects) {
+    if (p.activeSessions > 0 && p.inProgressTasks === 0) {
+      activePairs.push({
+        projectName: p.projectName,
+        agent: "session",
+        label: `${p.activeSessions} active session${p.activeSessions > 1 ? "s" : ""}`,
+        time: formatTimeAgo(p.lastActivity),
+      });
+    }
     for (const s of p.sessions) {
       for (const item of s.items) {
         if (item.status !== "in_progress") continue;
@@ -128,6 +138,7 @@ export function App() {
               totalAgents={totalAgents}
               totalTasks={totalTasks}
               totalCompleted={totalCompleted}
+              totalActiveSessions={totalActiveSessions}
             />
             <ActiveNowPanel activePairs={activePairs} />
           </Box>
@@ -172,23 +183,25 @@ function OverviewPanel({
   totalAgents,
   totalTasks,
   totalCompleted,
+  totalActiveSessions,
 }: {
   totalProjects: number;
   totalAgents: number;
   totalTasks: number;
   totalCompleted: number;
+  totalActiveSessions: number;
 }) {
   return (
     <Panel title="OVERVIEW" flexGrow={1}>
       <Box>
         <Text color={C.text} bold>{totalProjects}</Text>
         <Text color={C.subtext}> projects  </Text>
-        <Text color={C.text} bold>{totalAgents}</Text>
-        <Text color={C.subtext}> agents  </Text>
+        <Text color={totalActiveSessions > 0 ? C.warning : C.text} bold>{totalActiveSessions}</Text>
+        <Text color={C.subtext}> active  </Text>
         <Text color={C.text} bold>{totalTasks}</Text>
         <Text color={C.subtext}> tasks</Text>
       </Box>
-      <Progress done={totalCompleted} total={totalTasks} width={20} />
+      {totalTasks > 0 && <Progress done={totalCompleted} total={totalTasks} width={20} />}
     </Panel>
   );
 }
@@ -231,25 +244,26 @@ function ProjectList({
   selectedPaths: Set<string>;
 }) {
   return (
-    <Panel title="PROJECTS" hotkey="1" width={38}>
+    <Panel title={`PROJECTS (${projects.length})`} hotkey="1" width={50}>
       {projects.length === 0 ? (
-        <Text color={C.dim}>No active projects</Text>
+        <Text color={C.dim}>No projects found</Text>
       ) : (
         projects.map((p, i) => {
           const isCursor = i === cursorIdx;
           const isSelected = selectedPaths.has(p.projectPath);
-          const icon = p.isActive
+          const icon = p.activeSessions > 0
             ? I.working
             : p.completedTasks === p.totalTasks && p.totalTasks > 0
               ? I.done
               : I.idle;
-          const iconColor = p.isActive
+          const iconColor = p.activeSessions > 0
             ? C.warning
             : p.completedTasks === p.totalTasks && p.totalTasks > 0
               ? C.success
               : C.dim;
           const timeAgo = formatTimeAgo(p.lastActivity);
           const selectMark = isSelected ? I.selected : I.unselected;
+          const branch = p.git?.branch ?? p.gitBranch ?? "";
 
           return (
             <Box key={p.projectPath}>
@@ -259,10 +273,14 @@ function ProjectList({
               <Text color={isSelected ? C.success : C.dim}>{selectMark} </Text>
               <Text color={iconColor}>{icon} </Text>
               <Text color={isCursor ? C.text : C.subtext} bold={isCursor}>
-                {p.projectName.padEnd(12).slice(0, 12)}
+                {p.projectName.padEnd(14).slice(0, 14)}
               </Text>
-              <Text color={C.dim}> </Text>
-              <Progress done={p.completedTasks} total={p.totalTasks} width={8} />
+              {branch ? (
+                <Text color={C.accent}> ⎇{branch.padEnd(6).slice(0, 6)}</Text>
+              ) : (
+                <Text color={C.dim}>        </Text>
+              )}
+              <Text color={C.dim}> {String(p.totalSessions).padStart(2)}s</Text>
               <Text color={C.dim}> {timeAgo.padStart(3)}</Text>
             </Box>
           );
@@ -283,24 +301,51 @@ function DetailPreview({ project }: { project?: ProjectData }) {
   }
 
   const allItems = project.sessions.flatMap((s) => s.items);
-  const branch = project.gitBranch ? `⎇ ${project.gitBranch}` : "";
+  const branch = project.git?.branch ?? project.gitBranch;
   const agentLabel = project.agents.length > 0
     ? `${project.agents.length} agent${project.agents.length > 1 ? "s" : ""}`
     : "";
 
   return (
     <Panel title={project.projectName.toUpperCase()} hotkey="2" flexGrow={1}>
+      {/* Git + Sessions info */}
       <Box>
-        {branch && <Text color={C.accent}>{branch} </Text>}
-        {agentLabel && <Text color={C.dim}>{agentLabel} </Text>}
-        <Progress done={project.completedTasks} total={project.totalTasks} width={12} />
+        {branch && <Text color={C.accent}>⎇ {branch} </Text>}
+        {agentLabel && <Text color={C.dim}>{agentLabel}  </Text>}
+        <Text color={C.subtext}>{project.totalSessions} sessions</Text>
+        {project.activeSessions > 0 && (
+          <Text color={C.warning}> ({project.activeSessions} active)</Text>
+        )}
       </Box>
-      <Text> </Text>
-      {allItems.slice(0, 8).map((item, i) => (
+
+      {/* Docs */}
+      {project.docs.length > 0 && (
+        <Box>
+          <Text color={C.subtext}>docs: </Text>
+          <Text color={C.primary}>{project.docs.join("  ")}</Text>
+        </Box>
+      )}
+
+      {/* Task progress */}
+      {project.totalTasks > 0 && (
+        <Box>
+          <Text color={C.subtext}>tasks: </Text>
+          <Progress done={project.completedTasks} total={project.totalTasks} width={12} />
+        </Box>
+      )}
+
+      {/* Task list */}
+      {allItems.length > 0 && <Text> </Text>}
+      {allItems.slice(0, 6).map((item, i) => (
         <TaskRow key={i} item={item} />
       ))}
-      {allItems.length > 8 && (
-        <Text color={C.dim}>  ... +{allItems.length - 8} more</Text>
+      {allItems.length > 6 && (
+        <Text color={C.dim}>  ... +{allItems.length - 6} more</Text>
+      )}
+
+      {/* Empty state */}
+      {allItems.length === 0 && project.totalSessions > 0 && (
+        <Text color={C.dim}>No tasks (session-only project)</Text>
       )}
     </Panel>
   );

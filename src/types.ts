@@ -47,4 +47,13 @@ export interface ProjectData {
   agents: string[];       // unique owner/agent names
   lastActivity: Date;
   isActive: boolean;      // has any in_progress task
+  // New: session activity (from .jsonl file mtimes)
+  totalSessions: number;
+  activeSessions: number; // sessions modified within last 5 min
+  // New: project enrichment (from actual project directory)
+  git?: {
+    branch: string;
+    dirty?: boolean;
+  };
+  docs: string[];          // detected doc files: "PRD.md", "CLAUDE.md", etc.
 }

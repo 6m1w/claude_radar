@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import type { TodoItem, TaskItem, SessionData, SessionMeta, ProjectData } from "../types.js";
@@ -7,6 +7,12 @@ const CLAUDE_DIR = join(homedir(), ".claude");
 const TODOS_DIR = join(CLAUDE_DIR, "todos");
 const TASKS_DIR = join(CLAUDE_DIR, "tasks");
 const PROJECTS_DIR = join(CLAUDE_DIR, "projects");
+
+// Sessions modified within this window are considered "active"
+const ACTIVE_THRESHOLD_MS = 5 * 60 * 1000;
+
+// Doc files to detect in project directories
+const DOC_CANDIDATES = ["CLAUDE.md", "PRD.md", "docs/PRD.md", "TDD.md", "docs/TDD.md", "README.md"];
 
 function readJson<T>(path: string): T | null {
   try {
@@ -24,22 +30,55 @@ function getModTime(path: string): Date {
   }
 }
 
-// Build reverse index: sessionId → SessionMeta
-// Strategy 1: Read sessions-index.json for rich metadata (has projectPath, summary, etc.)
-// Strategy 2: Scan for {sessionId}.jsonl files — use projectPath from sibling entries in same dir
-function buildSessionIndex(): Map<string, SessionMeta> {
-  const index = new Map<string, SessionMeta>();
-  // Track known projectPath per directory (from sessions-index entries)
-  const dirProjectPath = new Map<string, string>();
+// ─── Phase 1: Discover ALL projects from ~/.claude/projects/ ────
+interface DiscoveredProject {
+  claudeDir: string;        // full path to ~/.claude/projects/{dir}
+  projectPath: string;      // actual filesystem path (from sessions-index or derived)
+  projectName: string;
+  gitBranch?: string;       // from sessions-index metadata
+  sessionIds: string[];     // session UUIDs from sessions-index entries
+  totalSessions: number;    // count of .jsonl files
+  activeSessions: number;   // .jsonl files modified recently
+  lastSessionActivity: Date;
+}
+
+function discoverProjects(): DiscoveredProject[] {
+  const results: DiscoveredProject[] = [];
+  const now = Date.now();
 
   try {
-    const projectDirs = readdirSync(PROJECTS_DIR);
-    for (const dir of projectDirs) {
+    const dirs = readdirSync(PROJECTS_DIR);
+    for (const dir of dirs) {
       const dirPath = join(PROJECTS_DIR, dir);
 
-      // Strategy 1: sessions-index.json (has summary, firstPrompt, etc.)
+      // Skip non-directories
+      try {
+        if (!statSync(dirPath).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+
+      // Count .jsonl files and check their activity
+      let totalSessions = 0;
+      let activeSessions = 0;
+      let lastSessionActivity = new Date(0);
+
+      try {
+        const files = readdirSync(dirPath);
+        for (const file of files) {
+          if (!file.endsWith(".jsonl")) continue;
+          totalSessions++;
+          const mtime = getModTime(join(dirPath, file));
+          if (mtime > lastSessionActivity) lastSessionActivity = mtime;
+          if (now - mtime.getTime() < ACTIVE_THRESHOLD_MS) activeSessions++;
+        }
+      } catch {
+        // skip
+      }
+
+      // Read sessions-index.json for metadata (if available)
       const indexPath = join(dirPath, "sessions-index.json");
-      const data = readJson<{
+      const indexData = readJson<{
         entries: Array<{
           sessionId: string;
           projectPath?: string;
@@ -49,52 +88,179 @@ function buildSessionIndex(): Map<string, SessionMeta> {
         }>;
       }>(indexPath);
 
-      if (data?.entries) {
-        for (const entry of data.entries) {
-          if (!entry.sessionId) continue;
-          // Remember the projectPath for this directory
-          if (entry.projectPath) {
-            dirProjectPath.set(dir, entry.projectPath);
-          }
-          const projectPath = entry.projectPath ?? dirProjectPath.get(dir) ?? dir;
-          index.set(entry.sessionId, {
-            projectPath,
-            projectName: basename(projectPath),
-            summary: entry.summary,
-            firstPrompt: entry.firstPrompt?.slice(0, 80),
-            gitBranch: entry.gitBranch,
-          });
+      let projectPath: string;
+      let projectName: string;
+      let gitBranch: string | undefined;
+      const sessionIds: string[] = [];
+
+      if (indexData?.entries && indexData.entries.length > 0) {
+        // Use sessions-index for ground truth
+        const lastEntry = indexData.entries[indexData.entries.length - 1];
+        projectPath = lastEntry.projectPath ?? derivePathFromDir(dir);
+        projectName = basename(projectPath);
+        gitBranch = lastEntry.gitBranch || undefined;
+
+        for (const entry of indexData.entries) {
+          if (entry.sessionId) sessionIds.push(entry.sessionId);
+          // Use the most recent non-empty branch
+          if (entry.gitBranch) gitBranch = entry.gitBranch;
         }
+      } else {
+        // No sessions-index — derive from directory name
+        projectPath = derivePathFromDir(dir);
+        projectName = basename(projectPath);
       }
 
-      // Strategy 2: scan for .jsonl files not yet in the index
-      // Use the projectPath we learned from sessions-index entries in the same dir
-      const knownPath = dirProjectPath.get(dir);
-      if (!knownPath) continue;
+      // Skip root/home directories (too generic)
+      if (projectPath === "/" || projectPath === homedir()) continue;
 
-      try {
-        const files = readdirSync(dirPath);
-        for (const file of files) {
-          if (!file.endsWith(".jsonl")) continue;
-          const sessionId = file.replace(".jsonl", "");
-          if (index.has(sessionId)) continue;
-
-          index.set(sessionId, {
-            projectPath: knownPath,
-            projectName: basename(knownPath),
-          });
-        }
-      } catch {
-        // skip
-      }
+      results.push({
+        claudeDir: dirPath,
+        projectPath,
+        projectName,
+        gitBranch,
+        sessionIds,
+        totalSessions,
+        activeSessions,
+        lastSessionActivity,
+      });
     }
   } catch {
     // projects dir may not exist
   }
+
+  return results;
+}
+
+// Derive filesystem path from the Claude projects directory name
+// e.g. "-Users-bonjuice-Desktop-Eng-project-claude-monitor"
+//    → "/Users/bonjuice/Desktop/Eng/project_claude_monitor"
+//
+// The encoding replaces "/" with "-" (and "_" with "-" too), so it's lossy.
+// Strategy: at each valid directory, list its entries and greedily match
+// the longest prefix of remaining segments against actual fs entries.
+function derivePathFromDir(dir: string): string {
+  const segments = dir.split("-").filter(Boolean);
+  return resolveSegments("", segments);
+}
+
+function resolveSegments(base: string, segments: string[]): string {
+  if (segments.length === 0) return base;
+
+  // Try to list entries in the current base directory
+  let entries: string[] = [];
+  const dirToList = base || "/";
+  try {
+    entries = readdirSync(dirToList);
+  } catch {
+    // Can't read dir — just join remaining with "/"
+    return base + "/" + segments.join("/");
+  }
+
+  // Try matching longest prefix of segments against actual directory entries
+  // e.g. segments = ["project", "claude", "monitor"]
+  // Try "project_claude_monitor", "project-claude-monitor", "project_claude", "project-claude", "project"
+  for (let len = segments.length; len >= 1; len--) {
+    const chunk = segments.slice(0, len);
+    // Try with underscores (most common in project names)
+    const withUnderscore = chunk.join("_");
+    const withHyphen = chunk.join("-");
+    const asIs = chunk.join("");
+
+    for (const candidate of [withUnderscore, withHyphen, asIs]) {
+      if (entries.includes(candidate)) {
+        const newBase = base + "/" + candidate;
+        // If this is the last chunk, we're done
+        if (len === segments.length) return newBase;
+        // Otherwise, recurse with remaining segments
+        try {
+          if (statSync(newBase).isDirectory()) {
+            return resolveSegments(newBase, segments.slice(len));
+          }
+        } catch {
+          // not a directory, try other candidates
+        }
+        return newBase + "/" + segments.slice(len).join("/");
+      }
+    }
+
+    // Also try the raw segment name (single segment, exact match)
+    if (len === 1 && entries.includes(segments[0])) {
+      const newBase = base + "/" + segments[0];
+      try {
+        if (statSync(newBase).isDirectory()) {
+          return resolveSegments(newBase, segments.slice(1));
+        }
+      } catch {
+        // not a directory
+      }
+    }
+  }
+
+  // No match found — just use slash-separated
+  return base + "/" + segments.join("/");
+}
+
+// ─── Phase 2: Read git info from actual project directory ───────
+function readGitInfo(projectPath: string): { branch: string } | undefined {
+  try {
+    const headPath = join(projectPath, ".git", "HEAD");
+    if (!existsSync(headPath)) return undefined;
+    const head = readFileSync(headPath, "utf-8").trim();
+    if (head.startsWith("ref: refs/heads/")) {
+      return { branch: head.replace("ref: refs/heads/", "") };
+    }
+    // Detached HEAD — show short hash
+    return { branch: head.slice(0, 8) };
+  } catch {
+    return undefined;
+  }
+}
+
+// ─── Phase 3: Detect docs in project directory ──────────────────
+function detectDocs(projectPath: string): string[] {
+  const found: string[] = [];
+  for (const candidate of DOC_CANDIDATES) {
+    if (existsSync(join(projectPath, candidate))) {
+      found.push(candidate);
+    }
+  }
+  return found;
+}
+
+// ─── Phase 4: Build session index for task/todo mapping ─────────
+function buildSessionIndex(projects: DiscoveredProject[]): Map<string, SessionMeta> {
+  const index = new Map<string, SessionMeta>();
+  for (const p of projects) {
+    for (const sessionId of p.sessionIds) {
+      index.set(sessionId, {
+        projectPath: p.projectPath,
+        projectName: p.projectName,
+        gitBranch: p.gitBranch,
+      });
+    }
+    // Also index all .jsonl files in the project dir (sessions without index entries)
+    try {
+      const files = readdirSync(p.claudeDir);
+      for (const file of files) {
+        if (!file.endsWith(".jsonl")) continue;
+        const sessionId = file.replace(".jsonl", "");
+        if (!index.has(sessionId)) {
+          index.set(sessionId, {
+            projectPath: p.projectPath,
+            projectName: p.projectName,
+            gitBranch: p.gitBranch,
+          });
+        }
+      }
+    } catch {
+      // skip
+    }
+  }
   return index;
 }
 
-// Scan ~/.claude/todos/ for non-empty todo files
+// ─── Phase 5: Scan todos and tasks ─────────────────────────────
 function scanTodos(sessionIndex: Map<string, SessionMeta>): SessionData[] {
   const results: SessionData[] = [];
   try {
@@ -103,7 +269,6 @@ function scanTodos(sessionIndex: Map<string, SessionMeta>): SessionData[] {
       const fullPath = join(TODOS_DIR, file);
       const items = readJson<TodoItem[]>(fullPath);
       if (items && items.length > 0) {
-        // Extract session ID from filename: {uuid}-agent-{uuid}.json
         const sessionId = file.split("-agent-")[0];
         results.push({
           id: sessionId,
@@ -117,10 +282,9 @@ function scanTodos(sessionIndex: Map<string, SessionMeta>): SessionData[] {
   } catch {
     // Directory may not exist
   }
-  return results.sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime());
+  return results;
 }
 
-// Scan ~/.claude/tasks/ for task sessions with actual task files
 function scanTasks(sessionIndex: Map<string, SessionMeta>): SessionData[] {
   const results: SessionData[] = [];
   try {
@@ -145,7 +309,6 @@ function scanTasks(sessionIndex: Map<string, SessionMeta>): SessionData[] {
         }
 
         if (items.length > 0) {
-          // Sort by ID numerically
           items.sort((a, b) => Number(a.id) - Number(b.id));
           results.push({
             id: dir,
@@ -162,69 +325,113 @@ function scanTasks(sessionIndex: Map<string, SessionMeta>): SessionData[] {
   } catch {
     // Directory may not exist
   }
-  return results.sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime());
+  return results;
 }
 
-// Get the most recently active session across both systems
-export function scanAll(): SessionData[] {
-  const sessionIndex = buildSessionIndex();
-  const todos = scanTodos(sessionIndex);
-  const tasks = scanTasks(sessionIndex);
-  return [...todos, ...tasks].sort(
+// ─── Main: project-centric scan ─────────────────────────────────
+export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } {
+  // Phase 1: Discover all projects
+  const discovered = discoverProjects();
+
+  // Phase 2-4: Build session index, scan tasks/todos
+  const sessionIndex = buildSessionIndex(discovered);
+  const allTodos = scanTodos(sessionIndex);
+  const allTasks = scanTasks(sessionIndex);
+  const allSessions = [...allTodos, ...allTasks].sort(
     (a, b) => b.lastModified.getTime() - a.lastModified.getTime()
   );
-}
 
-// Aggregate sessions into projects grouped by projectPath
-export function groupByProject(sessions: SessionData[]): ProjectData[] {
-  const groups = new Map<string, SessionData[]>();
-
-  for (const session of sessions) {
+  // Group sessions by projectPath
+  const sessionsByProject = new Map<string, SessionData[]>();
+  for (const session of allSessions) {
     const key = session.meta?.projectPath ?? `unknown-${session.id}`;
-    const list = groups.get(key) ?? [];
+    const list = sessionsByProject.get(key) ?? [];
     list.push(session);
-    groups.set(key, list);
+    sessionsByProject.set(key, list);
   }
 
+  // Build project data for ALL discovered projects
   const projects: ProjectData[] = [];
-  for (const [projectPath, groupSessions] of groups) {
-    const allItems = groupSessions.flatMap((s) => s.items);
+  const seenPaths = new Set<string>();
+
+  for (const disc of discovered) {
+    seenPaths.add(disc.projectPath);
+    const sessions = sessionsByProject.get(disc.projectPath) ?? [];
+    const allItems = sessions.flatMap((s) => s.items);
     const total = allItems.length;
     const completed = allItems.filter((i) => i.status === "completed").length;
     const inProgress = allItems.filter((i) => i.status === "in_progress").length;
 
-    // Collect unique agent/owner names
     const agentSet = new Set<string>();
     for (const item of allItems) {
       if ("owner" in item && item.owner) agentSet.add(item.owner);
     }
-    // Each session's agent from filename is also implicit
-    for (const s of groupSessions) {
-      if (s.source === "todos") {
-        agentSet.add("main"); // TodoWrite sessions are typically main agent
-      }
-    }
 
-    const firstMeta = groupSessions.find((s) => s.meta)?.meta;
+    // Read git info from actual project directory
+    const git = readGitInfo(disc.projectPath);
+    const docs = detectDocs(disc.projectPath);
+
+    // Determine last activity: max of session file activity and task data
+    const taskActivity = sessions.length > 0
+      ? Math.max(...sessions.map((s) => s.lastModified.getTime()))
+      : 0;
     const lastActivity = new Date(
-      Math.max(...groupSessions.map((s) => s.lastModified.getTime()))
+      Math.max(disc.lastSessionActivity.getTime(), taskActivity)
     );
 
+    // isActive: has active sessions OR in-progress tasks
+    const isActive = disc.activeSessions > 0 || inProgress > 0;
+
     projects.push({
-      projectPath,
-      projectName: firstMeta?.projectName ?? basename(projectPath),
-      gitBranch: firstMeta?.gitBranch,
-      sessions: groupSessions,
+      projectPath: disc.projectPath,
+      projectName: disc.projectName,
+      gitBranch: git?.branch ?? disc.gitBranch,
+      sessions,
       totalTasks: total,
       completedTasks: completed,
       inProgressTasks: inProgress,
       agents: [...agentSet],
       lastActivity,
-      isActive: inProgress > 0,
+      isActive,
+      totalSessions: disc.totalSessions,
+      activeSessions: disc.activeSessions,
+      git,
+      docs,
     });
   }
 
-  return projects.sort(
-    (a, b) => b.lastActivity.getTime() - a.lastActivity.getTime()
-  );
+  // Add orphan sessions (tasks/todos not mapped to any discovered project)
+  for (const [path, sessions] of sessionsByProject) {
+    if (seenPaths.has(path) || path.startsWith("unknown-")) continue;
+    const allItems = sessions.flatMap((s) => s.items);
+    projects.push({
+      projectPath: path,
+      projectName: basename(path),
+      sessions,
+      totalTasks: allItems.length,
+      completedTasks: allItems.filter((i) => i.status === "completed").length,
+      inProgressTasks: allItems.filter((i) => i.status === "in_progress").length,
+      agents: [],
+      lastActivity: new Date(Math.max(...sessions.map((s) => s.lastModified.getTime()))),
+      isActive: allItems.some((i) => i.status === "in_progress"),
+      totalSessions: 0,
+      activeSessions: 0,
+      docs: [],
+    });
+  }
+
+  // Sort: active first, then by last activity
+  projects.sort((a, b) => {
+    if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+    return b.lastActivity.getTime() - a.lastActivity.getTime();
+  });
+
+  return { projects, sessions: allSessions };
+}
+
+// Keep backward-compatible export for groupByProject
+export function groupByProject(sessions: SessionData[]): ProjectData[] {
+  // This is now handled internally by scanAll
+  // Keep for API compatibility but prefer scanAll().projects
+  return scanAll().projects;
 }

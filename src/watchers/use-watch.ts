@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import { scanAll, groupByProject } from "./scanner.js";
+import { scanAll } from "./scanner.js";
 import type { SessionData, ProjectData } from "../types.js";
 
 const POLL_INTERVAL_MS = 3000;
 
-// React hook: poll ~/.claude/todos/ and ~/.claude/tasks/ for changes
+// React hook: poll ~/.claude/ for project and session data
 export function useWatchSessions(): {
   sessions: SessionData[];
   projects: ProjectData[];
@@ -18,19 +18,19 @@ export function useWatchSessions(): {
   useEffect(() => {
     // Initial scan
     const initial = scanAll();
-    setSessions(initial);
-    setProjects(groupByProject(initial));
+    setSessions(initial.sessions);
+    setProjects(initial.projects);
     setLastUpdate(new Date());
-    prevSnapshotRef.current = snapshotKey(initial);
+    prevSnapshotRef.current = snapshotKey(initial.projects);
 
-    // Poll: re-scan every second, only re-render if data actually changed
+    // Poll: re-scan periodically, only re-render if data actually changed
     const timer = setInterval(() => {
       const current = scanAll();
-      const key = snapshotKey(current);
+      const key = snapshotKey(current.projects);
       if (key !== prevSnapshotRef.current) {
         prevSnapshotRef.current = key;
-        setSessions(current);
-        setProjects(groupByProject(current));
+        setSessions(current.sessions);
+        setProjects(current.projects);
         setLastUpdate(new Date());
       }
     }, POLL_INTERVAL_MS);
@@ -42,12 +42,15 @@ export function useWatchSessions(): {
 }
 
 // Lightweight fingerprint to detect actual data changes
-function snapshotKey(sessions: SessionData[]): string {
-  return sessions
-    .map((s) =>
-      s.items
+// Includes project-level info (sessions, activity) not just task status
+function snapshotKey(projects: ProjectData[]): string {
+  return projects
+    .map((p) => {
+      const taskKey = p.sessions
+        .flatMap((s) => s.items)
         .map((i) => ("id" in i ? `${i.id}:${i.status}` : `${i.content}:${i.status}`))
-        .join(",")
-    )
-    .join("|");
+        .join(",");
+      return `${p.projectPath}|s=${p.totalSessions}|a=${p.activeSessions}|b=${p.gitBranch ?? ""}|t=${taskKey}`;
+    })
+    .join("||");
 }
