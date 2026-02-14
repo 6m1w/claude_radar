@@ -11,7 +11,7 @@ import { Panel } from "./components/panel.js";
 import { Progress } from "./components/progress.js";
 import { useWatchSessions } from "./watchers/use-watch.js";
 import { useMetrics } from "./hooks/use-metrics.js";
-import type { MergedProjectData, TaskItem, TodoItem, SessionHistoryEntry, AgentInfo, TeamConfig, GitCommit, ActivityEvent, DisplayTask, ViewProject } from "./types.js";
+import type { MergedProjectData, TaskItem, TodoItem, SessionHistoryEntry, AgentInfo, TeamConfig, ActivityEvent, DisplayTask, ViewProject } from "./types.js";
 import { formatDwell } from "./utils.js";
 import { KanbanView } from "./components/kanban.js";
 
@@ -109,7 +109,7 @@ function taskStats(p: ViewProject) {
 }
 
 // ─── View state ─────────────────────────────────────────────
-type FocusLevel = "outer" | "inner" | "kanban";
+type View = "dashboard" | "agent" | "swimlane";
 type BottomTab = "docs" | "git" | "sessions";
 
 export function App() {
@@ -117,20 +117,20 @@ export function App() {
   const stdout = useStdout();
   const rows = stdout.stdout?.rows ?? 40;
   const { projects: rawProjects } = useWatchSessions();
-  const [focus, setFocus] = useState<FocusLevel>("outer");
+  const [view, setView] = useState<View>("dashboard");
+  const [innerFocus, setInnerFocus] = useState(false);
   const [projectIdx, setProjectIdx] = useState(0);
   const [taskIdx, setTaskIdx] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set());
 
   // Bottom tabbed panel state
-  const [bottomTab, setBottomTab] = useState<BottomTab>("docs");
+  const [bottomTab, setBottomTab] = useState<BottomTab>("git");
   const [bottomDocIdx, setBottomDocIdx] = useState(0);
   const [bottomScrollY, setBottomScrollY] = useState(0);
   const [bottomFocused, setBottomFocused] = useState(false);
 
-  // Kanban state
-  const [kanbanLayout, setKanbanLayout] = useState<"swimlane" | "by_agent">("by_agent");
+  // Kanban state (shared across agent/swimlane views)
   const [kanbanHideDone, setKanbanHideDone] = useState(true);
 
   // Convert real data → view model, group worktrees with their main repo
@@ -197,19 +197,63 @@ export function App() {
   useInput((input, key) => {
     if (input === "q") exit();
 
-    // Tab → kanban
+    // Tab → cycle views: dashboard → agent → swimlane → dashboard
     if (key.tab) {
-      setFocus(focus === "kanban" ? "outer" : "kanban");
+      const cycle: View[] = ["dashboard", "agent", "swimlane"];
+      const idx = cycle.indexOf(view);
+      setView(cycle[(idx + 1) % cycle.length]);
+      setInnerFocus(false);
+      setBottomFocused(false);
       return;
     }
 
-    if (focus === "outer") {
-      // d/g/s switch bottom tab (view-only, no focus change)
-      if (input === "d") switchBottomTab("docs");
-      if (input === "g") switchBottomTab("git");
-      if (input === "s") switchBottomTab("sessions");
+    // Agent / Swimlane views
+    if (view === "agent" || view === "swimlane") {
+      if (key.escape) { setView("dashboard"); return; }
+      if (input === "h") setKanbanHideDone((h) => !h);
+      return;
+    }
 
-      // Navigate project list
+    // Dashboard view
+    if (view === "dashboard") {
+      if (bottomFocused) {
+        // Bottom panel focused: j/k scroll, h/l switch doc files, d/g/s switch tabs
+        if (key.escape) { setBottomFocused(false); return; }
+        if (input === "j" || key.downArrow) setBottomScrollY((y) => y + 1);
+        if (input === "k" || key.upArrow) setBottomScrollY((y) => Math.max(0, y - 1));
+        if (input === "d") switchBottomTab("docs");
+        if (input === "g") switchBottomTab("git");
+        if (input === "s") switchBottomTab("sessions");
+        if (bottomTab === "docs" && current) {
+          const docKeys = Object.keys(current.docContents);
+          if (input === "h" || key.leftArrow) {
+            setBottomDocIdx((i) => Math.max(0, i - 1));
+            setBottomScrollY(0);
+          }
+          if (input === "l" || key.rightArrow) {
+            setBottomDocIdx((i) => Math.min(docKeys.length - 1, i + 1));
+            setBottomScrollY(0);
+          }
+        }
+        return;
+      }
+
+      if (innerFocus) {
+        // Inner focus: task navigation
+        if (key.escape) { setInnerFocus(false); return; }
+        if ((input === "j" || key.downArrow) && taskIdx < currentTasks.length - 1) {
+          setTaskIdx((i) => i + 1);
+        }
+        if ((input === "k" || key.upArrow) && taskIdx > 0) {
+          setTaskIdx((i) => i - 1);
+        }
+        if (input === "d") { switchBottomTab("docs"); setBottomFocused(true); }
+        if (input === "g") { switchBottomTab("git"); setBottomFocused(true); }
+        if (input === "s") { switchBottomTab("sessions"); setBottomFocused(true); }
+        return;
+      }
+
+      // Outer focus: project navigation
       if ((input === "j" || key.downArrow) && projectIdx < sorted.length - 1) {
         const next = projectIdx + 1;
         setProjectIdx(next);
@@ -236,61 +280,16 @@ export function App() {
         });
       }
 
+      // d/g/s → switch bottom tab + focus bottom
+      if (input === "d") { switchBottomTab("docs"); setBottomFocused(true); }
+      if (input === "g") { switchBottomTab("git"); setBottomFocused(true); }
+      if (input === "s") { switchBottomTab("sessions"); setBottomFocused(true); }
+
       if (key.return && current) {
-        setFocus("inner");
+        setInnerFocus(true);
         setTaskIdx(0);
         setBottomFocused(false);
       }
-    }
-
-    if (focus === "inner") {
-      if (key.escape) {
-        if (bottomFocused) {
-          // Esc from bottom → back to task focus
-          setBottomFocused(false);
-        } else {
-          // Esc from tasks → back to outer
-          setFocus("outer");
-        }
-        return;
-      }
-
-      if (bottomFocused) {
-        // Bottom panel focused: j/k scroll, h/l switch doc files, d/g/s switch tabs
-        if (input === "j" || key.downArrow) setBottomScrollY((y) => y + 1);
-        if (input === "k" || key.upArrow) setBottomScrollY((y) => Math.max(0, y - 1));
-        if (input === "d") switchBottomTab("docs");
-        if (input === "g") switchBottomTab("git");
-        if (input === "s") switchBottomTab("sessions");
-        if (bottomTab === "docs" && current) {
-          const docKeys = Object.keys(current.docContents);
-          if (input === "h" || key.leftArrow) {
-            setBottomDocIdx((i) => Math.max(0, i - 1));
-            setBottomScrollY(0);
-          }
-          if (input === "l" || key.rightArrow) {
-            setBottomDocIdx((i) => Math.min(docKeys.length - 1, i + 1));
-            setBottomScrollY(0);
-          }
-        }
-      } else {
-        // Task focus: j/k navigate tasks, d/g/s jump to bottom + focus
-        if ((input === "j" || key.downArrow) && taskIdx < currentTasks.length - 1) {
-          setTaskIdx((i) => i + 1);
-        }
-        if ((input === "k" || key.upArrow) && taskIdx > 0) {
-          setTaskIdx((i) => i - 1);
-        }
-        if (input === "d") { switchBottomTab("docs"); setBottomFocused(true); }
-        if (input === "g") { switchBottomTab("git"); setBottomFocused(true); }
-        if (input === "s") { switchBottomTab("sessions"); setBottomFocused(true); }
-      }
-    }
-
-    if (focus === "kanban") {
-      if (key.escape) setFocus("outer");
-      if (input === "s") setKanbanLayout((l) => l === "swimlane" ? "by_agent" : "swimlane");
-      if (input === "h") setKanbanHideDone((h) => !h);
     }
   });
 
@@ -300,9 +299,13 @@ export function App() {
   const totalDone = sorted.reduce((s, p) => s + taskStats(p).done, 0);
   const totalActive = sorted.filter((p) => p.activeSessions > 0 || p.hookSessionCount > 0).length;
 
-  const viewLabel = focus === "kanban" ? "KANBAN" : focus === "inner" ? (bottomFocused ? "BOTTOM" : "DETAIL") : "DASHBOARD";
+  const viewLabel = view === "agent" ? "AGENT"
+    : view === "swimlane" ? "SWIMLANE"
+    : bottomFocused ? "BOTTOM"
+    : innerFocus ? "DETAIL"
+    : "DASHBOARD";
 
-  if (focus === "kanban") {
+  if (view === "agent" || view === "swimlane") {
     // Filter: selected projects, or all projects with tasks if none selected
     const kanbanProjects = selectedNames.size > 0
       ? sorted.filter((p) => selectedNames.has(p.projectPath) && p.tasks.length > 0)
@@ -312,10 +315,10 @@ export function App() {
         <KanbanView
           projects={kanbanProjects}
           selectedCount={selectedNames.size}
-          layout={kanbanLayout}
+          layout={view === "agent" ? "by_agent" : "swimlane"}
           hideDone={kanbanHideDone}
         />
-        <StatusBar view="kanban" label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} bottomFocused={false} hideDone={kanbanHideDone} />
+        <StatusBar view={view} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} bottomFocused={false} hideDone={kanbanHideDone} />
       </Box>
     );
   }
@@ -427,7 +430,7 @@ export function App() {
         {/* Right: Tasks only (simplified — no tab switching) */}
         <RightPanel
           project={current}
-          focus={focus}
+          isInner={innerFocus}
           taskIdx={taskIdx}
           bottomFocused={bottomFocused}
         />
@@ -439,14 +442,12 @@ export function App() {
         tab={bottomTab}
         docIdx={bottomDocIdx}
         scrollY={bottomScrollY}
-        focused={focus === "inner" && bottomFocused}
-        allProjects={sorted}
+        focused={bottomFocused}
         height={bottomHeight}
-        isInner={focus === "inner"}
       />
 
       <StatusBar
-        view={focus}
+        view={view}
         label={viewLabel}
         hasActive={totalActive > 0}
         allDone={totalTasks > 0 && totalDone === totalTasks}
@@ -459,12 +460,12 @@ export function App() {
 // ─── Right panel: tasks only (simplified) ────────────────────
 function RightPanel({
   project,
-  focus,
+  isInner,
   taskIdx,
   bottomFocused,
 }: {
   project: ViewProject;
-  focus: FocusLevel;
+  isInner: boolean;
   taskIdx: number;
   bottomFocused: boolean;
 }) {
@@ -477,7 +478,6 @@ function RightPanel({
   }
 
   const stats = taskStats(project);
-  const isInner = focus === "inner";
   const title = project.name.toUpperCase();
 
   return (
@@ -716,18 +716,14 @@ function BottomPanel({
   docIdx,
   scrollY,
   focused,
-  allProjects,
   height,
-  isInner,
 }: {
   project: ViewProject;
   tab: BottomTab;
   docIdx: number;
   scrollY: number;
   focused: boolean;
-  allProjects: ViewProject[];
   height: number;
-  isInner: boolean;
 }) {
   // Tab header with active indicator
   const tabItems: { key: BottomTab; label: string; hotkey: string }[] = [
@@ -763,7 +759,6 @@ function BottomPanel({
             docIdx={docIdx}
             scrollY={scrollY}
             contentHeight={contentHeight}
-            isInner={isInner}
           />
         )}
         {tab === "git" && (
@@ -771,8 +766,6 @@ function BottomPanel({
             project={project}
             scrollY={scrollY}
             contentHeight={contentHeight}
-            allProjects={allProjects}
-            isInner={isInner}
           />
         )}
         {tab === "sessions" && (
@@ -780,7 +773,6 @@ function BottomPanel({
             project={project}
             scrollY={scrollY}
             contentHeight={contentHeight}
-            isInner={isInner}
           />
         )}
       </Box>
@@ -794,15 +786,13 @@ function DocsContent({
   docIdx,
   scrollY,
   contentHeight,
-  isInner,
 }: {
   project: ViewProject;
   docIdx: number;
   scrollY: number;
   contentHeight: number;
-  isInner: boolean;
 }) {
-  if (!project || !isInner) {
+  if (!project) {
     return <Text color={C.dim}>Select a project to view docs</Text>;
   }
 
@@ -867,26 +857,16 @@ function GitLogContent({
   project,
   scrollY,
   contentHeight,
-  allProjects,
-  isInner,
 }: {
   project: ViewProject;
   scrollY: number;
   contentHeight: number;
-  allProjects: ViewProject[];
-  isInner: boolean;
 }) {
-  // Inner focus: show selected project's git log
-  // Outer focus: show aggregated global git log
-  const commits: (GitCommit & { projectName?: string })[] = isInner && project
-    ? project.gitLog.map((c) => ({ ...c }))
-    : allProjects
-        .flatMap((p) => p.gitLog.map((c) => ({ ...c, projectName: p.name })))
-        .sort((a, b) => new Date(b.authorDate).getTime() - new Date(a.authorDate).getTime())
-        .slice(0, 30);
+  // Always show selected project's git log
+  const commits = project ? project.gitLog : [];
 
   if (commits.length === 0) {
-    return <Text color={C.dim}>{isInner ? `No git history for ${project?.name ?? "project"}` : "No git commits across projects"}</Text>;
+    return <Text color={C.dim}>No git history for {project?.name ?? "project"}</Text>;
   }
 
   const visibleCommits = commits.slice(scrollY, scrollY + contentHeight);
@@ -899,14 +879,12 @@ function GitLogContent({
         // Format date as relative
         const dateStr = formatCommitDate(commit.authorDate);
         const typeStr = commit.type ? commit.type.padEnd(9).slice(0, 9) : "".padEnd(9);
-        const projStr = commit.projectName ? commit.projectName.slice(0, 10).padEnd(11) : "";
 
         return (
           <Text key={`${commit.hash}-${idx}`} wrap="truncate">
             <Text color={C.dim}>{dateStr.padEnd(8)}</Text>
             <Text color={C.accent}> {commit.hash} </Text>
             <Text color={typeColor} bold={!!commit.type}>{typeStr}</Text>
-            {projStr ? <Text color={C.subtext}>{projStr}</Text> : null}
             <Text color={C.text}>{commit.subject.replace(/^(\w+)[:(]\s*/, "")}</Text>
           </Text>
         );
@@ -938,14 +916,12 @@ function SessionsContent({
   project,
   scrollY,
   contentHeight,
-  isInner,
 }: {
   project: ViewProject;
   scrollY: number;
   contentHeight: number;
-  isInner: boolean;
 }) {
-  if (!project || !isInner) {
+  if (!project) {
     return <Text color={C.dim}>Select a project to view sessions</Text>;
   }
 
@@ -986,7 +962,7 @@ function sparkline(values: number[], max = 100): string {
 }
 
 function StatusBar({ view, label, hasActive, allDone, bottomFocused, hideDone }: {
-  view: string; label: string; hasActive: boolean; allDone: boolean; bottomFocused: boolean; hideDone?: boolean;
+  view: View; label: string; hasActive: boolean; allDone: boolean; bottomFocused: boolean; hideDone?: boolean;
 }) {
   const metrics = useMetrics();
   const tick = metrics.tick;
@@ -1030,16 +1006,21 @@ function StatusBar({ view, label, hasActive, allDone, bottomFocused, hideDone }:
       <Box>
         <Text color={C.primary} bold> {label} </Text>
         <Text color={C.dim}>│ </Text>
-        {view === "outer" ? (
+        {view === "agent" ? (
           <>
-            <Text color={C.success}>↑↓</Text><Text color={C.subtext}> nav  </Text>
-            <Text color={C.success}>d/g/s</Text><Text color={C.subtext}> bottom  </Text>
-            <Text color={C.success}>Space</Text><Text color={C.subtext}> select  </Text>
-            <Text color={C.success}>Enter</Text><Text color={C.subtext}> focus  </Text>
-            <Text color={C.success}>Tab</Text><Text color={C.subtext}> kanban  </Text>
+            <Text color={C.success}>Tab</Text><Text color={C.subtext}> →swimlane  </Text>
+            <Text color={C.success}>h</Text><Text color={C.subtext}> {hideDone ? "show done" : "hide done"}  </Text>
+            <Text color={C.success}>Esc</Text><Text color={C.subtext}> dashboard  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
-        ) : view === "inner" && bottomFocused ? (
+        ) : view === "swimlane" ? (
+          <>
+            <Text color={C.success}>Tab</Text><Text color={C.subtext}> →dashboard  </Text>
+            <Text color={C.success}>h</Text><Text color={C.subtext}> {hideDone ? "show done" : "hide done"}  </Text>
+            <Text color={C.success}>Esc</Text><Text color={C.subtext}> dashboard  </Text>
+            <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
+          </>
+        ) : bottomFocused ? (
           <>
             <Text color={C.success}>↑↓</Text><Text color={C.subtext}> scroll  </Text>
             <Text color={C.success}>h/l</Text><Text color={C.subtext}> file  </Text>
@@ -1047,18 +1028,21 @@ function StatusBar({ view, label, hasActive, allDone, bottomFocused, hideDone }:
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
-        ) : view === "inner" ? (
+        ) : label === "DETAIL" ? (
           <>
             <Text color={C.success}>↑↓</Text><Text color={C.subtext}> nav tasks  </Text>
             <Text color={C.success}>d/g/s</Text><Text color={C.subtext}> bottom  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
+            <Text color={C.success}>Tab</Text><Text color={C.subtext}> →agent  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
         ) : (
           <>
-            <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
-            <Text color={C.success}>s</Text><Text color={C.subtext}> toggle  </Text>
-            <Text color={C.success}>h</Text><Text color={C.subtext}> {hideDone ? "show done" : "hide done"}  </Text>
+            <Text color={C.success}>↑↓</Text><Text color={C.subtext}> nav  </Text>
+            <Text color={C.success}>d/g/s</Text><Text color={C.subtext}> bottom  </Text>
+            <Text color={C.success}>Space</Text><Text color={C.subtext}> select  </Text>
+            <Text color={C.success}>Enter</Text><Text color={C.subtext}> focus  </Text>
+            <Text color={C.success}>Tab</Text><Text color={C.subtext}> →agent  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
         )}
