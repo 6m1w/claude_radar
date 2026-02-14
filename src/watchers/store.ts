@@ -17,6 +17,7 @@ import type {
   HookEvent,
   HookEventData,
   HookSessionInfo,
+  ActivityEvent,
 } from "../types.js";
 
 const STORE_DIR = join(homedir(), ".claude-radar");
@@ -105,6 +106,11 @@ export class Store {
   // Populated by SessionStart events, cleared by Stop events.
   // Not persisted — rebuilt from events.jsonl on each TUI startup.
   private _hookActiveSessions = new Map<string, Map<string, HookSessionInfo>>();
+
+  // In-memory activity buffer: projectPath → recent ActivityEvent[]
+  // Ring buffer per project (~50 events). Not persisted — ephemeral observability.
+  private _activityBuffers = new Map<string, ActivityEvent[]>();
+  private static ACTIVITY_BUFFER_SIZE = 50;
 
   // Load all project files from disk
   load(): void {
@@ -353,6 +359,7 @@ export class Store {
       hasHistory: goneSessions.length > 0 || goneItemCount > 0,
       goneSessionCount: goneSessions.length,
       hookSessions: this.getHookSessions(liveProject.projectPath),
+      activityLog: this.getActivityLog(liveProject.projectPath),
     };
   }
 
@@ -452,6 +459,24 @@ export class Store {
     return sessions ? [...sessions.values()] : [];
   }
 
+  // Add an activity event to the project's ring buffer
+  addActivity(projectPath: string, event: ActivityEvent): void {
+    let buf = this._activityBuffers.get(projectPath);
+    if (!buf) {
+      buf = [];
+      this._activityBuffers.set(projectPath, buf);
+    }
+    buf.push(event);
+    if (buf.length > Store.ACTIVITY_BUFFER_SIZE) {
+      buf.splice(0, buf.length - Store.ACTIVITY_BUFFER_SIZE);
+    }
+  }
+
+  // Get recent activity for a project
+  getActivityLog(projectPath: string): ActivityEvent[] {
+    return this._activityBuffers.get(projectPath) ?? [];
+  }
+
   // Get all hook-tracked active sessions across all projects
   getAllHookSessions(): Map<string, HookSessionInfo[]> {
     const result = new Map<string, HookSessionInfo[]>();
@@ -477,11 +502,14 @@ export class Store {
       totalSessions: 0,
       activeSessions: hookSessions.length,
       docs: [],
+      gitLog: [],
+      docContents: {},
       recentSessions: [],
       agentDetails: [],
       hasHistory: false,
       goneSessionCount: 0,
       hookSessions,
+      activityLog: this.getActivityLog(projectPath),
     };
   }
 
@@ -502,11 +530,14 @@ export class Store {
       totalSessions: 0,
       activeSessions: 0,
       docs: [],
+      gitLog: [],
+      docContents: {},
       recentSessions: [],
       agentDetails: [],
       hasHistory: true,
       goneSessionCount: sessions.length,
       hookSessions: this.getHookSessions(store.projectPath),
+      activityLog: this.getActivityLog(store.projectPath),
     };
   }
 }
@@ -576,6 +607,55 @@ function cwdToProjectPath(cwd: string): string {
   return cwd;
 }
 
+// Build a human-readable summary for an activity event
+function buildActivitySummary(data: HookEventData): string {
+  const tool = data.tool_name ?? "unknown";
+  const input = data.tool_input;
+
+  if (!input) return tool;
+
+  switch (tool) {
+    case "Write":
+    case "Read":
+    case "Edit":
+      return `${tool} ${shortenPath(input.file_path as string | undefined)}`;
+    case "Bash":
+      return `Bash: ${truncate(input.command as string | undefined, 60)}`;
+    case "Grep":
+      return `Grep: ${truncate(input.pattern as string | undefined, 40)}`;
+    case "Glob":
+      return `Glob: ${truncate(input.pattern as string | undefined, 40)}`;
+    case "SendMessage":
+      return `SendMessage → ${input.recipient ?? "broadcast"}`;
+    case "TaskCreate":
+      return `TaskCreate: ${truncate(input.subject as string | undefined, 50)}`;
+    case "TaskUpdate":
+      return `TaskUpdate #${input.taskId ?? "?"} → ${input.status ?? ""}`;
+    case "TodoWrite":
+      return "TodoWrite";
+    case "Task":
+      return `Task: ${truncate((input.description as string | undefined) ?? (input.prompt as string | undefined), 50)}`;
+    default:
+      return tool;
+  }
+}
+
+// Shorten an absolute path to basename (or last 2 segments)
+function shortenPath(p: string | undefined): string {
+  if (!p) return "?";
+  const parts = p.split("/");
+  return parts.length > 2 ? parts.slice(-2).join("/") : parts[parts.length - 1];
+}
+
+// Truncate a string with ellipsis
+function truncate(s: string | undefined, max: number): string {
+  if (!s) return "?";
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+}
+
+// Task-related tool names that get ingested into the store (not just activity)
+const TASK_TOOLS = new Set(["TaskCreate", "TaskUpdate", "TodoWrite"]);
+
 // Convert a hook event into a StoredItem to merge into the store
 function hookEventToStoredItem(data: HookEventData, now: string): StoredItem | null {
   const input = data.tool_input;
@@ -637,7 +717,7 @@ function hookEventToStoredItem(data: HookEventData, now: string): StoredItem | n
 }
 
 // Ingest hook events into the Store
-// Called by merge() — hook events are folded into stored sessions
+// Called by merge() — hook events are folded into stored sessions + activity buffer
 export function ingestHookEvents(store: Store, events: HookEvent[]): void {
   const now = nowISO();
 
@@ -648,30 +728,38 @@ export function ingestHookEvents(store: Store, events: HookEvent[]): void {
     const sessionId = data.session_id;
     const cwd = data.cwd;
 
-    if (event.event === "task" && data.tool_name) {
-      // Derive project path from cwd
+    // "tool" = new format (all PostToolUse), "task" = legacy format (matched PostToolUse)
+    if ((event.event === "tool" || event.event === "task") && data.tool_name) {
       const projectPath = cwd ? cwdToProjectPath(cwd) : undefined;
       if (!projectPath) continue;
 
-      const item = hookEventToStoredItem(data, event.ts || now);
-      if (!item) continue;
-
-      // Ensure project exists in store
-      store.ensureProject(projectPath, basename(projectPath));
-
-      // Ensure session exists
-      const source = data.tool_name === "TodoWrite" ? "todos" as const : "tasks" as const;
-      store.ensureSession(projectPath, sessionId, source, {
+      // Activity log: ALL tool calls get recorded
+      store.addActivity(projectPath, {
+        ts: event.ts || now,
+        sessionId,
+        toolName: data.tool_name,
+        summary: buildActivitySummary(data),
         projectPath,
-        projectName: basename(projectPath),
       });
 
-      // Merge item into session
-      store.mergeHookItem(projectPath, sessionId, item);
+      // Task ingestion: only task-related tools get merged into store
+      if (TASK_TOOLS.has(data.tool_name)) {
+        const item = hookEventToStoredItem(data, event.ts || now);
+        if (!item) continue;
+
+        store.ensureProject(projectPath, basename(projectPath));
+
+        const source = data.tool_name === "TodoWrite" ? "todos" as const : "tasks" as const;
+        store.ensureSession(projectPath, sessionId, source, {
+          projectPath,
+          projectName: basename(projectPath),
+        });
+
+        store.mergeHookItem(projectPath, sessionId, item);
+      }
     }
 
     if (event.event === "start") {
-      // Session started — track as active
       const projectPath = cwd ? cwdToProjectPath(cwd) : undefined;
       if (projectPath) {
         store.markSessionStarted(projectPath, sessionId, event.ts || now);
@@ -679,8 +767,22 @@ export function ingestHookEvents(store: Store, events: HookEvent[]): void {
     }
 
     if (event.event === "stop") {
-      // Session stopped — remove from active, update store
       store.markSessionStopped(sessionId, event.ts || now);
+    }
+
+    // Subagent/notification events → activity log only
+    if ((event.event === "subagent_stop" || event.event === "notification") && cwd) {
+      const projectPath = cwdToProjectPath(cwd);
+      const summary = event.event === "subagent_stop"
+        ? `SubagentStop: ${data.reason ?? "completed"}`
+        : `Notification: ${truncate(data.reason, 50)}`;
+      store.addActivity(projectPath, {
+        ts: event.ts || now,
+        sessionId,
+        toolName: event.event,
+        summary,
+        projectPath,
+      });
     }
   }
 }

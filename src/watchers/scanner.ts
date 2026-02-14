@@ -1,7 +1,8 @@
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
-import type { TodoItem, TaskItem, SessionData, SessionMeta, ProjectData, SessionHistoryEntry, TeamConfig, TeamMember, AgentInfo } from "../types.js";
+import type { TodoItem, TaskItem, SessionData, SessionMeta, ProjectData, SessionHistoryEntry, TeamConfig, TeamMember, AgentInfo, GitCommit } from "../types.js";
 
 const CLAUDE_DIR = join(homedir(), ".claude");
 const TODOS_DIR = join(CLAUDE_DIR, "todos");
@@ -262,6 +263,38 @@ function detectDocs(projectPath: string): string[] {
     }
   }
   return found;
+}
+
+// ─── Phase 3b: Read git log from project directory ───────────────
+function readGitLog(projectPath: string): GitCommit[] {
+  try {
+    if (!existsSync(join(projectPath, ".git"))) return [];
+    const raw = execSync(
+      `git log --format="%aI|||%h|||%s" -n 20`,
+      { cwd: projectPath, encoding: "utf-8", timeout: 3000, stdio: ["pipe", "pipe", "pipe"] }
+    );
+    return raw.trim().split("\n").filter(Boolean).map((line) => {
+      const [authorDate, hash, subject] = line.split("|||");
+      const typeMatch = subject?.match(/^(\w+)[:(]/);
+      return { hash: hash ?? "", subject: subject ?? "", authorDate: authorDate ?? "", type: typeMatch?.[1] };
+    });
+  } catch { return []; }
+}
+
+// ─── Phase 3c: Read doc file contents ────────────────────────────
+const MAX_DOC_SIZE = 50 * 1024;
+
+function readDocContents(projectPath: string, docFiles: string[]): Record<string, string> {
+  const contents: Record<string, string> = {};
+  for (const doc of docFiles) {
+    try {
+      const fullPath = join(projectPath, doc);
+      const s = statSync(fullPath);
+      if (s.size > MAX_DOC_SIZE) { contents[doc] = `[File too large: ${Math.round(s.size / 1024)}KB]`; continue; }
+      contents[doc] = readFileSync(fullPath, "utf-8");
+    } catch {}
+  }
+  return contents;
 }
 
 // ─── Phase 4: Build session index for task/todo mapping ─────────
@@ -551,6 +584,8 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
     // Read git info from actual project directory
     const git = readGitInfo(disc.projectPath);
     const docs = detectDocs(disc.projectPath);
+    const gitLog = readGitLog(disc.projectPath);
+    const docContents = readDocContents(disc.projectPath, docs);
 
     // Determine last activity: max of session file activity and task data
     const taskActivity = sessions.length > 0
@@ -583,6 +618,8 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       activeSessions: disc.activeSessions,
       git,
       docs,
+      gitLog,
+      docContents,
       recentSessions: disc.recentSessions.slice(-8),
       team: matchedTeam,
       agentDetails,
@@ -606,6 +643,8 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       totalSessions: 0,
       activeSessions: 0,
       docs: [],
+      gitLog: [],
+      docContents: {},
       recentSessions: [],
       agentDetails: [],
     });

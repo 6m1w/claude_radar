@@ -1,13 +1,12 @@
 {
-  "description": "Real-time task/session event capture for Claude Radar.",
+  "description": "Real-time event capture for Claude Radar — task changes, tool activity, sessions.",
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "TaskCreate|TaskUpdate|TodoWrite",
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/capture.sh task",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/capture.sh tool",
             "timeout": 3
           }
         ]
@@ -30,6 +29,28 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/capture.sh start",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/capture.sh subagent_stop",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/capture.sh notification",
             "timeout": 3
           }
         ]

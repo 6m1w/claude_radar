@@ -68,6 +68,8 @@ function makeProject(overrides: Partial<ProjectData> = {}): ProjectData {
     totalSessions: 1,
     activeSessions: 0,
     docs: [],
+    gitLog: [],
+    docContents: {},
     recentSessions: [],
     agentDetails: [],
     ...overrides,

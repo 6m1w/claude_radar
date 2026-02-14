@@ -44,6 +44,14 @@ export interface SessionData {
   gone?: boolean;        // session itself is no longer in live data
 }
 
+// Git commit entry from `git log`
+export interface GitCommit {
+  hash: string;
+  subject: string;
+  authorDate: string;
+  type?: string; // conventional commit type: feat, fix, docs, etc.
+}
+
 // Aggregated project view — groups sessions by projectPath
 export interface ProjectData {
   projectPath: string;
@@ -66,6 +74,8 @@ export interface ProjectData {
     worktreeOf?: string; // if this is a worktree, the main repo path
   };
   docs: string[];          // detected doc files: "PRD.md", "CLAUDE.md", etc.
+  gitLog: GitCommit[];     // recent git commits
+  docContents: Record<string, string>; // filename → content
   // Session history from sessions-index.json (for detail view)
   recentSessions: SessionHistoryEntry[];
   // v0.3: Team & agent enrichment
@@ -173,13 +183,29 @@ export interface MergedProjectData extends ProjectData {
   hasHistory: boolean;
   goneSessionCount: number;
   hookSessions: HookSessionInfo[]; // active sessions known from hooks (even without tasks)
+  activityLog: ActivityEvent[];     // recent tool-use activity for project detail panel
+}
+
+// ─── Activity tracking (tool-level observability) ────────────
+
+// Lightweight event for the activity feed in project detail panel
+// Derived from HookEvent by store.ts — not persisted to disk
+export interface ActivityEvent {
+  ts: string;            // ISO 8601
+  sessionId: string;
+  toolName: string;      // Write, Edit, Bash, Read, TaskCreate, etc.
+  summary: string;       // human-readable: "Write app.tsx", "Bash: tsc --noEmit ✓"
+  projectPath: string;
+  isError?: boolean;     // true if tool failed (PostToolUseFailure)
 }
 
 // ─── Hook event types (capture.sh → events.jsonl) ───────────
 
 // Raw event line from events.jsonl
+// event types: "tool" (PostToolUse, all tools), "stop", "start",
+//   "task" (legacy — old PostToolUse with matcher), "subagent_stop", "notification"
 export interface HookEvent {
-  event: "task" | "stop" | "start";
+  event: "tool" | "task" | "stop" | "start" | "subagent_stop" | "notification";
   ts: string; // ISO 8601
   data: HookEventData;
 }
