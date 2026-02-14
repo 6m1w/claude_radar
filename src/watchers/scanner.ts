@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
-import type { TodoItem, TaskItem, SessionData, SessionMeta, ProjectData } from "../types.js";
+import type { TodoItem, TaskItem, SessionData, SessionMeta, ProjectData, SessionHistoryEntry } from "../types.js";
 
 const CLAUDE_DIR = join(homedir(), ".claude");
 const TODOS_DIR = join(CLAUDE_DIR, "todos");
@@ -40,6 +40,7 @@ interface DiscoveredProject {
   totalSessions: number;    // count of .jsonl files
   activeSessions: number;   // .jsonl files modified recently
   lastSessionActivity: Date;
+  recentSessions: SessionHistoryEntry[];  // from sessions-index entries
 }
 
 function discoverProjects(): DiscoveredProject[] {
@@ -92,6 +93,7 @@ function discoverProjects(): DiscoveredProject[] {
       let projectName: string;
       let gitBranch: string | undefined;
       const sessionIds: string[] = [];
+      const recentSessions: SessionHistoryEntry[] = [];
 
       if (indexData?.entries && indexData.entries.length > 0) {
         // Use sessions-index for ground truth
@@ -102,8 +104,13 @@ function discoverProjects(): DiscoveredProject[] {
 
         for (const entry of indexData.entries) {
           if (entry.sessionId) sessionIds.push(entry.sessionId);
-          // Use the most recent non-empty branch
           if (entry.gitBranch) gitBranch = entry.gitBranch;
+          recentSessions.push({
+            sessionId: entry.sessionId,
+            summary: entry.summary,
+            firstPrompt: entry.firstPrompt?.slice(0, 80),
+            gitBranch: entry.gitBranch,
+          });
         }
       } else {
         // No sessions-index — derive from directory name
@@ -123,6 +130,7 @@ function discoverProjects(): DiscoveredProject[] {
         totalSessions,
         activeSessions,
         lastSessionActivity,
+        recentSessions: recentSessions.slice(-8), // keep last 8
       });
     }
   } catch {
@@ -350,11 +358,30 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
     sessionsByProject.set(key, list);
   }
 
+  // Deduplicate discovered projects by projectPath (multiple Claude dirs can resolve to same path)
+  const mergedDisc = new Map<string, DiscoveredProject>();
+  for (const disc of discovered) {
+    const existing = mergedDisc.get(disc.projectPath);
+    if (existing) {
+      // Merge: combine session counts, keep latest activity, prefer non-empty metadata
+      existing.totalSessions += disc.totalSessions;
+      existing.activeSessions += disc.activeSessions;
+      if (disc.lastSessionActivity > existing.lastSessionActivity) {
+        existing.lastSessionActivity = disc.lastSessionActivity;
+      }
+      existing.sessionIds.push(...disc.sessionIds);
+      existing.recentSessions.push(...disc.recentSessions);
+      if (!existing.gitBranch && disc.gitBranch) existing.gitBranch = disc.gitBranch;
+    } else {
+      mergedDisc.set(disc.projectPath, { ...disc, sessionIds: [...disc.sessionIds] });
+    }
+  }
+
   // Build project data for ALL discovered projects
   const projects: ProjectData[] = [];
   const seenPaths = new Set<string>();
 
-  for (const disc of discovered) {
+  for (const disc of mergedDisc.values()) {
     seenPaths.add(disc.projectPath);
     const sessions = sessionsByProject.get(disc.projectPath) ?? [];
     const allItems = sessions.flatMap((s) => s.items);
@@ -397,6 +424,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       activeSessions: disc.activeSessions,
       git,
       docs,
+      recentSessions: disc.recentSessions.slice(-8),
     });
   }
 
@@ -417,6 +445,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       totalSessions: 0,
       activeSessions: 0,
       docs: [],
+      recentSessions: [],
     });
   }
 

@@ -400,33 +400,94 @@ function ProjectDetailView({
   }
 
   const selectedItem = items[taskCursorIdx];
-  const branch = project.gitBranch ? `⎇ ${project.gitBranch}` : "";
-  const agentLabel = `${project.agents.length} agent${project.agents.length > 1 ? "s" : ""}`;
+  const branch = project.git?.branch ?? project.gitBranch;
 
   return (
     <>
-      {/* Top row: Task list + Task detail */}
+      {/* Top row: Project info + Tasks or Session history */}
       <Box>
-        <Panel title={`${project.projectName.toUpperCase()} — Tasks`} width={40}>
+        {/* Left: Project overview */}
+        <Panel title={project.projectName.toUpperCase()} width={42}>
+          {/* Git info */}
+          {branch && (
+            <Box>
+              <Text color={C.subtext}>branch  </Text>
+              <Text color={C.accent}>⎇ {branch}</Text>
+            </Box>
+          )}
+
+          {/* Path */}
           <Box>
-            {branch && <Text color={C.accent}>{branch} </Text>}
-            <Text color={C.dim}>{agentLabel} </Text>
-            <Progress done={project.completedTasks} total={project.totalTasks} width={10} />
+            <Text color={C.subtext}>path    </Text>
+            <Text color={C.dim}>{project.projectPath}</Text>
           </Box>
-          <Text> </Text>
-          {items.map((item, i) => (
-            <TaskRow key={i} item={item} isCursor={i === taskCursorIdx} />
-          ))}
+
+          {/* Sessions */}
+          <Box>
+            <Text color={C.subtext}>sessions </Text>
+            <Text color={C.text}>{project.totalSessions} total</Text>
+            {project.activeSessions > 0 && (
+              <Text color={C.warning}> ({project.activeSessions} active)</Text>
+            )}
+          </Box>
+
+          {/* Docs */}
+          {project.docs.length > 0 && (
+            <Box>
+              <Text color={C.subtext}>docs    </Text>
+              <Text color={C.primary}>{project.docs.join("  ")}</Text>
+            </Box>
+          )}
+
+          {/* Task progress */}
+          {project.totalTasks > 0 && (
+            <Box>
+              <Text color={C.subtext}>tasks   </Text>
+              <Progress done={project.completedTasks} total={project.totalTasks} width={12} />
+            </Box>
+          )}
+
+          {/* Agents */}
+          {project.agents.length > 0 && (
+            <Box>
+              <Text color={C.subtext}>agents  </Text>
+              <Text color={C.accent}>{project.agents.join(", ")}</Text>
+            </Box>
+          )}
         </Panel>
 
-        <Panel title="TASK DETAIL" flexGrow={1}>
-          {selectedItem ? (
-            <TaskDetailContent item={selectedItem} />
+        {/* Right: Task list or session history */}
+        <Panel title={items.length > 0 ? "TASKS" : "SESSION HISTORY"} flexGrow={1}>
+          {items.length > 0 ? (
+            <>
+              {items.map((item, i) => (
+                <TaskRow key={i} item={item} isCursor={i === taskCursorIdx} />
+              ))}
+            </>
+          ) : project.recentSessions.length > 0 ? (
+            project.recentSessions.slice(-8).map((s, i) => {
+              const prompt = s.firstPrompt?.replace(/<[^>]*>/g, "").trim();
+              const label = s.summary || prompt || s.sessionId.slice(0, 8);
+              return (
+                <Box key={i}>
+                  <Text color={C.dim}>{s.sessionId.slice(0, 6)} </Text>
+                  {s.gitBranch && <Text color={C.accent}>⎇{s.gitBranch.padEnd(6).slice(0, 6)} </Text>}
+                  <Text color={C.subtext}>{label.slice(0, 50)}</Text>
+                </Box>
+              );
+            })
           ) : (
-            <Text color={C.dim}>No tasks</Text>
+            <Text color={C.dim}>No tasks or session history available</Text>
           )}
         </Panel>
       </Box>
+
+      {/* Bottom row: Task detail (if task is selected) */}
+      {selectedItem && (
+        <Panel title="TASK DETAIL" flexGrow={1}>
+          <TaskDetailContent item={selectedItem} />
+        </Panel>
+      )}
     </>
   );
 }

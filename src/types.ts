@@ -56,4 +56,14 @@ export interface ProjectData {
     dirty?: boolean;
   };
   docs: string[];          // detected doc files: "PRD.md", "CLAUDE.md", etc.
+  // Session history from sessions-index.json (for detail view)
+  recentSessions: SessionHistoryEntry[];
+}
+
+// Lightweight session info from sessions-index.json
+export interface SessionHistoryEntry {
+  sessionId: string;
+  summary?: string;
+  firstPrompt?: string;
+  gitBranch?: string;
 }
