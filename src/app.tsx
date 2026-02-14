@@ -482,27 +482,30 @@ function RightPanel({
 
   return (
     <Panel title={title} flexGrow={1} focused={isInner && !bottomFocused}>
+      {/* Worktree lineage — show parent project prominently */}
+      {project.worktreeOf && (
+        <Text wrap="truncate">
+          <Text color={C.dim}>↳ </Text>
+          <Text color={C.subtext}>{project.worktreeOf.split("/").pop()}</Text>
+        </Text>
+      )}
       {/* Project info header */}
-      <Box>
+      <Text wrap="truncate">
         <Text color={C.accent}>⎇ {project.branch} </Text>
-        {project.worktreeOf && (
-          <Text color={C.dim}>↳ {project.worktreeOf.split("/").pop()} </Text>
-        )}
-        {project.team && (
+        {project.team ? (
           <Text color={C.warning}>⚑ {project.team.teamName} </Text>
-        )}
+        ) : null}
         {project.agentDetails.length > 0 ? (
           <Text color={C.dim}>
             {project.agentDetails.map((a) => {
               const icon = a.processState === "running" ? I.active : a.processState === "idle" ? I.idle : "✕";
               return `${icon}${a.name}`;
             }).join(" ")}
-            {"  "}
           </Text>
         ) : project.agents.length > 0 ? (
-          <Text color={C.dim}>{project.agents.length} agent{project.agents.length > 1 ? "s" : ""}  </Text>
+          <Text color={C.dim}>{project.agents.length} agent{project.agents.length > 1 ? "s" : ""}</Text>
         ) : null}
-      </Box>
+      </Text>
       {/* Team member list with process states */}
       {project.team && project.agentDetails.length > 0 && (
         <Box>
@@ -892,20 +895,17 @@ function GitLogContent({
         const typeColor = commit.type ? (COMMIT_TYPE_COLORS[commit.type] ?? C.subtext) : C.subtext;
         // Format date as relative
         const dateStr = formatCommitDate(commit.authorDate);
+        const typeStr = commit.type ? commit.type.padEnd(9).slice(0, 9) : "".padEnd(9);
+        const projStr = commit.projectName ? commit.projectName.slice(0, 10).padEnd(11) : "";
 
         return (
-          <Box key={`${commit.hash}-${idx}`}>
-            <Text color={C.dim}>{dateStr.padEnd(8)} </Text>
-            <Text color={C.accent}>{commit.hash} </Text>
-            {commit.type && (
-              <Text color={typeColor} bold>{commit.type.padEnd(9).slice(0, 9)}</Text>
-            )}
-            {!commit.type && <Text color={C.dim}>{"".padEnd(9)}</Text>}
-            {commit.projectName && (
-              <Text color={C.subtext}>{commit.projectName.slice(0, 10).padEnd(11)}</Text>
-            )}
+          <Text key={`${commit.hash}-${idx}`} wrap="truncate">
+            <Text color={C.dim}>{dateStr.padEnd(8)}</Text>
+            <Text color={C.accent}> {commit.hash} </Text>
+            <Text color={typeColor} bold={!!commit.type}>{typeStr}</Text>
+            {projStr ? <Text color={C.subtext}>{projStr}</Text> : null}
             <Text color={C.text}>{commit.subject.replace(/^(\w+)[:(]\s*/, "")}</Text>
-          </Box>
+          </Text>
         );
       })}
       {scrollY + contentHeight < commits.length && (
