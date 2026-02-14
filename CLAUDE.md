@@ -76,11 +76,17 @@ npm run typecheck # Type checking
 
 ## Views & Navigation
 
-| View | Entry | Key controls |
-|------|-------|-------------|
-| Dashboard | Default | `↑↓`/`jk` nav, `Enter` detail, `Space` select, `Tab` kanban, `q` quit |
-| Project Detail | `Enter` on project | `↑↓` nav tasks, `Esc` back |
-| Kanban | `Tab` from dashboard | `Esc` back |
+Master-Detail single-page architecture with two focus levels (no separate Detail page).
+
+| Focus Level | Entry | Key controls |
+|-------------|-------|-------------|
+| Outer (projects) | Default | `↑↓`/`jk` nav projects, `Enter` inner focus, `Space` select, `Tab` kanban, `q` quit |
+| Inner (tasks) | `Enter` on project | `↑↓`/`jk` nav tasks, `1/2/3` tab switch, `Esc` back to outer |
+| Kanban | `Tab` from dashboard | `s` toggle layout, `h` hide done, `Esc` back |
+
+Bottom panel is context-aware: ACTIVITY in outer focus, PRD/Docs + Git History in inner focus.
+
+Layout proportions configurable via `~/.claude-monitor/config.json` → `layout` key.
 
 ## Current Status
 

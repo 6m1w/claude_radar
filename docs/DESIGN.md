@@ -18,9 +18,13 @@
 
 ## View System
 
-### View 1: Dashboard (default)
+The UI uses a **2-view architecture**: Dashboard (with integrated Master-Detail) and Focus/Kanban. The old standalone Project Detail view has been merged into Dashboard as an "inner focus" mode — no page navigation needed.
 
-All-projects-at-a-glance. The "home screen".
+### View 1: Dashboard (default) — Master-Detail Single Page
+
+All-projects-at-a-glance with integrated project drill-down. Two focus levels on one screen.
+
+**Outer Focus** — browsing projects (`j/k` moves cursor, right panel follows):
 
 ```
 ╭─ OVERVIEW ──────────────────────────╮╭─ ACTIVE NOW ─────────────────────────╮
@@ -29,65 +33,71 @@ All-projects-at-a-glance. The "home screen".
 │  [===============>........] 65%      ││  ◍ outclaws/str-a  #2 Dashboard      │
 │                                      ││  ◍ outclaws/str-b  #2 Migrations     │
 ╰──────────────────────────────────────╯╰──────────────────────────────────────╯
-╭─ PROJECTS ───────────────────────────────────────────────────────────────────╮
-│                                                                              │
-│  ▸ ☑ ● claude_monitor   ⎇ main  [============>........] 3/5  ◍ 1 agent  2m │
-│    ☐ ● outclaws         ⎇ main  [========>............] 4/10 ◍ 3 agents 5m │
-│    ☑ ✓ sound_effects    ⎇ main  [=====================] 3/3  ○ 1 agent  1h │
-│    ☐ ○ keyboard         ⎇ main  [===============>....] 7/8  ○ 1 agent 20d │
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ PROJECTS (41) ────╮╭─ DETAIL ─────────────────────────────────────────────╮
+│  ▲ 3 more           ││                                                      │
+│  ☑ ● sound_fx      ││  ⎇ main │ 1 agent │ 5 sessions                      │
+│  ☐ ● keyboard      ││  docs: CLAUDE.md  PRD.md                             │
+│▸ ☑ ● monitor  ⎇feat││  tasks: [============>........] 3/5                  │
+│  ☐ ● outclaws ⎇main││                                                      │
+│  ☐ ○ my_website    ││  ✓ #1 Setup Ink + TS                                │
+│  ☐ ○ api_server    ││  ✓ #2 Session index                                 │
+│  ▼ 32 more          ││  ✓ #3 Polling watcher                               │
+│                      ││  ▶ #4 Design hacker UI                              │
+│                      ││  ○ #5 Keyboard nav                                  │
+│                      ││  ... +2 more                                        │
+╰──────────────────────╯╰──────────────────────────────────────────────────────╯
 ╭─ ACTIVITY ───────────────────────────────────────────────────────────────────╮
 │  10:08  monitor    › #4 Design hacker UI theme                               │
 │  10:05  outclaws   › #2 User dashboard                                       │
 │  10:03  monitor    ✓ #3 Polling watcher                                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
  ☻⌨ · │ CPU ▁▃▅▇▅▃▁▃ 23% │ MEM ██████░░ 4.2/8G │ ↑1.2 ↓45.3 KB/s │ ⠋
- GLOBAL │ ↑↓ nav  Enter detail  Space select  Tab kanban  h hide  t theme  q quit
+ DASHBOARD │ ↑↓ nav  Enter focus  Space select  Tab kanban  q quit
 ```
 
-Key features:
-- **OVERVIEW** panel: aggregate stats + overall progress bar
-- **ACTIVE NOW** panel: currently running agent+task pairs (the most important info)
-- **PROJECTS** panel: one line per project with `▸` cursor, `☑`/`☐` selection, inline progress bar
-- **ACTIVITY** panel: recent events timeline
-- **Status bar**: mini mascot + CPU sparkline + MEM bar + network rates + spinner
-- `Enter` = drill into cursor project Detail; `Space` = toggle ☑; `Tab` = open Kanban for ☑ projects
-
-### View 2: Project Detail
-
-Deep dive into a single project. Reached by pressing `Enter` on a project in Dashboard.
+**Inner Focus** — browsing tasks within a project (`Enter` to enter, `Esc` to exit):
 
 ```
-╭─ Tasks ──────────────────╮╭─ Git History ─────────────╮╭─ PRD / Docs ─────────────╮
-│                           ││                           ││                           │
-│  ⎇ main │ 1 agent │ 2m   ││  ● faf45fa docs: update   ││  # Claude Monitor        │
-│  [==========>....] 3/5    ││  │         PRD             ││                           │
-│                           ││  ● e4bc709 fix: replace    ││  TUI dashboard for       │
-│  ◍ main                   ││  │         chokidar        ││  monitoring Claude Code   │
-│    ✓ #1 Setup Ink + TS    ││  ● eaa40ec docs: update    ││  agent tasks and todos.  │
-│    ✓ #2 Session index     ││  │         PRD             ││                           │
-│    ✓ #3 Polling watcher   ││  ● ce5ef2d fix: resolve    ││  ## Tech Stack           │
-│    ▶ #4 Design hacker UI  ││  │   project names         ││  - TypeScript + Ink      │
-│    ○ #5 Keyboard nav      ││  ● 96e90e6 feat: add       ││  - 1s poll + snapshot    │
-│                           ││      project context       ││  - Catppuccin Mocha      │
-╰───────────────────────────╯╰───────────────────────────╯╰───────────────────────────╯
-╭─ Task Detail ────────────────────────────────────────────────────────────────────────╮
-│  ▶ #4 Design hacker UI theme                                                         │
-│  owner: main │ status: active │ blocked_by: none                                     │
-│  description: Implement Catppuccin Mocha palette, multi-panel layout...               │
-╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭─ OVERVIEW ──────────────────────────╮╭─ ACTIVE NOW ─────────────────────────╮
+│  4 projects  7 agents  23 tasks 65%  ││  ◍ monitor/main    #4 Design UI      │
+╰──────────────────────────────────────╯╰──────────────────────────────────────╯
+╭─ PROJECTS (41) ────╮╭─ TASKS ── [1:Tasks] [2:Git] [3:Docs] ────────────────╮
+│  ☑ ● sound_fx      ││  ⎇ main │ 1 agent │ 5 sessions                      │
+│  ☐ ● keyboard      ││  tasks: [============>........] 3/5                  │
+│▸ ☑ ● monitor  ⎇feat││                                                      │
+│  ☐ ● outclaws ⎇main││    ✓ #1 Setup Ink + TS                              │
+│  ☐ ○ my_website    ││    ✓ #2 Session index                               │
+│                      ││    ✓ #3 Polling watcher                             │
+│                      ││  ▸ ▶ #4 Design hacker UI          ← task cursor    │
+│                      ││    ○ #5 Keyboard nav                                │
+│                      ││ ─── Task Detail ────────────────────                │
+│                      ││ owner: main │ in_progress │ no blockers             │
+│                      ││ Implement Catppuccin Mocha palette...               │
+╰──────────────────────╯╰──────────────────────────────────────────────────────╯
+╭─ PRD.md ─────────────────────────────╮╭─ Git History ────────────────────────╮
+│  # Claude Monitor                     ││  ● faf45fa docs: update PRD          │
+│                                       ││  │                                   │
+│  TUI dashboard for monitoring Claude  ││  ● e4bc709 fix: replace chokidar    │
+│  Code agent tasks and todos.          ││  │                                   │
+│                                       ││  ● eaa40ec docs: update PRD          │
+│  ## Tech Stack                        ││  │                                   │
+│  - TypeScript + Ink                   ││  ● ce5ef2d fix: resolve project      │
+╰───────────────────────────────────────╯╰──────────────────────────────────────╯
+ ☻⌨ · │ CPU ▁▃▅▇▅▃▁▃ 23% │ MEM ██████░░ 4.2/8G │ ↑1.2 ↓45.3 KB/s │ ⠋
+ DETAIL │ ↑↓ nav tasks  1/2/3 tab  Esc back  q quit
 ```
 
-Key features:
-- **Left**: Task list with agent grouping
-- **Center**: Git history with commit graph (3-5 recent commits, colored by type)
-- **Right**: Project docs — reads `docs/PRD.md`, `CLAUDE.md`, or `README.md` from project directory
-- **Bottom**: Selected task's full detail (description, owner, blockers)
+Key design decisions:
+- **Master-Detail on one page**: No separate Project Detail view. Right panel follows cursor in real-time.
+- **Two-level focus**: Outer = project nav, Inner = task nav. `Enter`/`Esc` transitions.
+- **Context-aware bottom panel (B1)**: Outer focus → ACTIVITY; Inner focus → PRD/Docs + Git History.
+- **Right panel tabs**: In inner focus, `1/2/3` switches between Tasks, Git History, Docs views.
+- **Viewport scrolling**: Projects list shows only N visible rows with `▲ N more` / `▼ N more` indicators.
+- **Height cap**: Projects+Detail row is capped at 50% of terminal height, ensuring bottom panels have space.
 
-PRD panel data source: `{projectPath}/docs/PRD.md` → `{projectPath}/CLAUDE.md` → `{projectPath}/README.md` (first found). Rendered as plain text with basic markdown highlighting (headers bold, lists indented). Scrollable with `j/k` when panel focused.
+Docs panel data source: `{projectPath}/docs/PRD.md` → `{projectPath}/CLAUDE.md` → `{projectPath}/README.md` (first found). Rendered as plain text with basic markdown highlighting (headers bold, lists indented). Scrollable with `j/k` when panel focused.
 
-Navigation: `j/k` moves task cursor, `1-3` to focus panels, `Enter` shows task detail, `Esc` back to Dashboard.
+Git History panel data source: `git log --oneline -N` against the project directory. Color commits by type: `feat` green, `fix` yellow, `docs` blue, `chore` dim. Show 3-5 most recent commits.
 
 ### View 3: Focus / Kanban
 
@@ -155,52 +165,80 @@ Key features:
 
 Access: `Tab` from Dashboard. Shows projects selected with `Space`; if none selected, shows all active.
 
+**Planned enhancements (v0.3):**
+
+Dependency visualization and time-in-status indicators in swimlane cells:
+
+```
+│ TODO                │ DOING               │ DONE              │
+│                     │                     │                   │
+│ ○ Keyboard nav      │ ▶ Design UI         │ ✓ Setup Ink       │
+│   ⊘ blocked:#4     │   ↑ 2h in-doing     │                   │
+│ ○ E2E tests         │ ▶ Migrations        │ ✓ DB schema       │
+│   ⊘ blocked:#2     │   └ stream-b        │   └ stream-b      │
+```
+
+- **`⊘ blocked:#N`**: Shows which task is blocking this one (from `blockedBy` field)
+- **`↑ Xh in-doing`**: How long the task has been in its current status (requires mtime tracking)
+- No Gantt chart — task data lacks start/end timestamps; Kanban is the better fit for event-driven workflows
+
 ### View Navigation
 
 ```
-                    ┌─────────────────┐
-               Enter│                 │Esc
-                    ▼                 │
-┌───────────┐     ┌─────────────────┐
-│ Dashboard │     │ Project Detail  │
-│  (home)   │     │  (single)      │
-└───────────┘     └─────────────────┘
-      │
-      │ Tab
-      ▼
-┌─────────────────┐
-│ Focus / Kanban  │
-│  (multi)        │──── Esc ──▸ back to Dashboard
-└─────────────────┘
+┌──────────────────────────────────────┐
+│         Dashboard (home)              │
+│                                       │
+│  ┌─ Outer Focus ────────────────┐    │
+│  │  j/k = nav projects          │    │
+│  │  Enter = inner focus         │    │
+│  │  Bottom = ACTIVITY           │    │
+│  └──────────────────────────────┘    │
+│         │ Enter          ▲ Esc       │
+│         ▼                │           │
+│  ┌─ Inner Focus ────────────────┐    │
+│  │  j/k = nav tasks             │    │
+│  │  1/2/3 = tab switch          │    │
+│  │  Bottom = PRD/Docs + Git     │    │
+│  └──────────────────────────────┘    │
+│                                       │
+│         │ Tab            ▲ Esc       │
+│         ▼                │           │
+│  ┌─ Focus / Kanban ─────────────┐    │
+│  │  s = toggle layout           │    │
+│  │  h = hide/show completed     │    │
+│  └──────────────────────────────┘    │
+└──────────────────────────────────────┘
 ```
 
-**Dashboard actions:**
+Note: Dashboard outer focus, inner focus, and Kanban are all within the same "Dashboard" view — there is no separate page navigation. `Enter`/`Esc` transitions between focus levels. `Tab` opens Kanban overlay.
+
+**Outer Focus (default) — project navigation:**
 
 | Key | Action | Notes |
 |-----|--------|-------|
-| `↑` `↓` (or `j` `k`) | Move cursor | `▸` indicates current row |
-| `Enter` | Drill into cursor project | Opens Project Detail for that project (ignores ☑) |
+| `↑` `↓` (or `j` `k`) | Move project cursor | `▸` indicates current row; right panel follows |
+| `Enter` | Enter inner focus | Task cursor appears in right panel; bottom → Docs+Git |
 | `Space` | Toggle ☑ selection | Marks project for Kanban view |
 | `Tab` | Open Focus/Kanban | Shows ☑ projects; if none ☑, shows all active |
-| `Esc` | — | No-op on Dashboard (already home) |
+| `Esc` | — | No-op (already at top level) |
 
-**Project Detail actions:**
+**Inner Focus — task navigation:**
 
 | Key | Action |
 |-----|--------|
-| `↑` `↓` | Navigate tasks |
-| `1` `2` `3` | Focus panel (Tasks / Git History / Docs) |
-| `Esc` | Back to Dashboard |
+| `↑` `↓` (or `j` `k`) | Navigate tasks in right panel |
+| `1` `2` `3` | Switch right panel tab: Tasks / Git History / Docs |
+| `Esc` | Exit to outer focus; bottom → ACTIVITY |
 
-**Focus/Kanban actions:**
+**Focus/Kanban:**
 
 | Key | Action |
 |-----|--------|
 | `s` | Toggle layout: By Agent ↔ Swimlane Table |
 | `h` | Hide/show completed projects |
-| `Esc` | Back to Dashboard |
+| `Esc` | Back to outer focus |
 
-**Global keys (work in all views):**
+**Global keys (work in all focus levels):**
 
 | Key | Action |
 |-----|--------|
@@ -208,11 +246,11 @@ Access: `Tab` from Dashboard. Shows projects selected with `Space`; if none sele
 | `/` | Search filter |
 | `q` | Quit |
 
-Key principle: **`Enter` and `Space` are independent**. `Enter` always acts on the cursor position (drill into one project). `Space` toggles selection marks (for Kanban). The two don't interfere.
+Key principle: **`Enter` and `Space` are independent**. `Enter` transitions focus level (outer → inner). `Space` toggles selection marks (for Kanban). The two don't interfere.
 
 ## Responsive Layout
 
-Panels adapt to terminal width using Ink's flexbox model. The goal: **useful at 80 cols, expansive at 160+ cols**.
+Panels adapt to terminal size using Ink's flexbox model. The goal: **useful at 80×24, expansive at 160×50+**.
 
 ### Panel Sizing Strategy
 
@@ -225,53 +263,131 @@ Each panel has one of two sizing modes:
 
 When multiple flex panels share a row, they split the extra space equally.
 
-### Dashboard Layout (default view)
+Rule: A panel uses **either** `width` or `flexGrow`, never both. If neither is set, it sizes to content.
 
-**Narrow terminal (80-100 cols)** — 2 rows, 3 panels:
+### Vertical Height Management
 
-```
-┌───────────────────────────┐┌───────────────────────────────────────────────┐
-│ [1] Projects  (fixed 34)  ││ [2] Detail                        (flexGrow) │
-└───────────────────────────┘└───────────────────────────────────────────────┘
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ [3] Activity                                                    (flexGrow)  │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
-
-**Wide terminal (120+ cols)** — 2 rows, 4 panels:
+Terminal height is split into rows with configurable proportions:
 
 ```
-┌───────────────────────────┐┌──────────────────────────────────────────────────────────┐
-│ [1] Projects  (fixed 34)  ││ [2] Detail                                   (flexGrow)  │
-└───────────────────────────┘└──────────────────────────────────────────────────────────┘
-┌──────────────────────────────────────────┐┌──────────────────────────────────────────┐
-│ [3] Activity                 (flexGrow)  ││ [4] Metrics Chart            (flexGrow)  │
-└──────────────────────────────────────────┘└──────────────────────────────────────────┘
+Terminal rows (e.g., 40)
+──────────────────────────────
+ Row A: Overview + Active    → fixed ~3 rows
+ Row B: Projects + Detail    → elastic, capped at maxMiddlePercent (default 50%)
+ Row C: Activity / Docs+Git  → fills remaining space
+ Row D: StatusBar            → fixed 2 rows
+ Borders + spacing           → ~4 rows
+──────────────────────────────
 ```
 
-The `[4] Metrics Chart` panel appears automatically when terminal width exceeds ~120 cols. It provides 30-point sparkline history charts for CPU, MEM, and NET — filling what would otherwise be dead whitespace.
-
-### Project Detail Layout
-
-```
-┌─────────────────────┐┌─────────────────────┐┌─────────────────────┐
-│ Tasks    (flexGrow)  ││ Git History (fixed)  ││ PRD/Docs (flexGrow) │
-└─────────────────────┘└─────────────────────┘└─────────────────────┘
-┌────────────────────────────────────────────────────────────────────┐
-│ Task Detail                                           (flexGrow)   │
-└────────────────────────────────────────────────────────────────────┘
-```
-
-### Implementation
-
-The `Panel` component accepts an optional `flexGrow` prop:
+**Height calculation:**
 
 ```typescript
-function Panel({ title, children, width, flexGrow }: {
+const { rows } = useStdout();
+const fixedRows = 3 + 2 + 4; // overview + statusbar + borders
+const available = rows - fixedRows;
+const maxMiddle = Math.floor(rows * layout.maxMiddlePercent);
+const middleRows = Math.min(available * 0.5, maxMiddle);
+const bottomRows = available - middleRows;
+```
+
+**Viewport scrolling for project list:**
+
+The project list renders at most `middleRows - borders` visible items. When cursor moves beyond the visible window, `scrollOffset` adjusts to keep cursor in view.
+
+```
+╭─ PROJECTS (41) ─────╮
+│  ▲ 3 more            │   ← scrollOffset > 0
+│  sound_fx            │
+│  keyboard            │
+│▸ monitor        ⎇feat│   ← cursorIdx (always visible)
+│  outclaws       ⎇main│
+│  my_website          │
+│  ▼ 32 more           │   ← more items below
+╰──────────────────────╯
+```
+
+### Dashboard Layout — Outer Focus
+
+**Standard terminal (80+ cols):**
+
+```
+┌─ Overview (flexGrow) ──────┐┌─ Active Now (flexGrow) ─────┐  Row A (fixed)
+└────────────────────────────┘└─────────────────────────────┘
+┌─ Projects (fixed W) ──┐┌─ Detail (flexGrow) ──────────────┐  Row B (capped 50%)
+│  viewport scrolling    ││  summary + truncated tasks       │
+└────────────────────────┘└──────────────────────────────────┘
+┌─ Activity (flexGrow) ─────────────────────────────────────┐  Row C (remaining)
+└───────────────────────────────────────────────────────────┘
+```
+
+**Wide terminal (120+ cols):**
+
+```
+┌─ Overview ─────────────────┐┌─ Active Now ────────────────┐  Row A
+└────────────────────────────┘└─────────────────────────────┘
+┌─ Projects (fixed) ────┐┌─ Detail (flexGrow) ──────────────┐  Row B
+└────────────────────────┘└──────────────────────────────────┘
+┌─ Activity (flexGrow) ──────────┐┌─ Metrics Chart (flexGrow) ┐  Row C
+└────────────────────────────────┘└────────────────────────────┘
+```
+
+The `Metrics Chart` panel appears when terminal width exceeds ~120 cols.
+
+### Dashboard Layout — Inner Focus
+
+Bottom row transforms from Activity to project-contextual panels:
+
+```
+┌─ Overview (flexGrow) ──────┐┌─ Active Now (flexGrow) ─────┐  Row A (fixed)
+└────────────────────────────┘└─────────────────────────────┘
+┌─ Projects (fixed W) ──┐┌─ Tasks [1:Tasks 2:Git 3:Docs] ──┐  Row B (capped 50%)
+│  viewport scrolling    ││  full task list + task detail     │
+└────────────────────────┘└──────────────────────────────────┘
+┌─ PRD/Docs (flexGrow) ─────────┐┌─ Git History (flexGrow) ──┐  Row C (remaining)
+└────────────────────────────────┘└────────────────────────────┘
+```
+
+### Small Screen Fallback
+
+When terminal height < 30 rows:
+- Bottom panel (Row C) is hidden entirely
+- Overview + Active collapses to single line
+- Dashboard degrades to a compact 2-row layout
+
+### Layout Configuration
+
+All layout proportions are configurable via `~/.claude-monitor/config.json`:
+
+```json
+{
+  "layout": {
+    "maxMiddlePercent": 0.5,
+    "projectListWidth": 24,
+    "bottomPanelSplit": 0.5,
+    "showMetricsPanel": "auto",
+    "compactThreshold": 30
+  }
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `maxMiddlePercent` | `0.5` | Max fraction of terminal height for Row B (Projects+Detail) |
+| `projectListWidth` | `24` | Fixed column width for the project list panel |
+| `bottomPanelSplit` | `0.5` | Left/right ratio for bottom row (Docs vs Git, Activity vs Metrics) |
+| `showMetricsPanel` | `"auto"` | `"auto"` = show when width > 120; `"always"` / `"never"` to override |
+| `compactThreshold` | `30` | Terminal rows below which compact mode activates |
+
+### Panel Component
+
+```typescript
+function Panel({ title, children, width, flexGrow, maxHeight }: {
   title: string;
   children: React.ReactNode;
   width?: number | string;  // fixed sizing
   flexGrow?: number;        // flex sizing (1 = fill available space)
+  maxHeight?: number;       // max rows (for viewport-managed panels)
 }) {
   return (
     <Box flexDirection="column" borderStyle="round"
@@ -281,8 +397,6 @@ function Panel({ title, children, width, flexGrow }: {
   );
 }
 ```
-
-Rule: A panel uses **either** `width` or `flexGrow`, never both. If neither is set, it sizes to content.
 
 ## Data Capture Scope
 
@@ -548,9 +662,9 @@ Icons: ◆ ◈ ◇ ✦ ✧
 
 ## Keyboard Map
 
-See **View Navigation** section above for the full key reference per view.
+See **View Navigation** section above for the full key reference per focus level.
 
-Summary: `↑↓` navigate, `Enter` drill into project, `Space` toggle ☑ selection, `Tab` open Kanban (shows ☑ projects), `Esc` back, `s` toggle kanban layout, `t` theme, `h` hide done, `q` quit.
+Summary: `↑↓` navigate, `Enter` enter inner focus, `Esc` exit inner focus, `1/2/3` switch right panel tab, `Space` toggle ☑ selection, `Tab` open Kanban (shows ☑ projects), `s` toggle kanban layout, `t` theme, `h` hide done, `q` quit.
 
 ## Data Flow
 
@@ -570,20 +684,24 @@ git log (per project dir)  ──────────┘                    
 
 ## Implementation Priority
 
-| Priority | Component | View | Complexity |
-|----------|-----------|------|------------|
-| P0 | Dashboard view (all-projects summary) | Dashboard | Medium |
-| P0 | Keyboard navigation (j/k/Enter/Esc) | All | Medium |
-| P1 | Project Detail view with task list | Detail | Low (exists) |
-| P1 | Git history panel | Detail | Medium |
-| P1 | Focus/Kanban view | Focus | Low (exists) |
+| Priority | Component | Scope | Complexity |
+|----------|-----------|-------|------------|
+| P0 | Master-Detail merge (remove separate Detail view) | Dashboard | Medium |
+| P0 | Two-level focus (outer/inner + Enter/Esc transitions) | Dashboard | Medium |
+| P0 | Viewport scrolling for project list | Dashboard | Low |
+| P0 | Adaptive height + configurable layout | Dashboard | Medium |
+| P1 | Context-aware bottom panel (B1: Activity ↔ Docs+Git) | Dashboard | Medium |
+| P1 | Right panel tab system (1/2/3 → Tasks/Git/Docs) | Dashboard | Medium |
+| P1 | Git history panel (git log integration) | Dashboard | Medium |
+| P1 | Docs panel (PRD/CLAUDE.md reader) | Dashboard | Low |
+| P1 | Focus/Kanban view | Kanban | Low (exists) |
 | P2 | Theme system + 3 themes | All | Medium |
+| P2 | Kanban dependency visualization (`⊘ blocked:#N`) | Kanban | Low |
+| P2 | Kanban time-in-status indicators | Kanban | Low |
 | P2 | Search/filter | All | Low |
-| P2 | Task detail expansion | Detail | Low |
-| P2 | System metrics bar (CPU/MEM/NET) | All (bottom) | Low |
-| P2 | ASCII mascot animation | Dashboard | Low |
 | P2 | Animation system (pulse, flash, sparkline) | All | Medium |
 | P3 | Local snapshot persistence | All | Medium |
+| P3 | Small screen compact fallback | Dashboard | Low |
 | P3 | Status badges (build/deploy) | Dashboard | Low (needs hooks) |
 
 ## Resolved Decisions
@@ -592,3 +710,8 @@ git log (per project dir)  ──────────┘                    
 2. **Refresh rate**: 1s polling for now. May make configurable later.
 3. **Git history depth**: 3-5 most recent commits. Keeps panel compact, avoids perf issues on large repos.
 4. **Multi-select in Focus**: Default shows all active projects. `f` opens filter to toggle individual projects on/off.
+5. **Dashboard + Detail merged**: Standalone Project Detail view removed. Replaced with Master-Detail single-page layout with two focus levels (outer = projects, inner = tasks). Reduces cognitive load of page navigation.
+6. **Context-aware bottom panel (B1)**: Bottom row shows ACTIVITY in outer focus, switches to PRD/Docs + Git History in inner focus. Rationale: when drilling into a project, project context (docs/git) is more valuable than global activity feed.
+7. **No Gantt chart**: Task data lacks start/end timestamps. Kanban with dependency indicators (`⊘ blocked:#N`) and time-in-status (`↑ 2h`) is a better fit for Claude Code's event-driven workflow.
+8. **Project list viewport**: With 40+ projects, list uses scrolling viewport capped at 50% terminal height. Active projects sort to top, cursor drives scroll window.
+9. **Layout proportions configurable**: All layout ratios (middle panel height cap, project list width, bottom panel split) stored in `~/.claude-monitor/config.json` under `layout` key. Allows tuning for different screen sizes without code changes.

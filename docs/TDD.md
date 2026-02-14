@@ -2,7 +2,11 @@
 
 ## Scope
 
-This document covers the **local persistence layer** for Claude Monitor — the system that captures, stores, and merges task/session history so data is never lost when Claude Code deletes its task files.
+This document covers the **data capture and persistence layer** for Claude Monitor:
+
+1. **Event capture** — how we detect task/session changes (dual-layer: Plugin Hook + file polling)
+2. **Persistence** — how we store accumulated history so data survives Claude Code's file cleanup
+3. **Merge algorithm** — how live data, hook events, and stored history are reconciled
 
 Other technical topics (UI components, rendering, metrics) are covered in `DESIGN.md`.
 
@@ -26,50 +30,175 @@ Claude Code deletes task files (`~/.claude/tasks/`, `~/.claude/todos/`) when tas
 
 ## Architecture
 
-### Current Data Flow (no persistence)
+### Data Flow — Dual-Layer Capture
 
 ```
-~/.claude/{todos,tasks,projects}
-         │
-         ▼
-    scanner.scanAll()  ──→  useWatchSessions()  ──→  UI
-    (pure read, no state)    (3s poll + diff)
+                        Layer 1: Plugin Hook (real-time)
+                        ────────────────────────────────
+Claude Code event ──→ hooks.json (PostToolUse, Stop, ...)
+                        │
+                        ▼
+                  capture.sh (bash, <10ms)
+                        │
+                        ▼ append
+              ~/.claude-monitor/events.jsonl   ← transit buffer
+                        │
+                        ▼ Chokidar watch
+                     ┌──────────────────┐
+                     │                  │
+                     │   store.merge()  │ ← merges hook events + live scan + history
+                     │                  │
+                     └──────────────────┘
+                        ▲
+                        │ 3s poll
+                        │
+                  Layer 2: File Polling (fallback)
+                  ──────────────────────────────
+           scanner.scanAll()  ──→  live ProjectData[]
+           ~/.claude/{todos,tasks,projects}
+                        │
+                        ▼
+                  useWatchSessions()  ──→  UI
+                        │
+                        ▼ write dirty
+              ~/.claude-monitor/projects/*.json
+              (accumulated history)
 ```
 
-### Proposed Data Flow (with persistence)
+### Why Dual-Layer?
 
-```
-~/.claude/{todos,tasks,projects}
-         │
-         ▼
-    scanner.scanAll()  ──→  store.merge()  ──→  useWatchSessions()  ──→  UI
-    (pure read)              (diff + save)       (3s poll + diff)
-         │                       ▲
-         │                       │
-         └───────────────────────┘
-                          ~/.claude-monitor/projects/*.json
-                          (accumulated history)
-```
+| | Layer 1: Hook | Layer 2: Polling |
+|---|---|---|
+| **Latency** | ~7ms (event-driven) | 0–3000ms (interval) |
+| **Coverage** | Only fires for hook-registered events | Scans full filesystem state |
+| **Reliability** | Depends on Plugin being installed | Always works |
+| **Missed data** | Never (Claude Code guarantees delivery) | Can miss short-lived files (<3s) |
 
-Key change: A new `store.ts` module sits between scanner and hook. The scanner stays pure (no side effects). The store handles:
-
-1. Loading historical data from disk
-2. Merging live data with historical data
-3. Detecting disappeared items (present in history, absent from live)
-4. Writing merged state back to disk
+Layer 1 solves the core problem: task files that exist for <3s get captured by the hook before Claude Code cleans them up. Layer 2 provides full filesystem context (git info, docs, session counts) that hooks don't carry, and serves as graceful degradation when the Plugin isn't installed.
 
 ### Module Responsibilities
 
 | Module | Responsibility | Side Effects |
 |--------|---------------|--------------|
+| `capture.sh` | Receive hook stdin, append to events.jsonl | Writes `~/.claude-monitor/events.jsonl` |
 | `scanner.ts` | Read live data from `~/.claude/` | None (pure read) |
-| `store.ts` | Load/save/merge historical data | Writes to `~/.claude-monitor/` |
+| `store.ts` | Load/save/merge historical data + consume events | Writes `~/.claude-monitor/projects/*.json` |
 | `use-watch.ts` | Orchestrate poll → scan → merge → render | React state updates |
+| `hooks.json` | Declare Plugin hooks to Claude Code | None (declarative config) |
+
+### Event Capture (Layer 1) — Plugin Hook
+
+#### Hook Registration
+
+Claude Monitor ships as a Claude Code Plugin. The `hooks/hooks.json` declares which events to capture:
+
+```json
+{
+  "description": "Real-time task/session event capture for Claude Monitor.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "TaskCreate|TaskUpdate|TodoWrite",
+        "hooks": [{
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/capture.sh task",
+          "timeout": 3
+        }]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/capture.sh stop",
+          "timeout": 3
+        }]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [{
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/capture.sh start",
+          "timeout": 3
+        }]
+      }
+    ]
+  }
+}
+```
+
+**Why bash, not node?** Hook processes are short-lived — spawned per event, exit after writing. Node.js cold start is ~150ms (V8 init); bash is ~5ms. With a 3s timeout budget, bash keeps overhead under 10ms.
+
+**Why `PostToolUse` with matcher?** We only care about task-related tool calls. The matcher filters to `TaskCreate`, `TaskUpdate`, and `TodoWrite` — other tools (Read, Write, Bash, etc.) are ignored, minimizing event volume.
+
+#### capture.sh
+
+```bash
+#!/bin/bash
+# Append hook event to transit buffer.
+# Stdin: JSON from Claude Code (session_id, tool_name, input, output).
+EVENT="$1"
+EVENTS_FILE="$HOME/.claude-monitor/events.jsonl"
+mkdir -p "$(dirname "$EVENTS_FILE")"
+STDIN=$(cat)
+printf '{"event":"%s","ts":"%s","data":%s}\n' \
+  "$EVENT" "$(date -u +%FT%TZ)" "$STDIN" >> "$EVENTS_FILE"
+```
+
+Safety properties:
+- `>>` uses `O_APPEND` — POSIX guarantees atomic writes under PIPE_BUF (4096 bytes), safe for concurrent hooks
+- File permissions: created with user's umask (typically 600)
+- No parsing or processing — just capture and exit
+
+#### events.jsonl Format
+
+```jsonl
+{"event":"task","ts":"2026-02-14T05:20:01Z","data":{"session_id":"d7d9...","tool_name":"TaskCreate","input":{"subject":"Add types","description":"..."},"output":{"id":"1"}}}
+{"event":"task","ts":"2026-02-14T05:20:05Z","data":{"session_id":"d7d9...","tool_name":"TaskUpdate","input":{"taskId":"1","status":"in_progress"}}}
+{"event":"stop","ts":"2026-02-14T05:38:19Z","data":{"session_id":"d7d9..."}}
+```
+
+#### Transit Buffer Lifecycle
+
+events.jsonl is a **write-ahead log**, not permanent storage. Once the TUI consumes events and merges them into the per-project Store, the events are redundant.
+
+Cleanup strategy:
+1. TUI tracks byte offset of last consumed line
+2. After consuming all events: `mv events.jsonl events.consumed && : > events.jsonl && rm events.consumed`
+3. Safety cap in capture.sh: if file exceeds 10MB, truncate to last 1000 lines
+
+Expected steady-state size: **<50KB** (events are consumed within seconds by the running TUI).
+
+### File Polling (Layer 2) — Existing Scanner
+
+The 5-phase scanner pipeline remains unchanged:
+
+1. **Discover**: Scan `~/.claude/projects/` directories
+2. **Git**: Read `.git/HEAD` for branch info
+3. **Docs**: Detect CLAUDE.md, PRD.md, etc.
+4. **Index**: Build session → project mapping
+5. **Tasks**: Scan `~/.claude/todos/` and `~/.claude/tasks/`
+
+The scanner provides the full `ProjectData[]` context that hooks don't carry (git info, docs, session counts, active session detection). Even without the Plugin hook, the scanner captures all data — just with up to 3s latency and a small risk of missing very short-lived files.
+
+### Event Consumption in use-watch.ts
+
+```typescript
+// On each poll cycle:
+const liveProjects = scanAll().projects;
+const hookEvents = consumeEvents();     // read new lines from events.jsonl
+const merged = store.merge(liveProjects, hookEvents);
+store.save();
+```
+
+Between poll cycles, Chokidar watches `events.jsonl` — if a hook event arrives, it triggers an immediate merge without waiting for the next 3s poll.
 
 ## Storage Layout
 
 ```
 ~/.claude-monitor/
+├── events.jsonl             # Transit buffer — hook events (consumed + truncated)
 ├── projects/
 │   ├── {hash}.json          # Per-project accumulated history
 │   ├── {hash}.json
@@ -283,25 +412,57 @@ The persistence layer enables but does not mandate specific UI changes. Suggeste
 
 ## Performance Considerations
 
+### Hook Overhead (Layer 1)
+
+Each hook invocation (capture.sh) adds latency to Claude Code's tool call pipeline:
+
+| Phase | Time |
+|-------|------|
+| bash startup | ~5ms |
+| `cat` stdin | ~1ms |
+| `printf >> events.jsonl` | ~1ms |
+| **Total** | **~7ms** |
+
+Claude Code's hook timeout is set to 3s. Our ~7ms is well within budget.
+
+### TUI Event Consumption
+
+| Trigger | Latency | Description |
+|---------|---------|-------------|
+| Chokidar event | ~50ms | events.jsonl change detected, immediate merge |
+| Poll interval | 3000ms | Full filesystem scan + merge (fallback) |
+| Store merge | ~5ms | In-memory operation |
+| React render | ~10ms | Only if snapshotKey changed |
+
+End-to-end (hook event → UI update): **~66ms**.
+
 ### Write Frequency
 
-The store writes to disk on every poll cycle where data changed (worst case: every 3s). Mitigation:
-
-- Only write project files that actually changed (compare before write)
-- JSON.stringify is fast for small objects (a project with 50 tasks ≈ 5-10KB)
-- Async write (`writeFile`) to avoid blocking the poll loop
+- **events.jsonl**: Append-only, written by capture.sh per hook event (~7 bytes/ms)
+- **projects/*.json**: Written by store.save() only when data changed (dirty tracking). Worst case: every 3s per modified project
+- Only dirty project files are written — unchanged projects incur zero I/O
 
 ### Read Frequency
 
-Store is loaded once on startup, then kept in memory. No repeated disk reads during polling.
+- Store is loaded once on startup, then kept in memory
+- events.jsonl is read on Chokidar change or poll cycle (incremental — tracks byte offset)
+- No repeated full-disk reads during polling
 
 ### Storage Growth
 
-Each project file grows as sessions accumulate. Rough sizing:
+**projects/*.json** (permanent store):
 
 - 1 session with 10 tasks ≈ 2KB
 - 50 sessions ≈ 100KB per project
 - 20 projects ≈ 2MB total
+
+**events.jsonl** (transit buffer):
+
+- ~500 bytes per event average
+- Consumed and truncated within seconds when TUI is running
+- Steady-state size: <50KB
+- Safety cap: 10MB / 1000 lines (truncated by capture.sh)
+- Worst case (TUI not running for a week, heavy user): ~2.5MB — harmless
 
 No cleanup needed for the foreseeable future. If needed later, add a `maxAge` config to prune sessions older than N days.
 
@@ -325,17 +486,46 @@ On each merge, if an item's status changed from the stored version, append to `_
 
 ## Implementation Plan
 
+### Phase 1 — Persistence Layer (✅ Done)
+
+| Step | Description | Files | Status |
+|------|-------------|-------|--------|
+| 1 | Add persistence types (StoredItem, SessionStore, etc.) | `src/types.ts` | ✅ |
+| 2 | Create `store.ts` with Store class, merge algorithm | `src/watchers/store.ts` | ✅ |
+| 3 | Integrate store into `use-watch.ts` poll loop | `src/watchers/use-watch.ts` | ✅ |
+| 4 | Add DisplayItem type to preserve `_gone` metadata for UI | `src/types.ts` | ✅ |
+| 5 | Tests: merge algorithm (15 tests, all passing) | `src/watchers/__tests__/store.test.ts` | ✅ |
+
+### Phase 2 — Plugin Hook Capture (Next)
+
 | Step | Description | Files |
 |------|-------------|-------|
-| 1 | Create `store.ts` with `initStore()`, `loadStore()`, `mergeAndPersist()` | `src/watchers/store.ts` |
-| 2 | Add `MergedProjectData` and `StoredItem` types | `src/types.ts` |
-| 3 | Integrate store into `use-watch.ts` poll loop | `src/watchers/use-watch.ts` |
-| 4 | UI: dim gone items, show `[archived]` label | `src/app.tsx` |
-| 5 | UI: kanban DONE column includes gone tasks | `src/app.tsx` |
-| 6 | Tests: merge algorithm edge cases | `src/watchers/__tests__/store.test.ts` |
+| 6 | Create `hooks/hooks.json` declaring PostToolUse, Stop, SessionStart | `hooks/hooks.json` |
+| 7 | Create `hooks/capture.sh` — stdin → events.jsonl append | `hooks/capture.sh` |
+| 8 | Add event consumer to store.ts — parse events.jsonl, merge into Store | `src/watchers/store.ts` |
+| 9 | Add Chokidar watcher for events.jsonl in use-watch.ts | `src/watchers/use-watch.ts` |
+| 10 | Add transit buffer cleanup (offset tracking + truncation) | `src/watchers/store.ts` |
+| 11 | Plugin packaging (`.claude-plugin/marketplace.json`, hooks dir) | `.claude-plugin/` |
+| 12 | Tests: event consumption, deduplication with polling | `src/watchers/__tests__/store.test.ts` |
+
+### Phase 3 — UI Treatment (Later, with frontend redesign)
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 13 | UI: dim gone items, show `[archived]` label | `src/app.tsx` |
+| 14 | UI: kanban DONE column includes gone tasks | `src/app.tsx` |
+| 15 | UI: activity feed includes "task disappeared" events | `src/app.tsx` |
+
+## Resolved Decisions
+
+1. **Gone items resurface if they reappear** — `gone` is flipped back to `false` on re-detection ✅
+2. **Session-level metadata is stored** — summary, firstPrompt, gitBranch preserved for archive view ✅
+3. **Unlimited sessions per project** — revisit if storage becomes an issue ✅
+4. **Capture script uses bash, not node** — cold start ~5ms vs ~150ms, critical for hook timeout budget ✅
+5. **events.jsonl is a transit buffer, not permanent store** — consumed + truncated by TUI ✅
 
 ## Open Questions
 
-1. **Should gone items resurface if they reappear?** (Current design: yes — `gone` is flipped back to `false`)
-2. **Should we store session-level metadata (summary, firstPrompt) in the store?** (Current design: yes — useful for displaying archived sessions)
-3. **Max sessions per project before rotation?** (Current design: unlimited, revisit if storage becomes an issue)
+1. **Plugin distribution**: Ship as standalone CLI (`npx claude-monitor`) with optional Plugin install? Or Plugin-first with TUI bundled inside?
+2. **Event deduplication**: When both hook and polling capture the same TaskCreate, the Store merge already deduplicates by item key (`task:{id}`). But should we deduplicate at the event level too (skip events whose data is already in Store)?
+3. **Shared Plugin infra with sound-fx**: Both projects use the same Claude Code Plugin hook system. Should they share a common event collector, or stay independent?

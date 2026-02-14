@@ -61,10 +61,11 @@
 
 #### 键盘交互
 - [x] `↑` `↓` / `j` `k`：切换 project/task 焦点
-- [x] `Enter`：进入项目详情（Project Detail 视图）
-- [x] `Esc`：返回上级视图
+- [x] `Enter`：进入内层焦点（从项目列表 → 任务列表）
+- [x] `Esc`：退出内层焦点 / 返回上级视图
 - [x] `Tab`：切换到 Kanban 视图
 - [x] `Space`：标记项目（☑/☐）用于 Kanban 多选
+- [ ] `1` `2` `3`：内层焦点时切换右面板 tab（Tasks / Git / Docs）
 - [ ] `/`：搜索过滤
 - [ ] `f`：过滤模式（active / all / project）
 - [x] `q`：退出
@@ -86,14 +87,27 @@
 - [x] **项目去重**：多个 Claude 目录解析到同一路径时合并数据
 - [x] **Session 历史**：从 sessions-index.json 提取 summary/firstPrompt 展示
 
-#### 视图
-- [x] **Dashboard 视图**（默认）：OVERVIEW + ACTIVE NOW + PROJECTS(42) + ACTIVITY
-- [x] **Project Detail 视图**：项目信息（git/path/sessions/docs）+ Tasks 或 Session 历史
+#### 视图重构：Master-Detail 单页模式
+- [x] **Dashboard 视图**（默认）：OVERVIEW + ACTIVE NOW + PROJECTS + DETAIL + ACTIVITY
+- [ ] **~~Project Detail 视图~~**：**已废弃** → 合并到 Dashboard 内，改为两层焦点模式
+  - 外层焦点：`j/k` 在项目列表移动，右面板跟随显示项目概要 + 前 N 个 tasks
+  - 内层焦点（`Enter`）：`j/k` 在右面板任务列表移动，选中 task 展开详情
+- [ ] **上下文感知底部面板（B1）**：
+  - 外层焦点 → 底部显示 ACTIVITY（全局事件流）
+  - 内层焦点 → 底部替换为 PRD/Docs + Git History（项目上下文）
+- [ ] **右面板 Tab 切换**：内层焦点时按 `1/2/3` 切换 Tasks / Git / Docs 视图
 - [x] **Focus/Kanban 视图**：Swimlane 表格布局（共享表头 TODO/DOING/DONE）
 - [x] **活跃项目置顶**：有 active session 的项目排在最前
-- [ ] **Project Detail 三栏**：Tasks + Git History + PRD/Docs 并排显示（设计已有，待实现）
+- [ ] **项目列表 Viewport 滚动**：大量项目时只渲染可见行，光标驱动窗口滑动
 - [ ] **By Agent 布局**：Kanban 按 agent 分列（设计已有，待实现）
 - [ ] **折叠/展开**：旧 session 折叠成单行摘要
+
+#### 自适应布局
+- [ ] **高度自适应**：根据终端行数动态分配面板高度
+- [ ] **项目列表上限**：高度不超过屏幕 50%，保证底部面板（Docs/Git/Activity）有足够空间
+- [ ] **可配置比例**：布局比例通过 `~/.claude-monitor/config.json` 的 `layout` 字段配置
+- [ ] **小屏 fallback**：终端行数不足时自动隐藏底部面板，退化为紧凑模式
+- [ ] **Overview 可收起**（stretch）：内层焦点时 Overview 压缩为单行上下文条，释放空间
 
 #### 性能优化
 - [x] **渲染频率降低**：metrics 3s/次（网络 6s），数据轮询 3s
@@ -103,12 +117,14 @@
 - [x] **snapshotKey 差异检测**：仅数据变化时触发 React re-render
 - [x] **Production 构建**：NODE_ENV=production 抑制 React dev 警告
 
-### v0.3 — 多 Agent 监控
+### v0.3 — 多 Agent 监控 + 看板增强
 
 - [ ] **Team 模式支持**：读取 `~/.claude/teams/` 配置，按 team 分组展示
 - [ ] **Agent 标识**：显示 task owner（哪个 agent 在做哪个任务）
-- [ ] **依赖可视化**：显示 `blocks` / `blockedBy` 关系
+- [ ] **依赖可视化**：Kanban 中显示 `blocks` / `blockedBy` 关系（`⊘ blocked:#4` 标记）
+- [ ] **状态停留时间**：显示 task 在当前状态停留了多久（`↑ 2h in-doing`）
 - [ ] **进程状态**：检测 agent 进程是否存活（running / idle / dead）
+- [ ] **多套主题**：Catppuccin Mocha / Retro Terminal / Cyberpunk，`t` 键切换或 CLI flag
 
 ### v0.4 — 事件流集成
 
@@ -130,6 +146,60 @@
 - [ ] 历史统计（每日完成任务数、平均 session 时长）
 - [ ] Claude Code 插件集成（作为 MCP resource 提供数据）
 - [ ] 通知集成（task blocked 时发送系统通知）
+
+## 竞品分析（2026-02）
+
+### 直接竞品 — TUI Dashboard
+
+| 项目 | GitHub | 语言 | 核心特点 | 与我们的差异 |
+|------|--------|------|----------|-------------|
+| [claudash](https://github.com/claudash/claudash) | claudash/claudash | — | 像 tig 一样浏览 Claude Code session 历史 | 聚焦 session 浏览，不做实时任务监控 |
+| [claude-dashboard](https://github.com/seunggabi/claude-dashboard) | seunggabi/claude-dashboard | Go | k9s 风格 TUI，通过 tmux 管理 Claude sessions | 依赖 tmux，聚焦 session 管理而非任务看板 |
+| [ccboard](https://github.com/FlorianBruniaux/ccboard) | FlorianBruniaux/ccboard | Rust | 9 个 tab 的 TUI + Web 界面，成本追踪，预算告警 | 功能全面但偏 DevOps 视角，非任务进度 |
+| [agent-deck (TUI)](https://github.com/asheshgoplani/agent-deck) | asheshgoplani/agent-deck | — | 多 AI agent 终端管理器（Claude, Gemini, Codex 等） | 聚焦 session 管理，不读取 task/todo 数据 |
+| [agent-of-empires](https://github.com/njbrake/agent-of-empires) | njbrake/agent-of-empires | — | tmux + git worktree 多 agent 管理 | 依赖 tmux + worktree，偏运维而非可视化 |
+| [tmuxcc](https://github.com/nyanko3141592/tmuxcc) | nyanko3141592/tmuxcc | — | tmux 中的 AI coding agent TUI dashboard | 类似 claude-dashboard，tmux 依赖 |
+| [claude-session-browser](https://github.com/davidpp/claude-session-browser) | davidpp/claude-session-browser | — | TUI 浏览器，浏览和恢复 Claude sessions | 偏历史浏览，不做实时监控 |
+
+### 相关工具 — 移动端 / 桌面端
+
+| 项目 | GitHub | 特点 | 备注 |
+|------|--------|------|------|
+| [agent-deck (Mobile)](https://github.com/tonyofthehills/agent-deck) | tonyofthehills/agent-deck | Mac menubar + 手机实时监控 agent 状态 | 手机端是独特优势 |
+| [claude-code-monitor](https://github.com/onikan27/claude-code-monitor) | onikan27/claude-code-monitor | CLI + Mobile Web UI + QR code 访问 | macOS only，与我们同名 |
+
+### 相关工具 — 用量 / 成本分析
+
+| 项目 | GitHub | 特点 | 备注 |
+|------|--------|------|------|
+| [ccusage](https://github.com/ryoppippi/ccusage) | ryoppippi/ccusage | 分析 JSONL 日志的 CLI，日报/月报/session 报告 | 高 star，专注成本分析 |
+| [Claude-Code-Usage-Monitor](https://github.com/Maciek-roboblog/Claude-Code-Usage-Monitor) | Maciek-roboblog/Claude-Code-Usage-Monitor | 实时 token 用量、burn rate、预测 | 偏监控告警 |
+| [ccflare](https://ccflare.dev) | — | Web UI 用量 dashboard | 非 TUI |
+| [Claudex](https://github.com/Claudex) | — | Web 端 session 浏览器，全文搜索 | 偏历史检索 |
+
+### 相关工具 — Hook / 可观测性
+
+| 项目 | GitHub | 特点 | 备注 |
+|------|--------|------|------|
+| [claude-code-hooks-multi-agent-observability](https://github.com/disler/claude-code-hooks-multi-agent-observability) | disler/claude-code-hooks-multi-agent-observability | 通过 hook 事件追踪多 agent | 我们 v0.4 计划接入 |
+
+### 企业级监控
+
+| 项目 | 特点 | 备注 |
+|------|------|------|
+| [Datadog AI Agents Console](https://www.datadoghq.com/blog/claude-code-monitoring/) | 组织级 Claude Code 采用监控 | 企业 SaaS，非本地工具 |
+| [SigNoz Claude Code Dashboard](https://signoz.io/docs/dashboards/dashboard-templates/claude-code-dashboard/) | 开源可观测平台模板 | 需部署 SigNoz |
+
+### 我们的差异化定位
+
+| 维度 | Claude Monitor（本项目） | 多数竞品 |
+|------|--------------------------|----------|
+| **核心数据源** | 读取 `~/.claude/tasks/` + `~/.claude/todos/` 任务数据 | 多数只读 session 元数据或 JSONL 日志 |
+| **任务级可视化** | Kanban 看板、任务进度条、blocks/blockedBy 依赖 | session 列表或成本图表 |
+| **历史持久化** | 本地快照，task 被删后仍保留完整历史 | 无持久化或仅统计聚合 |
+| **项目中心化** | 5 阶段 pipeline 自动发现所有项目 + git/docs 富化 | 需手动选择或依赖 tmux session |
+| **零依赖** | 不依赖 tmux / Docker / 外部服务 | 部分依赖 tmux 或 Web 服务 |
+| **黑客美学** | Catppuccin Mocha + lazygit 风格 + ASCII mascot | 多数无明确设计语言 |
 
 ## 技术栈
 
