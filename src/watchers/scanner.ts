@@ -1,11 +1,12 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
-import type { TodoItem, TaskItem, SessionData } from "../types.js";
+import type { TodoItem, TaskItem, SessionData, SessionMeta } from "../types.js";
 
 const CLAUDE_DIR = join(homedir(), ".claude");
 const TODOS_DIR = join(CLAUDE_DIR, "todos");
 const TASKS_DIR = join(CLAUDE_DIR, "tasks");
+const PROJECTS_DIR = join(CLAUDE_DIR, "projects");
 
 function readJson<T>(path: string): T | null {
   try {
@@ -23,8 +24,46 @@ function getModTime(path: string): Date {
   }
 }
 
+// Build reverse index: sessionId → SessionMeta
+// Scans all ~/.claude/projects/*/sessions-index.json
+function buildSessionIndex(): Map<string, SessionMeta> {
+  const index = new Map<string, SessionMeta>();
+  try {
+    const projectDirs = readdirSync(PROJECTS_DIR);
+    for (const dir of projectDirs) {
+      const indexPath = join(PROJECTS_DIR, dir, "sessions-index.json");
+      const data = readJson<{
+        entries: Array<{
+          sessionId: string;
+          projectPath?: string;
+          summary?: string;
+          firstPrompt?: string;
+          gitBranch?: string;
+        }>;
+      }>(indexPath);
+
+      if (!data?.entries) continue;
+
+      for (const entry of data.entries) {
+        if (!entry.sessionId) continue;
+        const projectPath = entry.projectPath ?? dir.replace(/-/g, "/");
+        index.set(entry.sessionId, {
+          projectPath,
+          projectName: basename(projectPath),
+          summary: entry.summary,
+          firstPrompt: entry.firstPrompt?.slice(0, 80),
+          gitBranch: entry.gitBranch,
+        });
+      }
+    }
+  } catch {
+    // projects dir may not exist
+  }
+  return index;
+}
+
 // Scan ~/.claude/todos/ for non-empty todo files
-export function scanTodos(): SessionData[] {
+function scanTodos(sessionIndex: Map<string, SessionMeta>): SessionData[] {
   const results: SessionData[] = [];
   try {
     const files = readdirSync(TODOS_DIR).filter((f) => f.endsWith(".json"));
@@ -39,6 +78,7 @@ export function scanTodos(): SessionData[] {
           source: "todos",
           lastModified: getModTime(fullPath),
           items,
+          meta: sessionIndex.get(sessionId),
         });
       }
     }
@@ -49,7 +89,7 @@ export function scanTodos(): SessionData[] {
 }
 
 // Scan ~/.claude/tasks/ for task sessions with actual task files
-export function scanTasks(): SessionData[] {
+function scanTasks(sessionIndex: Map<string, SessionMeta>): SessionData[] {
   const results: SessionData[] = [];
   try {
     const dirs = readdirSync(TASKS_DIR);
@@ -80,6 +120,7 @@ export function scanTasks(): SessionData[] {
             source: "tasks",
             lastModified: latestMod,
             items,
+            meta: sessionIndex.get(dir),
           });
         }
       } catch {
@@ -94,8 +135,9 @@ export function scanTasks(): SessionData[] {
 
 // Get the most recently active session across both systems
 export function scanAll(): SessionData[] {
-  const todos = scanTodos();
-  const tasks = scanTasks();
+  const sessionIndex = buildSessionIndex();
+  const todos = scanTodos(sessionIndex);
+  const tasks = scanTasks(sessionIndex);
   return [...todos, ...tasks].sort(
     (a, b) => b.lastModified.getTime() - a.lastModified.getTime()
   );

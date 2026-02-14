@@ -17,10 +17,20 @@ export interface TaskItem {
   blockedBy: string[];
 }
 
+// Session metadata from ~/.claude/projects/*/sessions-index.json
+export interface SessionMeta {
+  projectPath: string;
+  projectName: string;
+  summary?: string;
+  firstPrompt?: string;
+  gitBranch?: string;
+}
+
 // Unified view model
 export interface SessionData {
   id: string;
   source: "todos" | "tasks";
   lastModified: Date;
   items: (TodoItem | TaskItem)[];
+  meta?: SessionMeta;
 }

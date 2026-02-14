@@ -32,22 +32,54 @@ function ItemRow({ item }: { item: TodoItem | TaskItem }) {
   );
 }
 
+function ProgressBar({ done, total }: { done: number; total: number }) {
+  const width = 12;
+  const filled = total > 0 ? Math.round((done / total) * width) : 0;
+  const empty = width - filled;
+  return (
+    <Text>
+      <Text color="green">{"█".repeat(filled)}</Text>
+      <Text color="gray">{"░".repeat(empty)}</Text>
+      <Text color="gray"> {done}/{total}</Text>
+    </Text>
+  );
+}
+
 function SessionCard({ session }: { session: SessionData }) {
   const total = session.items.length;
   const done = session.items.filter((i) => i.status === "completed").length;
   const timeAgo = formatTimeAgo(session.lastModified);
+  const meta = session.meta;
+
+  // Header: project name or fallback to UUID
+  const title = meta?.projectName ?? session.id.slice(0, 8) + "...";
+  const branch = meta?.gitBranch && meta.gitBranch !== "main" ? ` · ${meta.gitBranch}` : "";
+  const typeIcon = session.source === "tasks" ? "📋" : "📝";
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} marginBottom={1}>
+      {/* Row 1: Project name + progress */}
       <Box justifyContent="space-between">
-        <Text bold color="cyan">
-          {session.source === "tasks" ? "📋 Tasks" : "📝 Todos"}
-        </Text>
-        <Text color="gray">
-          {done}/{total} done · {timeAgo}
-        </Text>
+        <Box>
+          <Text>{typeIcon} </Text>
+          <Text bold color="cyan">{title}</Text>
+          <Text color="gray">{branch}</Text>
+        </Box>
+        <Box>
+          <ProgressBar done={done} total={total} />
+          <Text color="gray"> · {timeAgo}</Text>
+        </Box>
       </Box>
-      <Text color="gray">{session.id.slice(0, 8)}...</Text>
+
+      {/* Row 2: Session summary or first prompt snippet */}
+      {meta?.summary && (
+        <Text color="gray" italic>  {meta.summary}</Text>
+      )}
+      {!meta?.summary && meta?.firstPrompt && (
+        <Text color="gray" italic dimColor>  {meta.firstPrompt.slice(0, 60)}...</Text>
+      )}
+
+      {/* Task list */}
       <Box flexDirection="column" marginTop={1}>
         {session.items.map((item, i) => (
           <ItemRow key={i} item={item} />
