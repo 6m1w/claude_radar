@@ -1,11 +1,11 @@
 import React, { useState } from "react";
-import { Box, Text, useInput, useApp } from "ink";
+import { Box, Text, useInput, useApp, useStdout } from "ink";
 import { useWatchSessions } from "./watchers/use-watch.js";
 import { Panel } from "./components/panel.js";
 import { Progress } from "./components/progress.js";
 import { C, I } from "./theme.js";
 import { formatTimeAgo } from "./utils.js";
-import type { ProjectData, TodoItem, TaskItem } from "./types.js";
+import type { MergedProjectData, DisplayItem, TodoItem, TaskItem } from "./types.js";
 
 // ─── View state machine ─────────────────────────────────────
 type ViewState =
@@ -16,10 +16,21 @@ type ViewState =
 export function App() {
   const { projects, lastUpdate } = useWatchSessions();
   const { exit } = useApp();
+  const { stdout } = useStdout();
   const [viewState, setViewState] = useState<ViewState>({ view: "dashboard" });
   const [cursorIdx, setCursorIdx] = useState(0);
   const [taskCursorIdx, setTaskCursorIdx] = useState(0);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [scrollOffset, setScrollOffset] = useState(0);
+
+  // Height calculation per DESIGN.md: Row B capped at maxMiddlePercent (50%)
+  const termRows = stdout?.rows ?? 40;
+  const fixedRows = 3 + 2 + 4; // overview + statusbar + borders
+  const available = termRows - fixedRows;
+  const maxMiddle = Math.floor(termRows * 0.5);
+  const middleRows = Math.min(Math.floor(available * 0.5), maxMiddle);
+  // Account for panel border (2) + title (1) = 3 rows overhead
+  const maxVisibleProjects = Math.max(3, middleRows - 3);
 
   // Find the detail project by path (stays current as data refreshes)
   const detailProject = viewState.view === "detail"
@@ -38,10 +49,22 @@ export function App() {
 
     if (viewState.view === "dashboard") {
       if ((input === "k" || key.upArrow) && cursorIdx > 0) {
-        setCursorIdx((i) => i - 1);
+        setCursorIdx((i) => {
+          const next = i - 1;
+          // Scroll up if cursor goes above visible window
+          if (next < scrollOffset) setScrollOffset(next);
+          return next;
+        });
       }
       if ((input === "j" || key.downArrow) && cursorIdx < projects.length - 1) {
-        setCursorIdx((i) => i + 1);
+        setCursorIdx((i) => {
+          const next = i + 1;
+          // Scroll down if cursor goes below visible window
+          if (next >= scrollOffset + maxVisibleProjects) {
+            setScrollOffset(next - maxVisibleProjects + 1);
+          }
+          return next;
+        });
       }
       if (key.return && currentProject) {
         setViewState({ view: "detail", projectPath: currentProject.projectPath });
@@ -89,23 +112,30 @@ export function App() {
   const totalTasks = projects.reduce((s, p) => s + p.totalTasks, 0);
   const totalCompleted = projects.reduce((s, p) => s + p.completedTasks, 0);
   const totalAgents = new Set(projects.flatMap((p) => p.agents)).size;
-  const totalActiveSessions = projects.reduce((s, p) => s + p.activeSessions, 0);
+  // Prefer hookSessions (precise) over mtime-based activeSessions (heuristic)
+  const totalActiveSessions = projects.reduce((s, p) =>
+    s + Math.max(p.activeSessions, p.hookSessions.length), 0);
 
   // Active sessions and tasks
   const activePairs: { projectName: string; agent: string; label: string; time: string }[] = [];
-  // Show projects with active Claude sessions
   for (const p of projects) {
-    if (p.activeSessions > 0 && p.inProgressTasks === 0) {
+    const hookCount = p.hookSessions.length;
+    const isActive = p.activeSessions > 0 || hookCount > 0;
+
+    // Show hook-tracked sessions even if no in_progress tasks
+    if (isActive && p.inProgressTasks === 0) {
+      const sessionCount = Math.max(p.activeSessions, hookCount);
       activePairs.push({
         projectName: p.projectName,
         agent: "session",
-        label: `${p.activeSessions} active session${p.activeSessions > 1 ? "s" : ""}`,
+        label: `${sessionCount} active session${sessionCount > 1 ? "s" : ""}`,
         time: formatTimeAgo(p.lastActivity),
       });
     }
     for (const s of p.sessions) {
+      if (s.gone) continue; // skip archived sessions
       for (const item of s.items) {
-        if (item.status !== "in_progress") continue;
+        if (item.status !== "in_progress" || item._gone) continue;
         const label = "subject" in item ? `#${item.id} ${item.subject}` : item.content;
         const agent = "owner" in item && item.owner ? item.owner : "main";
         activePairs.push({
@@ -128,7 +158,7 @@ export function App() {
     : projects.filter((p) => p.isActive || p.totalTasks > p.completedTasks);
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={termRows}>
       {viewState.view === "dashboard" ? (
         <>
           {/* Row 1: Overview + Active Now */}
@@ -143,12 +173,14 @@ export function App() {
             <ActiveNowPanel activePairs={activePairs} />
           </Box>
 
-          {/* Row 2: Projects list + Detail preview */}
-          <Box>
+          {/* Row 2: Projects list + Detail preview — height capped at 50% */}
+          <Box height={middleRows}>
             <ProjectList
               projects={projects}
               cursorIdx={safeCursor}
               selectedPaths={selectedPaths}
+              scrollOffset={scrollOffset}
+              maxVisible={maxVisibleProjects}
             />
             <DetailPreview project={currentProject} />
           </Box>
@@ -238,60 +270,83 @@ function ProjectList({
   projects,
   cursorIdx,
   selectedPaths,
+  scrollOffset,
+  maxVisible,
 }: {
-  projects: ProjectData[];
+  projects: MergedProjectData[];
   cursorIdx: number;
   selectedPaths: Set<string>;
+  scrollOffset: number;
+  maxVisible: number;
 }) {
+  const aboveCount = scrollOffset;
+  const belowCount = Math.max(0, projects.length - scrollOffset - maxVisible);
+  const visibleProjects = projects.slice(scrollOffset, scrollOffset + maxVisible);
+
   return (
     <Panel title={`PROJECTS (${projects.length})`} hotkey="1" width={50}>
       {projects.length === 0 ? (
         <Text color={C.dim}>No projects found</Text>
       ) : (
-        projects.map((p, i) => {
-          const isCursor = i === cursorIdx;
-          const isSelected = selectedPaths.has(p.projectPath);
-          const icon = p.activeSessions > 0
-            ? I.working
-            : p.completedTasks === p.totalTasks && p.totalTasks > 0
-              ? I.done
-              : I.idle;
-          const iconColor = p.activeSessions > 0
-            ? C.warning
-            : p.completedTasks === p.totalTasks && p.totalTasks > 0
-              ? C.success
-              : C.dim;
-          const timeAgo = formatTimeAgo(p.lastActivity);
-          const selectMark = isSelected ? I.selected : I.unselected;
-          const branch = p.git?.branch ?? p.gitBranch ?? "";
+        <>
+          {aboveCount > 0 && (
+            <Text color={C.dim}>  ▲ {aboveCount} more</Text>
+          )}
+          {visibleProjects.map((p, vi) => {
+            const i = vi + scrollOffset;
+            const isCursor = i === cursorIdx;
+            const isSelected = selectedPaths.has(p.projectPath);
+            const hookCount = p.hookSessions.length;
+            const isActive = p.activeSessions > 0 || hookCount > 0;
+            const icon = isActive
+              ? I.working
+              : p.completedTasks === p.totalTasks && p.totalTasks > 0
+                ? I.done
+                : I.idle;
+            const iconColor = isActive
+              ? C.warning
+              : p.completedTasks === p.totalTasks && p.totalTasks > 0
+                ? C.success
+                : C.dim;
+            const timeAgo = formatTimeAgo(p.lastActivity);
+            const selectMark = isSelected ? I.selected : I.unselected;
+            const branch = p.git?.branch ?? p.gitBranch ?? "";
 
-          return (
-            <Box key={p.projectPath}>
-              <Text color={isCursor ? C.primary : C.dim}>
-                {isCursor ? I.cursor : " "}{" "}
-              </Text>
-              <Text color={isSelected ? C.success : C.dim}>{selectMark} </Text>
-              <Text color={iconColor}>{icon} </Text>
-              <Text color={isCursor ? C.text : C.subtext} bold={isCursor}>
-                {p.projectName.padEnd(14).slice(0, 14)}
-              </Text>
-              {branch ? (
-                <Text color={C.accent}> ⎇{branch.padEnd(6).slice(0, 6)}</Text>
-              ) : (
-                <Text color={C.dim}>        </Text>
-              )}
-              <Text color={C.dim}> {String(p.totalSessions).padStart(2)}s</Text>
-              <Text color={C.dim}> {timeAgo.padStart(3)}</Text>
-            </Box>
-          );
-        })
+            return (
+              <Box key={p.projectPath}>
+                <Text color={isCursor ? C.primary : C.dim}>
+                  {isCursor ? I.cursor : " "}{" "}
+                </Text>
+                <Text color={isSelected ? C.success : C.dim}>{selectMark} </Text>
+                <Text color={iconColor}>{icon} </Text>
+                <Text color={isCursor ? C.text : C.subtext} bold={isCursor}>
+                  {p.projectName.padEnd(14).slice(0, 14)}
+                </Text>
+                {branch ? (
+                  <Text color={C.accent}> ⎇{branch.padEnd(6).slice(0, 6)}</Text>
+                ) : (
+                  <Text color={C.dim}>        </Text>
+                )}
+                {hookCount > 0 ? (
+                  <Text color={C.warning}> ⚡{hookCount}</Text>
+                ) : (
+                  <Text color={C.dim}> {String(p.totalSessions).padStart(2)}s</Text>
+                )}
+                <Text color={C.dim}> {timeAgo.padStart(3)}</Text>
+              </Box>
+            );
+          })}
+          {belowCount > 0 && (
+            <Text color={C.dim}>  ▼ {belowCount} more</Text>
+          )}
+        </>
       )}
     </Panel>
   );
 }
 
 // ─── Detail preview (Dashboard right panel) ──────────────────
-function DetailPreview({ project }: { project?: ProjectData }) {
+function DetailPreview({ project }: { project?: MergedProjectData }) {
   if (!project) {
     return (
       <Panel title="DETAIL" hotkey="2" flexGrow={1}>
@@ -300,11 +355,15 @@ function DetailPreview({ project }: { project?: ProjectData }) {
     );
   }
 
-  const allItems = project.sessions.flatMap((s) => s.items);
+  // Separate live and gone sessions
+  const liveSessions = project.sessions.filter((s) => !s.gone);
+  const goneSessions = project.sessions.filter((s) => s.gone);
+  const liveItems = liveSessions.flatMap((s) => s.items);
   const branch = project.git?.branch ?? project.gitBranch;
   const agentLabel = project.agents.length > 0
     ? `${project.agents.length} agent${project.agents.length > 1 ? "s" : ""}`
     : "";
+  const hookCount = project.hookSessions.length;
 
   return (
     <Panel title={project.projectName.toUpperCase()} hotkey="2" flexGrow={1}>
@@ -313,8 +372,8 @@ function DetailPreview({ project }: { project?: ProjectData }) {
         {branch && <Text color={C.accent}>⎇ {branch} </Text>}
         {agentLabel && <Text color={C.dim}>{agentLabel}  </Text>}
         <Text color={C.subtext}>{project.totalSessions} sessions</Text>
-        {project.activeSessions > 0 && (
-          <Text color={C.warning}> ({project.activeSessions} active)</Text>
+        {(project.activeSessions > 0 || hookCount > 0) && (
+          <Text color={C.warning}> ({Math.max(project.activeSessions, hookCount)} active)</Text>
         )}
       </Box>
 
@@ -334,17 +393,22 @@ function DetailPreview({ project }: { project?: ProjectData }) {
         </Box>
       )}
 
-      {/* Task list */}
-      {allItems.length > 0 && <Text> </Text>}
-      {allItems.slice(0, 6).map((item, i) => (
+      {/* Live task list */}
+      {liveItems.length > 0 && <Text> </Text>}
+      {liveItems.slice(0, 6).map((item, i) => (
         <TaskRow key={i} item={item} />
       ))}
-      {allItems.length > 6 && (
-        <Text color={C.dim}>  ... +{allItems.length - 6} more</Text>
+      {liveItems.length > 6 && (
+        <Text color={C.dim}>  ... +{liveItems.length - 6} more</Text>
+      )}
+
+      {/* Collapsed gone sessions summary */}
+      {goneSessions.length > 0 && (
+        <Text color={C.dim}>  ▸ {goneSessions.length} archived session{goneSessions.length > 1 ? "s" : ""}</Text>
       )}
 
       {/* Empty state */}
-      {allItems.length === 0 && project.totalSessions > 0 && (
+      {liveItems.length === 0 && goneSessions.length === 0 && project.totalSessions > 0 && (
         <Text color={C.dim}>No tasks (session-only project)</Text>
       )}
     </Panel>
@@ -352,13 +416,16 @@ function DetailPreview({ project }: { project?: ProjectData }) {
 }
 
 // ─── Shared task row ─────────────────────────────────────────
-function TaskRow({ item, isCursor }: { item: TodoItem | TaskItem; isCursor?: boolean }) {
+function TaskRow({ item, isCursor }: { item: DisplayItem; isCursor?: boolean }) {
   const isTask = "subject" in item;
+  const isGone = !!item._gone;
   const label = isTask ? `#${item.id} ${item.subject}` : item.content;
   const icon = item.status === "completed" ? I.done
     : item.status === "in_progress" ? I.working
     : I.idle;
-  const iconColor = item.status === "completed" ? C.success
+  // Gone items always dim, live items use status color
+  const iconColor = isGone ? C.dim
+    : item.status === "completed" ? C.success
     : item.status === "in_progress" ? C.warning
     : C.dim;
   const owner = isTask && item.owner ? ` (${item.owner})` : "";
@@ -370,13 +437,14 @@ function TaskRow({ item, isCursor }: { item: TodoItem | TaskItem; isCursor?: boo
       </Text>
       <Text color={iconColor}>{` ${icon} `.padEnd(4)}</Text>
       <Text
-        color={item.status === "completed" ? C.dim : isCursor ? C.text : C.subtext}
-        bold={isCursor}
-        strikethrough={item.status === "completed"}
+        color={isGone || item.status === "completed" ? C.dim : isCursor ? C.text : C.subtext}
+        bold={!isGone && isCursor}
+        dimColor={isGone}
+        strikethrough={isGone || item.status === "completed"}
       >
         {label}
       </Text>
-      {owner && <Text color={C.accent}>{owner}</Text>}
+      {owner && <Text color={isGone ? C.dim : C.accent} dimColor={isGone}>{owner}</Text>}
     </Box>
   );
 }
@@ -387,8 +455,8 @@ function ProjectDetailView({
   items,
   taskCursorIdx,
 }: {
-  project?: ProjectData;
-  items: (TodoItem | TaskItem)[];
+  project?: MergedProjectData;
+  items: DisplayItem[];
   taskCursorIdx: number;
 }) {
   if (!project) {
@@ -401,6 +469,10 @@ function ProjectDetailView({
 
   const selectedItem = items[taskCursorIdx];
   const branch = project.git?.branch ?? project.gitBranch;
+  const hookCount = project.hookSessions.length;
+  const liveItems = items.filter((i) => !i._gone);
+  const goneItems = items.filter((i) => !!i._gone);
+  const goneSessions = project.sessions.filter((s) => s.gone);
 
   return (
     <>
@@ -426,8 +498,8 @@ function ProjectDetailView({
           <Box>
             <Text color={C.subtext}>sessions </Text>
             <Text color={C.text}>{project.totalSessions} total</Text>
-            {project.activeSessions > 0 && (
-              <Text color={C.warning}> ({project.activeSessions} active)</Text>
+            {(project.activeSessions > 0 || hookCount > 0) && (
+              <Text color={C.warning}> ({Math.max(project.activeSessions, hookCount)} active)</Text>
             )}
           </Box>
 
@@ -454,14 +526,39 @@ function ProjectDetailView({
               <Text color={C.accent}>{project.agents.join(", ")}</Text>
             </Box>
           )}
+
+          {/* History badge */}
+          {project.hasHistory && (
+            <Box>
+              <Text color={C.subtext}>history </Text>
+              <Text color={C.dim}>{goneItems.length} archived items</Text>
+            </Box>
+          )}
         </Panel>
 
         {/* Right: Task list or session history */}
-        <Panel title={items.length > 0 ? "TASKS" : "SESSION HISTORY"} flexGrow={1}>
-          {items.length > 0 ? (
+        <Panel title={liveItems.length > 0 ? "TASKS" : "SESSION HISTORY"} flexGrow={1}>
+          {liveItems.length > 0 ? (
             <>
-              {items.map((item, i) => (
+              {liveItems.map((item, i) => (
                 <TaskRow key={i} item={item} isCursor={i === taskCursorIdx} />
+              ))}
+              {/* Gone items rendered after live items with dim styling */}
+              {goneItems.length > 0 && (
+                <Text color={C.dim}>  ─── archived ───</Text>
+              )}
+              {goneItems.slice(0, 4).map((item, i) => (
+                <TaskRow key={`gone-${i}`} item={item} />
+              ))}
+              {goneItems.length > 4 && (
+                <Text color={C.dim}>  ... +{goneItems.length - 4} more archived</Text>
+              )}
+            </>
+          ) : goneSessions.length > 0 ? (
+            <>
+              <Text color={C.dim}>▸ {goneSessions.length} archived session{goneSessions.length > 1 ? "s" : ""}</Text>
+              {goneItems.slice(0, 4).map((item, i) => (
+                <TaskRow key={`gone-${i}`} item={item} />
               ))}
             </>
           ) : project.recentSessions.length > 0 ? (
@@ -493,7 +590,7 @@ function ProjectDetailView({
 }
 
 // ─── Task detail content ─────────────────────────────────────
-function TaskDetailContent({ item }: { item: TodoItem | TaskItem }) {
+function TaskDetailContent({ item }: { item: DisplayItem }) {
   const isTask = "subject" in item;
 
   if (!isTask) {
@@ -565,13 +662,13 @@ function TaskDetailContent({ item }: { item: TodoItem | TaskItem }) {
 }
 
 // ─── Kanban / Focus view (swimlane table) ────────────────────
-function KanbanView({ projects }: { projects: ProjectData[] }) {
+function KanbanView({ projects }: { projects: MergedProjectData[] }) {
   // Column widths
   const labelW = 14;
   const colW = 22;
 
   // Categorize tasks per project into TODO / DOING / DONE
-  type Bucket = { label: string; agent?: string }[];
+  type Bucket = { label: string; agent?: string; gone?: boolean }[];
 
   return (
     <Panel title={`FOCUS — ${projects.length} project${projects.length !== 1 ? "s" : ""}`} flexGrow={1}>
@@ -593,11 +690,15 @@ function KanbanView({ projects }: { projects: ProjectData[] }) {
         const done: Bucket = [];
 
         for (const item of allItems) {
+          const isGone = !!item._gone;
           const label = "subject" in item
             ? `${item.subject}`.slice(0, colW - 4)
             : item.content.slice(0, colW - 4);
           const agent = "owner" in item && item.owner ? item.owner : undefined;
-          if (item.status === "completed") {
+          // Gone items always go to DONE column regardless of their status
+          if (isGone) {
+            done.push({ label, agent, gone: true });
+          } else if (item.status === "completed") {
             done.push({ label, agent });
           } else if (item.status === "in_progress") {
             doing.push({ label, agent });
@@ -660,7 +761,7 @@ function KanbanCell({
   width,
   status,
 }: {
-  item?: { label: string; agent?: string };
+  item?: { label: string; agent?: string; gone?: boolean };
   width: number;
   status: "pending" | "in_progress" | "completed";
 }) {
@@ -668,26 +769,28 @@ function KanbanCell({
     return <Text color={C.dim}>{" ".repeat(width)}</Text>;
   }
 
+  const isGone = !!item.gone;
   const icon = status === "completed" ? I.done
     : status === "in_progress" ? I.working
     : I.idle;
-  const iconColor = status === "completed" ? C.success
+  const iconColor = isGone ? C.dim
+    : status === "completed" ? C.success
     : status === "in_progress" ? C.warning
     : C.dim;
-  const textColor = status === "completed" ? C.dim : C.text;
-  const agentSuffix = item.agent ? ` ${item.agent}` : "";
-  const content = `${icon} ${item.label}${agentSuffix}`;
+  const textColor = isGone ? C.dim : status === "completed" ? C.dim : C.text;
 
   return (
     <Text color={textColor}>
-      <Text color={iconColor}>{icon}</Text>
-      <Text color={textColor}> {item.label.padEnd(width - 2).slice(0, width - 2)}</Text>
+      <Text color={iconColor} dimColor={isGone}>{icon}</Text>
+      <Text color={textColor} dimColor={isGone} strikethrough={isGone}>
+        {" "}{item.label.padEnd(width - 2).slice(0, width - 2)}
+      </Text>
     </Text>
   );
 }
 
 // ─── Activity panel ──────────────────────────────────────────
-function ActivityPanel({ projects }: { projects: ProjectData[] }) {
+function ActivityPanel({ projects }: { projects: MergedProjectData[] }) {
   type ActivityEntry = {
     projectName: string;
     label: string;
@@ -698,7 +801,9 @@ function ActivityPanel({ projects }: { projects: ProjectData[] }) {
   const entries: ActivityEntry[] = [];
   for (const p of projects) {
     for (const s of p.sessions) {
+      if (s.gone) continue; // skip archived sessions from activity feed
       for (const item of s.items) {
+        if (item._gone) continue; // skip archived items
         const label = "subject" in item ? `#${item.id} ${item.subject}` : item.content;
         entries.push({
           projectName: p.projectName,
