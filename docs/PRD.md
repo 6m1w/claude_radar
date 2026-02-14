@@ -94,7 +94,7 @@
   - 内层焦点（`Enter`）：`j/k` 在右面板任务列表移动，选中 task 展开详情
 - [ ] **上下文感知底部面板（B1）**：
   - 外层焦点 → 底部显示 ACTIVITY（全局事件流）
-  - 内层焦点 → 底部替换为 PRD/Docs + Git History（项目上下文）
+  - 内层焦点 → 底部替换为 PRD/Docs + **Project Timeline**（git commits + task events 合并时间线）
 - [ ] **右面板 Tab 切换**：内层焦点时按 `1/2/3` 切换 Tasks / Git / Docs 视图
 - [x] **Focus/Kanban 视图**：Swimlane 表格布局（共享表头 TODO/DOING/DONE）
 - [x] **活跃项目置顶**：有 active session 的项目排在最前

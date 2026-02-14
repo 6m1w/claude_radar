@@ -74,14 +74,14 @@ All-projects-at-a-glance with integrated project drill-down. Two focus levels on
 │                      ││ owner: main │ in_progress │ no blockers             │
 │                      ││ Implement Catppuccin Mocha palette...               │
 ╰──────────────────────╯╰──────────────────────────────────────────────────────╯
-╭─ PRD.md ─────────────────────────────╮╭─ Git History ────────────────────────╮
-│  # Claude Monitor                     ││  ● faf45fa docs: update PRD          │
-│                                       ││  │                                   │
-│  TUI dashboard for monitoring Claude  ││  ● e4bc709 fix: replace chokidar    │
-│  Code agent tasks and todos.          ││  │                                   │
-│                                       ││  ● eaa40ec docs: update PRD          │
-│  ## Tech Stack                        ││  │                                   │
-│  - TypeScript + Ink                   ││  ● ce5ef2d fix: resolve project      │
+╭─ PRD.md ─────────────────────────────╮╭─ TIMELINE (claude_monitor) ──────────╮
+│  # Claude Monitor                     ││  13:35  task  ▶ #4 Design UI        │
+│                                       ││  13:34  git   ● faf45 feat: unified │
+│  TUI dashboard for monitoring Claude  ││  13:30  task  ✓ #3 Polling watcher  │
+│  Code agent tasks and todos.          ││  13:28  git   ● e4bc7 fix: chokidar │
+│                                       ││  13:15  git   ● eaa40 docs: PRD     │
+│  ## Tech Stack                        ││                                      │
+│  - TypeScript + Ink                   ││                                      │
 ╰───────────────────────────────────────╯╰──────────────────────────────────────╯
  ☻⌨ · │ CPU ▁▃▅▇▅▃▁▃ 23% │ MEM ██████░░ 4.2/8G │ ↑1.2 ↓45.3 KB/s │ ⠋
  DETAIL │ ↑↓ nav tasks  1/2/3 tab  Esc back  q quit
@@ -90,20 +90,54 @@ All-projects-at-a-glance with integrated project drill-down. Two focus levels on
 Key design decisions:
 - **Master-Detail on one page**: No separate Project Detail view. Right panel follows cursor in real-time.
 - **Two-level focus**: Outer = project nav, Inner = task nav. `Enter`/`Esc` transitions.
-- **Context-aware bottom panel (B1)**: Outer focus → ACTIVITY; Inner focus → PRD/Docs + Git History.
+- **Context-aware bottom panel (B1)**: Outer focus → ACTIVITY (global); Inner focus → PRD/Docs + Project Timeline.
+- **Project Timeline**: Merged chronological stream of git commits + task status changes for the focused project. Replaces standalone Git History panel in the bottom row. Shows causal relationships (task completion → commit).
 - **Right panel tabs**: In inner focus, `1/2/3` switches between Tasks, Git History, Docs views.
 - **Viewport scrolling**: Projects list shows only N visible rows with `▲ N more` / `▼ N more` indicators.
 - **Height cap**: Projects+Detail row is capped at 50% of terminal height, ensuring bottom panels have space.
 
 Docs panel data source: `{projectPath}/docs/PRD.md` → `{projectPath}/CLAUDE.md` → `{projectPath}/README.md` (first found). Rendered as plain text with basic markdown highlighting (headers bold, lists indented). Scrollable with `j/k` when panel focused.
 
-Git History panel data source: `git log --oneline -N` against the project directory. Color commits by type: `feat` green, `fix` yellow, `docs` blue, `chore` dim. Show 3-5 most recent commits.
+Project Timeline data sources:
+- **Git commits**: `git log --format="%aI %h %s" -N` against the project directory. Color by type: `feat` green, `fix` yellow, `docs` blue, `chore` dim.
+- **Task events**: Task status changes with timestamps. Before local snapshot persistence (v0.2), uses session mtime as approximation.
+- Entries merged into a single list, sorted by timestamp descending.
 
-### View 3: Focus / Kanban
+### View 2: Focus / Kanban
 
 Multi-project kanban for parallel development monitoring. Two layout modes toggled with `s`.
 
-**Layout A: By Agent** (default) — each agent is a column, tasks listed vertically.
+Design inspired by "Lazy Kanban" aesthetic — card-style items with colored left accent borders, clean grid layout, task metadata on second line. All colors follow the active theme (Catppuccin Mocha default, multiple themes planned).
+
+**Layout A: Swimlane Table** (default) — shared header row, projects as row groups.
+
+```
+╭─ FOCUS — 3 projects ────────────────────────────────────────────────────────╮
+│                                                                              │
+│  PROJECTS        │ TODO  2             │ DOING  3            │ DONE  6      │
+│ ─────────────────┼─────────────────────┼─────────────────────┼───────────── │
+│                  │                     │                     │              │
+│  claude-monitor  │ ┃ #5 Keyboard nav   │ ┃ #4 Design UI      │ ┃ #1 Setup  │
+│  ⎇ main          │ ┃                   │ ┃ └ monitor/main    │ ┃ #2 Index  │
+│  1 agent         │ ┃ #6 Impl Kanban    │ ┃                   │ ┃ #3 Poll   │
+│                  │ ┃                   │ ┃                   │ ┃           │
+│ ─────────────────┼─────────────────────┼─────────────────────┼───────────── │
+│                  │                     │                     │              │
+│  outclaws        │ ┃ #12 Update Docs   │ ┃ #2 DB Migrations  │ ┃ #1 Auth   │
+│  ⎇ fix-auth      │ ┃                   │ ┃ └ stream-b        │ ┃           │
+│  2 agents        │ ┃                   │ ┃ #9 E2E Tests      │ ┃           │
+│                  │ ┃                   │ ┃ └ stream-c ⊘      │ ┃           │
+│ ─────────────────┼─────────────────────┼─────────────────────┼───────────── │
+│                  │                     │                     │              │
+│  sound_effects   │ ┃                   │ ┃                   │ ┃ #1 Xplat  │
+│  ⎇ main          │ ┃                   │ ┃                   │ ┃ #2 Theme  │
+│  idle            │ ┃                   │ ┃                   │ ┃           │
+│                  │                     │                     │              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Esc Back  s Toggle View  h Hide Done                          3 Projects Active
+```
+
+**Layout B: By Agent** — each agent is a column, tasks listed vertically. Better for multi-agent projects.
 
 ```
 ╭─ FOCUS: 2 projects, 4 agents ───────────────────────────────────────────────╮
@@ -117,7 +151,7 @@ Multi-project kanban for parallel development monitoring. Two layout modes toggl
 │  │ ○ Keyboard nav   │                                                        │
 │  └──────────────────┘                                                        │
 │                                                                              │
-│  ── outclaws ⎇ main ────────────────────────────────────────────             │
+│  ── outclaws ⎇ fix-auth ──────────────────────────────────────               │
 │  ┌─ ◍ stream-a 1/3 ┐┌─ ◍ stream-b 1/2 ┐┌─ ○ stream-c 0/2 ┐               │
 │  │ ✓ Auth module    ││ ✓ DB schema      ││ ⊘ Unit tests     │               │
 │  │ ▶ User dashboard ││ ▶ Migrations     ││ ○ E2E tests      │               │
@@ -126,60 +160,56 @@ Multi-project kanban for parallel development monitoring. Two layout modes toggl
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
-**Layout B: Swimlane Table** — shared header row, projects as row groups. Like an Excel pivot table.
+**Card styling:**
+
+Task items in the swimlane use a colored left accent border (`┃` or `▎`) to indicate status visually:
 
 ```
-╭─ FOCUS ──────────────────────────────────────────────────────────────────────╮
-│                                                                              │
-│              │ TODO             │ DOING            │ DONE                    │
-│  ────────────┼──────────────────┼──────────────────┼──────────────────────── │
-│              │                  │                  │                         │
-│  monitor     │ ○ Keyboard nav   │ ▶ Design UI      │ ✓ Setup Ink            │
-│  ⎇ main      │                  │                  │ ✓ Session idx          │
-│              │                  │                  │ ✓ Polling              │
-│  ────────────┼──────────────────┼──────────────────┼──────────────────────── │
-│              │                  │                  │                         │
-│  outclaws    │ ○ API endpoints  │ ▶ Dashboard      │ ✓ Auth module          │
-│  ⎇ main      │ ○ E2E tests     │   └ stream-a     │   └ stream-a           │
-│  3 agents    │   └ stream-c    │ ▶ Migrations     │ ✓ DB schema            │
-│              │ ⊘ Unit tests    │   └ stream-b     │   └ stream-b           │
-│              │   └ stream-c    │                  │                         │
-│  ────────────┼──────────────────┼──────────────────┼──────────────────────── │
-│              │                  │                  │                         │
-│  sound_fx    │                  │                  │ ✓ Cross-platform       │
-│  ⎇ main      │                  │                  │ ✓ 12 theme packs      │
-│              │                  │                  │ ✓ Opencode plugin     │
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
+┃ #4 Design UI System        ← accent color matches status
+┃ └ monitor/main             ← agent info on second line (if multi-agent)
 ```
+
+| Status | Left accent color | Text style |
+|--------|-------------------|------------|
+| TODO (pending) | `theme.dim` | Normal |
+| DOING (in_progress) | `theme.warning` | Normal, bold task name |
+| DONE (completed) | `theme.success` | `dim` + `strikethrough` |
+| Blocked | `theme.error` | Normal + `⊘` indicator |
+
+Single-agent projects omit the agent line to reduce noise. DONE column requires local persistence (tasks vanish from Claude Code after completion).
+
+**Column headers with counts:**
+
+```
+│ TODO  2             │ DOING  3            │ DONE  6      │
+```
+
+Count badge uses `theme.dim` for the number. Column name uses status-appropriate color (dim/warning/success).
 
 Key features:
-- `s` toggles between agent layout and swimlane table
-- Single shared header row — TODO / DOING / DONE columns span all projects
+- `s` toggles between swimlane table and agent layout
 - Projects as row groups separated by horizontal dividers
-- Left column shows project name, branch, agent count
-- Multi-agent tasks show `└ agent-name` below the task
-- Single-agent projects omit agent label (no noise)
-- DONE column requires local persistence (tasks vanish from Claude Code after completion)
-- Only shows projects with `status != "done"` by default (toggle with `h`)
+- Left column shows project name, branch, agent count, status (active/idle)
+- Only shows projects with pending/in-progress tasks by default (toggle with `h` to show all)
+- Colors follow the active theme — no hardcoded colors in Kanban
 
 Access: `Tab` from Dashboard. Shows projects selected with `Space`; if none selected, shows all active.
 
 **Planned enhancements (v0.3):**
 
-Dependency visualization and time-in-status indicators in swimlane cells:
+Dependency visualization and time-in-status indicators:
 
 ```
-│ TODO                │ DOING               │ DONE              │
-│                     │                     │                   │
-│ ○ Keyboard nav      │ ▶ Design UI         │ ✓ Setup Ink       │
-│   ⊘ blocked:#4     │   ↑ 2h in-doing     │                   │
-│ ○ E2E tests         │ ▶ Migrations        │ ✓ DB schema       │
-│   ⊘ blocked:#2     │   └ stream-b        │   └ stream-b      │
+│ TODO                 │ DOING                │ DONE             │
+│                      │                      │                  │
+│ ┃ #5 Keyboard nav    │ ┃ #4 Design UI       │ ┃ #1 Setup       │
+│ ┃ ⊘ blocked:#4      │ ┃ └ main  ↑ 2h       │ ┃                │
+│ ┃ #12 Update Docs    │ ┃ #9 E2E Tests       │ ┃ #1 Auth        │
+│ ┃                    │ ┃ └ stream-c ⊘       │ ┃                │
 ```
 
 - **`⊘ blocked:#N`**: Shows which task is blocking this one (from `blockedBy` field)
-- **`↑ Xh in-doing`**: How long the task has been in its current status (requires mtime tracking)
+- **`↑ 2h`**: How long the task has been in current status (requires mtime tracking)
 - No Gantt chart — task data lacks start/end timestamps; Kanban is the better fit for event-driven workflows
 
 ### View Navigation
@@ -344,7 +374,8 @@ Bottom row transforms from Activity to project-contextual panels:
 ┌─ Projects (fixed W) ──┐┌─ Tasks [1:Tasks 2:Git 3:Docs] ──┐  Row B (capped 50%)
 │  viewport scrolling    ││  full task list + task detail     │
 └────────────────────────┘└──────────────────────────────────┘
-┌─ PRD/Docs (flexGrow) ─────────┐┌─ Git History (flexGrow) ──┐  Row C (remaining)
+┌─ PRD/Docs (flexGrow) ─────────┐┌─ Timeline (flexGrow) ─────┐  Row C (remaining)
+│  project documentation         ││  git + task events merged  │
 └────────────────────────────────┘└────────────────────────────┘
 ```
 
@@ -432,21 +463,33 @@ This is critical for the swimlane DONE column and for showing historical session
 
 ## Components
 
-### Git History Panel
+### Project Timeline Panel
 
-Data source: Run `git log --oneline -N` against the project's directory.
+Unified chronological stream shown in the bottom-right panel during inner focus. Merges two data sources into one sorted list:
 
 ```
-● a1b2c3d feat: initial setup
-│
-● e4f5g6h fix: layout bugs
-│
-● i7j8k9l chore: update deps
+╭─ TIMELINE (claude_monitor) ──────────────────────────╮
+│  13:35  task  ▶ #4 Design UI → in_progress            │
+│  13:34  git   ● faf45fa feat: add unified dashboard   │
+│  13:30  task  ✓ #3 Polling watcher → completed         │
+│  13:28  git   ● e4bc709 fix: replace chokidar          │
+│  13:15  git   ● eaa40ec docs: update PRD                │
+╰──────────────────────────────────────────────────────╯
 ```
 
-- Color commits by type: `feat` green, `fix` yellow, `docs` blue, `chore` dim
-- Show branch name if not main
-- Show 3-5 most recent commits (scrollable with j/k when panel focused)
+**Data sources:**
+- **Git commits**: `git log --format="%aI %h %s" -N` (N=5-10). Color by conventional commit type: `feat` green, `fix` yellow, `docs` blue, `chore` dim.
+- **Task events**: Status transitions from scanner data. Timestamp from session mtime (approximate), or from local snapshot timestamps once persistence is implemented (v0.2).
+
+**Display rules:**
+- Entries sorted by timestamp descending (newest first)
+- `task` entries use task status icon (✓/▶/○) + task subject
+- `git` entries use `●` + short hash + commit message
+- Label column (`task`/`git`) colored differently for quick scanning
+- Show 5-10 most recent entries (scrollable if panel height allows)
+
+**Why merged (not separate Git History panel):**
+Combining git commits and task events in one timeline reveals causal relationships — e.g., a task marked completed immediately followed by a commit. Separate panels lose this correlation.
 
 ### Progress Bars
 
@@ -715,3 +758,4 @@ git log (per project dir)  ──────────┘                    
 7. **No Gantt chart**: Task data lacks start/end timestamps. Kanban with dependency indicators (`⊘ blocked:#N`) and time-in-status (`↑ 2h`) is a better fit for Claude Code's event-driven workflow.
 8. **Project list viewport**: With 40+ projects, list uses scrolling viewport capped at 50% terminal height. Active projects sort to top, cursor drives scroll window.
 9. **Layout proportions configurable**: All layout ratios (middle panel height cap, project list width, bottom panel split) stored in `~/.claude-monitor/config.json` under `layout` key. Allows tuning for different screen sizes without code changes.
+10. **Project Timeline replaces Git History panel**: Inner focus bottom-right shows a merged chronological stream of git commits + task events (instead of standalone Git History). Reveals causal relationships between task completions and commits. Git History remains accessible via right panel tab (`2`) for a git-only view.

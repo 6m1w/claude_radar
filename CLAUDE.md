@@ -84,7 +84,7 @@ Master-Detail single-page architecture with two focus levels (no separate Detail
 | Inner (tasks) | `Enter` on project | `↑↓`/`jk` nav tasks, `1/2/3` tab switch, `Esc` back to outer |
 | Kanban | `Tab` from dashboard | `s` toggle layout, `h` hide done, `Esc` back |
 
-Bottom panel is context-aware: ACTIVITY in outer focus, PRD/Docs + Git History in inner focus.
+Bottom panel is context-aware: ACTIVITY in outer focus, PRD/Docs + Project Timeline (git + task events merged) in inner focus.
 
 Layout proportions configurable via `~/.claude-monitor/config.json` → `layout` key.
 
