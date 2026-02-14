@@ -1,18 +1,18 @@
 #!/bin/bash
-# Claude Monitor — hook event capture.
+# Claude Radar — hook event capture.
 # Appends Claude Code hook stdin JSON to a transit buffer (events.jsonl).
 # Called by Claude Code plugin system; stdin is JSON with session_id, cwd, etc.
 #
 # Usage: capture.sh <event_type>
 #   event_type: "task" (PostToolUse), "stop" (Stop), "start" (SessionStart)
 #
-# Output: one JSON line appended to ~/.claude-monitor/events.jsonl
+# Output: one JSON line appended to ~/.claude-radar/events.jsonl
 # Performance budget: <10ms total (bash startup + cat + printf + append)
 
 EVENT="$1"
 [ -z "$EVENT" ] && exit 0
 
-EVENTS_DIR="$HOME/.claude-monitor"
+EVENTS_DIR="$HOME/.claude-radar"
 EVENTS_FILE="$EVENTS_DIR/events.jsonl"
 
 # Ensure directory exists (first-run)

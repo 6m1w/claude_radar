@@ -1,4 +1,4 @@
-# Claude Monitor
+# Claude Radar
 
 TUI dashboard for monitoring Claude Code agent tasks, sessions, and project activity in real-time.
 
@@ -86,7 +86,10 @@ Master-Detail single-page architecture with two focus levels (no separate Detail
 
 Bottom panel is context-aware: ACTIVITY in outer focus, PRD/Docs + Project Timeline (git + task events merged) in inner focus.
 
-Layout proportions configurable via `~/.claude-monitor/config.json` → `layout` key.
+Multi-agent projects show tasks grouped by agent owner with status headers. Single-agent projects show flat list.
+Project names: up to 20 chars, truncated with `…`. Panel width: 34 columns.
+
+Layout proportions configurable via `~/.claude-radar/config.json` → `layout` key.
 
 ## Current Status
 

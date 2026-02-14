@@ -1,5 +1,5 @@
 {
-  "description": "Real-time task/session event capture for Claude Monitor.",
+  "description": "Real-time task/session event capture for Claude Radar.",
   "hooks": {
     "PostToolUse": [
       {

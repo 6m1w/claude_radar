@@ -1,8 +1,8 @@
-# Claude Monitor — Technical Design Document
+# Claude Radar — Technical Design Document
 
 ## Scope
 
-This document covers the **data capture and persistence layer** for Claude Monitor:
+This document covers the **data capture and persistence layer** for Claude Radar:
 
 1. **Event capture** — how we detect task/session changes (dual-layer: Plugin Hook + file polling)
 2. **Persistence** — how we store accumulated history so data survives Claude Code's file cleanup
@@ -41,7 +41,7 @@ Claude Code event ──→ hooks.json (PostToolUse, Stop, ...)
                   capture.sh (bash, <10ms)
                         │
                         ▼ append
-              ~/.claude-monitor/events.jsonl   ← transit buffer
+              ~/.claude-radar/events.jsonl   ← transit buffer
                         │
                         ▼ Chokidar watch
                      ┌──────────────────┐
@@ -61,7 +61,7 @@ Claude Code event ──→ hooks.json (PostToolUse, Stop, ...)
                   useWatchSessions()  ──→  UI
                         │
                         ▼ write dirty
-              ~/.claude-monitor/projects/*.json
+              ~/.claude-radar/projects/*.json
               (accumulated history)
 ```
 
@@ -80,9 +80,9 @@ Layer 1 solves the core problem: task files that exist for <3s get captured by t
 
 | Module | Responsibility | Side Effects |
 |--------|---------------|--------------|
-| `capture.sh` | Receive hook stdin, append to events.jsonl | Writes `~/.claude-monitor/events.jsonl` |
+| `capture.sh` | Receive hook stdin, append to events.jsonl | Writes `~/.claude-radar/events.jsonl` |
 | `scanner.ts` | Read live data from `~/.claude/` | None (pure read) |
-| `store.ts` | Load/save/merge historical data + consume events | Writes `~/.claude-monitor/projects/*.json` |
+| `store.ts` | Load/save/merge historical data + consume events | Writes `~/.claude-radar/projects/*.json` |
 | `use-watch.ts` | Orchestrate poll → scan → merge → render | React state updates |
 | `hooks.json` | Declare Plugin hooks to Claude Code | None (declarative config) |
 
@@ -90,11 +90,11 @@ Layer 1 solves the core problem: task files that exist for <3s get captured by t
 
 #### Hook Registration
 
-Claude Monitor ships as a Claude Code Plugin. The `hooks/hooks.json` declares which events to capture:
+Claude Radar ships as a Claude Code Plugin. The `hooks/hooks.json` declares which events to capture:
 
 ```json
 {
-  "description": "Real-time task/session event capture for Claude Monitor.",
+  "description": "Real-time task/session event capture for Claude Radar.",
   "hooks": {
     "PostToolUse": [
       {
@@ -139,7 +139,7 @@ Claude Monitor ships as a Claude Code Plugin. The `hooks/hooks.json` declares wh
 # Append hook event to transit buffer.
 # Stdin: JSON from Claude Code (session_id, tool_name, input, output).
 EVENT="$1"
-EVENTS_FILE="$HOME/.claude-monitor/events.jsonl"
+EVENTS_FILE="$HOME/.claude-radar/events.jsonl"
 mkdir -p "$(dirname "$EVENTS_FILE")"
 STDIN=$(cat)
 printf '{"event":"%s","ts":"%s","data":%s}\n' \
@@ -197,7 +197,7 @@ Between poll cycles, Chokidar watches `events.jsonl` — if a hook event arrives
 ## Storage Layout
 
 ```
-~/.claude-monitor/
+~/.claude-radar/
 ├── events.jsonl             # Transit buffer — hook events (consumed + truncated)
 ├── projects/
 │   ├── {hash}.json          # Per-project accumulated history
@@ -216,7 +216,7 @@ import { createHash } from "node:crypto";
 function projectHash(projectPath: string): string {
   return createHash("sha256").update(projectPath).digest("hex").slice(0, 12);
 }
-// "/Users/bonjuice/Desktop/Eng/project_claude_monitor" → "a3f9c1b20e47.json"
+// "/Users/bonjuice/Desktop/Eng/project_claude_radar" → "a3f9c1b20e47.json"
 ```
 
 Why hash instead of encoded path? The Claude-style encoding (`-Users-bonjuice-...`) is lossy and long. A short hash is safe, unique, and filesystem-friendly.
@@ -358,7 +358,7 @@ Note: TodoItem content matching is imperfect — if content is edited, it looks 
 ### store.ts
 
 ```typescript
-// Initialize store — creates ~/.claude-monitor/ if needed
+// Initialize store — creates ~/.claude-radar/ if needed
 export function initStore(): Store;
 
 // Merge live scanner data with stored history, persist, return merged view
@@ -526,6 +526,6 @@ On each merge, if an item's status changed from the stored version, append to `_
 
 ## Open Questions
 
-1. **Plugin distribution**: Ship as standalone CLI (`npx claude-monitor`) with optional Plugin install? Or Plugin-first with TUI bundled inside?
+1. **Plugin distribution**: Ship as standalone CLI (`npx claude-radar`) with optional Plugin install? Or Plugin-first with TUI bundled inside?
 2. **Event deduplication**: When both hook and polling capture the same TaskCreate, the Store merge already deduplicates by item key (`task:{id}`). But should we deduplicate at the event level too (skip events whose data is already in Store)?
 3. **Shared Plugin infra with sound-fx**: Both projects use the same Claude Code Plugin hook system. Should they share a common event collector, or stay independent?

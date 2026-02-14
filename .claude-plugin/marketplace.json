@@ -1,5 +1,5 @@
 {
-  "name": "claude-monitor",
+  "name": "claude-radar",
   "owner": {
     "name": "6m1w"
   },
@@ -8,7 +8,7 @@
   },
   "plugins": [
     {
-      "name": "monitor",
+      "name": "radar",
       "source": "./",
       "description": "Real-time task monitoring with event capture hooks — tracks TaskCreate, TaskUpdate, TodoWrite, session lifecycle events.",
       "version": "0.2.0",
@@ -16,7 +16,7 @@
         "name": "6m1w"
       },
       "license": "MIT",
-      "keywords": ["monitor", "dashboard", "tasks", "sessions", "hooks", "tui"]
+      "keywords": ["radar", "monitor", "dashboard", "tasks", "sessions", "hooks", "tui"]
     }
   ]
 }

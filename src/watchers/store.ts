@@ -19,7 +19,7 @@ import type {
   HookSessionInfo,
 } from "../types.js";
 
-const STORE_DIR = join(homedir(), ".claude-monitor");
+const STORE_DIR = join(homedir(), ".claude-radar");
 const PROJECTS_DIR = join(STORE_DIR, "projects");
 const META_PATH = join(STORE_DIR, "meta.json");
 export const EVENTS_PATH = join(STORE_DIR, "events.jsonl");

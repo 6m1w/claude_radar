@@ -142,8 +142,8 @@ function discoverProjects(): DiscoveredProject[] {
 }
 
 // Derive filesystem path from the Claude projects directory name
-// e.g. "-Users-bonjuice-Desktop-Eng-project-claude-monitor"
-//    → "/Users/bonjuice/Desktop/Eng/project_claude_monitor"
+// e.g. "-Users-bonjuice-Desktop-Eng-project-claude-radar"
+//    → "/Users/bonjuice/Desktop/Eng/project_claude_radar"
 //
 // The encoding replaces "/" with "-" (and "_" with "-" too), so it's lossy.
 // Strategy: at each valid directory, list its entries and greedily match
@@ -168,7 +168,7 @@ function resolveSegments(base: string, segments: string[]): string {
 
   // Try matching longest prefix of segments against actual directory entries
   // e.g. segments = ["project", "claude", "monitor"]
-  // Try "project_claude_monitor", "project-claude-monitor", "project_claude", "project-claude", "project"
+  // Try "project_claude_radar", "project-claude-radar", "project_claude", "project-claude", "project"
   for (let len = segments.length; len >= 1; len--) {
     const chunk = segments.slice(0, len);
     // Try with underscores (most common in project names)

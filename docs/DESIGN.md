@@ -1,4 +1,4 @@
-# Claude Monitor — Design Spec
+# Claude Radar — Design Spec
 
 ## Current Problems
 
@@ -33,19 +33,19 @@ All-projects-at-a-glance with integrated project drill-down. Two focus levels on
 │  [===============>........] 65%      ││  ◍ outclaws/str-a  #2 Dashboard      │
 │                                      ││  ◍ outclaws/str-b  #2 Migrations     │
 ╰──────────────────────────────────────╯╰──────────────────────────────────────╯
-╭─ PROJECTS (41) ────╮╭─ DETAIL ─────────────────────────────────────────────╮
-│  ▲ 3 more           ││                                                      │
-│  ☑ ● sound_fx      ││  ⎇ main │ 1 agent │ 5 sessions                      │
-│  ☐ ● keyboard      ││  docs: CLAUDE.md  PRD.md                             │
-│▸ ☑ ● monitor  ⎇feat││  tasks: [============>........] 3/5                  │
-│  ☐ ● outclaws ⎇main││                                                      │
-│  ☐ ○ my_website    ││  ✓ #1 Setup Ink + TS                                │
-│  ☐ ○ api_server    ││  ✓ #2 Session index                                 │
-│  ▼ 32 more          ││  ✓ #3 Polling watcher                               │
-│                      ││  ▶ #4 Design hacker UI                              │
-│                      ││  ○ #5 Keyboard nav                                  │
-│                      ││  ... +2 more                                        │
-╰──────────────────────╯╰──────────────────────────────────────────────────────╯
+╭─ PROJECTS (41) ──────────╮╭─ DETAIL ────────────────────────────────────────╮
+│  ▲ 3 more                ││                                                  │
+│  ☑ ● sound_effects       ││  ⎇ main │ 1 agent │ 5 sessions                  │
+│  ☐ ● keyboard_ext        ││  docs: CLAUDE.md  PRD.md                         │
+│▸ ☑ ● claude_monitor ⎇feat││  tasks: [============>........] 3/5              │
+│  ☐ ● outclaws       ⎇main││                                                  │
+│  ☐ ○ my_website          ││  ✓ #1 Setup Ink + TS                             │
+│  ☐ ○ api_server          ││  ✓ #2 Session index                              │
+│  ▼ 32 more                ││  ✓ #3 Polling watcher                            │
+│                           ││  ▶ #4 Design hacker UI                           │
+│                           ││  ○ #5 Keyboard nav                               │
+│                           ││  ... +2 more                                     │
+╰───────────────────────────╯╰─────────────────────────────────────────────────╯
 ╭─ ACTIVITY ───────────────────────────────────────────────────────────────────╮
 │  10:08  monitor    › #4 Design hacker UI theme                               │
 │  10:05  outclaws   › #2 User dashboard                                       │
@@ -57,25 +57,42 @@ All-projects-at-a-glance with integrated project drill-down. Two focus levels on
 
 **Inner Focus** — browsing tasks within a project (`Enter` to enter, `Esc` to exit):
 
+Single-agent project:
 ```
 ╭─ OVERVIEW ──────────────────────────╮╭─ ACTIVE NOW ─────────────────────────╮
 │  4 projects  7 agents  23 tasks 65%  ││  ◍ monitor/main    #4 Design UI      │
 ╰──────────────────────────────────────╯╰──────────────────────────────────────╯
-╭─ PROJECTS (41) ────╮╭─ TASKS ── [1:Tasks] [2:Git] [3:Docs] ────────────────╮
-│  ☑ ● sound_fx      ││  ⎇ main │ 1 agent │ 5 sessions                      │
-│  ☐ ● keyboard      ││  tasks: [============>........] 3/5                  │
-│▸ ☑ ● monitor  ⎇feat││                                                      │
-│  ☐ ● outclaws ⎇main││    ✓ #1 Setup Ink + TS                              │
-│  ☐ ○ my_website    ││    ✓ #2 Session index                               │
-│                      ││    ✓ #3 Polling watcher                             │
-│                      ││  ▸ ▶ #4 Design hacker UI          ← task cursor    │
-│                      ││    ○ #5 Keyboard nav                                │
-│                      ││ ─── Task Detail ────────────────────                │
-│                      ││ owner: main │ in_progress │ no blockers             │
-│                      ││ Implement Catppuccin Mocha palette...               │
-╰──────────────────────╯╰──────────────────────────────────────────────────────╯
+╭─ PROJECTS (41) ──────────╮╭─ TASKS ── [1:Tasks] [2:Git] [3:Docs] ──────────╮
+│  ☑ ● sound_effects       ││  ⎇ main │ 1 agent │ 5 sessions                 │
+│  ☐ ● keyboard_ext        ││  tasks: [============>........] 3/5             │
+│▸ ☑ ● claude_monitor ⎇feat││                                                 │
+│  ☐ ● outclaws       ⎇main││    ✓ #1 Setup Ink + TS                         │
+│  ☐ ○ my_website          ││    ✓ #2 Session index                          │
+│                           ││    ✓ #3 Polling watcher                        │
+│                           ││  ▸ ▶ #4 Design hacker UI      ← task cursor   │
+│                           ││    ○ #5 Keyboard nav                           │
+│                           ││ ─── Task Detail ──────────────────             │
+│                           ││ owner: main │ in_progress │ no blockers        │
+│                           ││ Implement Catppuccin Mocha palette...          │
+╰───────────────────────────╯╰────────────────────────────────────────────────╯
+
+Multi-agent project (tasks grouped by agent):
+╭─ PROJECTS (41) ──────────╮╭─ TASKS ── [1:Tasks] [2:Git] [3:Docs] ──────────╮
+│  ☑ ● claude_monitor ⎇feat││  ⎇ fix-auth │ 3 agents │ 4 tasks               │
+│▸ ☑ ● outclaws       ⎇fix ││  tasks: [====>.................] 1/4            │
+│  ☐ ○ my_website          ││                                                 │
+│                           ││  ── ◍ stream-a (active) ──────────             │
+│                           ││    ✓ #1 Auth module                             │
+│                           ││                                                 │
+│                           ││  ── ◍ stream-b (active) ──────────             │
+│                           ││  ▸ ▶ #2 DB Migrations          ← task cursor   │
+│                           ││                                                 │
+│                           ││  ── ○ stream-c (blocked) ─────────             │
+│                           ││    ▶ #9 E2E Tests  ⊘#2                         │
+│                           ││    ○ #12 Update API Docs                        │
+╰───────────────────────────╯╰────────────────────────────────────────────────╯
 ╭─ PRD.md ─────────────────────────────╮╭─ TIMELINE (claude_monitor) ──────────╮
-│  # Claude Monitor                     ││  13:35  task  ▶ #4 Design UI        │
+│  # Claude Radar                       ││  13:35  task  ▶ #4 Design UI        │
 │                                       ││  13:34  git   ● faf45 feat: unified │
 │  TUI dashboard for monitoring Claude  ││  13:30  task  ✓ #3 Polling watcher  │
 │  Code agent tasks and todos.          ││  13:28  git   ● e4bc7 fix: chokidar │
@@ -95,6 +112,8 @@ Key design decisions:
 - **Right panel tabs**: In inner focus, `1/2/3` switches between Tasks, Git History, Docs views.
 - **Viewport scrolling**: Projects list shows only N visible rows with `▲ N more` / `▼ N more` indicators.
 - **Height cap**: Projects+Detail row is capped at 50% of terminal height, ensuring bottom panels have space.
+- **Agent grouping**: Multi-agent projects show tasks grouped by agent owner with status headers (`── ◍ stream-a (active) ──`). Single-agent projects omit grouping to reduce noise. Agent status: `◍ active`, `○ idle`, `⊘ blocked`.
+- **Project name display**: Up to 20 characters, truncated with `…` if longer. Panel width accommodates full names.
 
 Docs panel data source: `{projectPath}/docs/PRD.md` → `{projectPath}/CLAUDE.md` → `{projectPath}/README.md` (first found). Rendered as plain text with basic markdown highlighting (headers bold, lists indented). Scrollable with `j/k` when panel focused.
 
@@ -117,7 +136,7 @@ Design inspired by "Lazy Kanban" aesthetic — card-style items with colored lef
 │  PROJECTS        │ TODO  2             │ DOING  3            │ DONE  6      │
 │ ─────────────────┼─────────────────────┼─────────────────────┼───────────── │
 │                  │                     │                     │              │
-│  claude-monitor  │ ┃ #5 Keyboard nav   │ ┃ #4 Design UI      │ ┃ #1 Setup  │
+│  claude-radar  │ ┃ #5 Keyboard nav   │ ┃ #4 Design UI      │ ┃ #1 Setup  │
 │  ⎇ main          │ ┃                   │ ┃ └ monitor/main    │ ┃ #2 Index  │
 │  1 agent         │ ┃ #6 Impl Kanban    │ ┃                   │ ┃ #3 Poll   │
 │                  │ ┃                   │ ┃                   │ ┃           │
@@ -326,15 +345,15 @@ const bottomRows = available - middleRows;
 The project list renders at most `middleRows - borders` visible items. When cursor moves beyond the visible window, `scrollOffset` adjusts to keep cursor in view.
 
 ```
-╭─ PROJECTS (41) ─────╮
-│  ▲ 3 more            │   ← scrollOffset > 0
-│  sound_fx            │
-│  keyboard            │
-│▸ monitor        ⎇feat│   ← cursorIdx (always visible)
-│  outclaws       ⎇main│
-│  my_website          │
-│  ▼ 32 more           │   ← more items below
-╰──────────────────────╯
+╭─ PROJECTS (41) ──────────╮
+│  ▲ 3 more                │   ← scrollOffset > 0
+│  sound_effects           │
+│  keyboard_ext            │
+│▸ claude_monitor     ⎇feat│   ← cursorIdx (always visible)
+│  outclaws           ⎇main│
+│  my_website              │
+│  ▼ 32 more               │   ← more items below
+╰───────────────────────────╯
 ```
 
 ### Dashboard Layout — Outer Focus
@@ -342,13 +361,13 @@ The project list renders at most `middleRows - borders` visible items. When curs
 **Standard terminal (80+ cols):**
 
 ```
-┌─ Overview (flexGrow) ──────┐┌─ Active Now (flexGrow) ─────┐  Row A (fixed)
-└────────────────────────────┘└─────────────────────────────┘
-┌─ Projects (fixed W) ──┐┌─ Detail (flexGrow) ──────────────┐  Row B (capped 50%)
-│  viewport scrolling    ││  summary + truncated tasks       │
-└────────────────────────┘└──────────────────────────────────┘
-┌─ Activity (flexGrow) ─────────────────────────────────────┐  Row C (remaining)
-└───────────────────────────────────────────────────────────┘
+┌─ Overview (flexGrow) ──────────┐┌─ Active Now (flexGrow) ─────┐  Row A (fixed)
+└────────────────────────────────┘└─────────────────────────────┘
+┌─ Projects (fixed 34) ────┐┌─ Detail (flexGrow) ──────────────┐  Row B (capped 50%)
+│  viewport scrolling       ││  summary + truncated tasks       │
+└───────────────────────────┘└──────────────────────────────────┘
+┌─ Activity (flexGrow) ─────────────────────────────────────────┐  Row C (remaining)
+└───────────────────────────────────────────────────────────────┘
 ```
 
 **Wide terminal (120+ cols):**
@@ -369,11 +388,11 @@ The `Metrics Chart` panel appears when terminal width exceeds ~120 cols.
 Bottom row transforms from Activity to project-contextual panels:
 
 ```
-┌─ Overview (flexGrow) ──────┐┌─ Active Now (flexGrow) ─────┐  Row A (fixed)
-└────────────────────────────┘└─────────────────────────────┘
-┌─ Projects (fixed W) ──┐┌─ Tasks [1:Tasks 2:Git 3:Docs] ──┐  Row B (capped 50%)
-│  viewport scrolling    ││  full task list + task detail     │
-└────────────────────────┘└──────────────────────────────────┘
+┌─ Overview (flexGrow) ──────────┐┌─ Active Now (flexGrow) ─────┐  Row A (fixed)
+└────────────────────────────────┘└─────────────────────────────┘
+┌─ Projects (fixed 34) ────┐┌─ Tasks [1:Tasks 2:Git 3:Docs] ──┐  Row B (capped 50%)
+│  viewport scrolling       ││  full task list + task detail     │
+└───────────────────────────┘└──────────────────────────────────┘
 ┌─ PRD/Docs (flexGrow) ─────────┐┌─ Timeline (flexGrow) ─────┐  Row C (remaining)
 │  project documentation         ││  git + task events merged  │
 └────────────────────────────────┘└────────────────────────────┘
@@ -388,7 +407,7 @@ When terminal height < 30 rows:
 
 ### Layout Configuration
 
-All layout proportions are configurable via `~/.claude-monitor/config.json`:
+All layout proportions are configurable via `~/.claude-radar/config.json`:
 
 ```json
 {
@@ -405,7 +424,7 @@ All layout proportions are configurable via `~/.claude-monitor/config.json`:
 | Field | Default | Description |
 |-------|---------|-------------|
 | `maxMiddlePercent` | `0.5` | Max fraction of terminal height for Row B (Projects+Detail) |
-| `projectListWidth` | `24` | Fixed column width for the project list panel |
+| `projectListWidth` | `34` | Fixed column width for the project list panel (accommodates 20-char names + icons + branch) |
 | `bottomPanelSplit` | `0.5` | Left/right ratio for bottom row (Docs vs Git, Activity vs Metrics) |
 | `showMetricsPanel` | `"auto"` | `"auto"` = show when width > 120; `"always"` / `"never"` to override |
 | `compactThreshold` | `30` | Terminal rows below which compact mode activates |
@@ -454,7 +473,7 @@ function Panel({ title, children, width, flexGrow, maxHeight }: {
 
 Claude Code deletes task files when tasks are completed or sessions end. To keep history:
 
-1. **Snapshot on every poll** — when scanner finds data, save a copy to `~/.claude-monitor/snapshots/{sessionId}.json`
+1. **Snapshot on every poll** — when scanner finds data, save a copy to `~/.claude-radar/snapshots/{sessionId}.json`
 2. **Merge on read** — on startup, load both live data (`~/.claude/`) and snapshots, merge by sessionId
 3. **DONE column** — only possible with snapshots. Without persistence, completed tasks vanish.
 4. **Stale detection** — if a snapshot exists but no live data, mark session as "archived"
@@ -699,9 +718,9 @@ Icons: ◆ ◈ ◇ ✦ ✧
 
 ### Theme Switching
 
-- Config file: `~/.claude-monitor/config.json` → `{ "theme": "catppuccin" }`
+- Config file: `~/.claude-radar/config.json` → `{ "theme": "catppuccin" }`
 - Runtime toggle: `t` key cycles themes
-- CLI flag: `claude-monitor --theme retro`
+- CLI flag: `claude-radar --theme retro`
 
 ## Keyboard Map
 
@@ -720,7 +739,7 @@ Summary: `↑↓` navigate, `Enter` enter inner focus, `Esc` exit inner focus, `
                                      │                         Ink Render
 git log (per project dir)  ──────────┘                              │
                                                                     ▼
-~/.claude-monitor/                                             Terminal
+~/.claude-radar/                                             Terminal
   config.json (theme)
   snapshots/ (persistence)
 ```
@@ -757,5 +776,8 @@ git log (per project dir)  ──────────┘                    
 6. **Context-aware bottom panel (B1)**: Bottom row shows ACTIVITY in outer focus, switches to PRD/Docs + Git History in inner focus. Rationale: when drilling into a project, project context (docs/git) is more valuable than global activity feed.
 7. **No Gantt chart**: Task data lacks start/end timestamps. Kanban with dependency indicators (`⊘ blocked:#N`) and time-in-status (`↑ 2h`) is a better fit for Claude Code's event-driven workflow.
 8. **Project list viewport**: With 40+ projects, list uses scrolling viewport capped at 50% terminal height. Active projects sort to top, cursor drives scroll window.
-9. **Layout proportions configurable**: All layout ratios (middle panel height cap, project list width, bottom panel split) stored in `~/.claude-monitor/config.json` under `layout` key. Allows tuning for different screen sizes without code changes.
+9. **Layout proportions configurable**: All layout ratios (middle panel height cap, project list width, bottom panel split) stored in `~/.claude-radar/config.json` under `layout` key. Allows tuning for different screen sizes without code changes.
 10. **Project Timeline replaces Git History panel**: Inner focus bottom-right shows a merged chronological stream of git commits + task events (instead of standalone Git History). Reveals causal relationships between task completions and commits. Git History remains accessible via right panel tab (`2`) for a git-only view.
+11. **Agent grouping in task list**: Multi-agent projects display tasks grouped by agent owner with section headers showing agent name + status. Single-agent projects show a flat list (owner on each task line). This avoids per-agent sub-windows which waste screen space — agent info is already captured in task `owner` fields.
+12. **Project name 20-char limit**: Names display up to 20 characters, truncated with `…` if longer. Panel width increased to 34 to accommodate full names + icons + branch tag.
+13. **Worktree grouping (v0.3)**: Git worktrees of the same repo are grouped under the parent project in the project list. Detection: worktree dirs have a `.git` file (not directory) pointing to the main repo. Display: indented sub-entries with relative path and branch. Until implemented, worktrees appear as separate flat entries.

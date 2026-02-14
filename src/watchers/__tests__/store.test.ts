@@ -742,10 +742,13 @@ describe("ingestHookEvents", () => {
 // ─── consumeEvents / truncateEvents tests ───────────────────
 
 describe("consumeEvents", () => {
-  const eventsDir = join(tmpdir(), `claude-monitor-test-${Date.now()}`);
+  const eventsDir = join(tmpdir(), `claude-radar-test-${Date.now()}`);
   const eventsFile = EVENTS_PATH;
 
   beforeEach(() => {
+    // Ensure the store directory exists (path changed from .claude-monitor to .claude-radar)
+    const storeDir = join(eventsFile, "..");
+    mkdirSync(storeDir, { recursive: true });
     resetEventsOffset();
   });
 
