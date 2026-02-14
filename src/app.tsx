@@ -11,7 +11,7 @@ import { Panel } from "./components/panel.js";
 import { Progress } from "./components/progress.js";
 import { useWatchSessions } from "./watchers/use-watch.js";
 import { useMetrics } from "./hooks/use-metrics.js";
-import type { MergedProjectData, TaskItem, TodoItem, SessionHistoryEntry, AgentInfo, TeamConfig, GitCommit } from "./types.js";
+import type { MergedProjectData, TaskItem, TodoItem, SessionHistoryEntry, AgentInfo, TeamConfig, GitCommit, ActivityEvent } from "./types.js";
 
 // ─── Display types (normalized from real data) ──────────────
 type DisplayTask = {
@@ -43,6 +43,7 @@ type ViewProject = {
   gitLog: GitCommit[];
   docContents: Record<string, string>;
   lastActivity: Date;
+  activityLog: ActivityEvent[];
 };
 
 // ─── Adapter: MergedProjectData → ViewProject ───────────────
@@ -98,6 +99,7 @@ function toViewProject(p: MergedProjectData): ViewProject {
     gitLog: p.gitLog,
     docContents: p.docContents,
     lastActivity: p.lastActivity,
+    activityLog: p.activityLog,
   };
 }
 
@@ -115,6 +117,28 @@ function formatDwell(statusChangedAt?: string): string {
   if (hours < 24) return `${hours}h`;
   const days = Math.floor(hours / 24);
   return `${days}d`;
+}
+
+// Format relative time with seconds-level granularity for activity feed
+function formatRelativeTime(isoDate: string): string {
+  const elapsed = Date.now() - new Date(isoDate).getTime();
+  if (elapsed < 0) return "now";
+  const secs = Math.floor(elapsed / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+// Tool name → color for activity feed quick scanning
+function activityColor(toolName: string, isError: boolean): string {
+  if (isError) return C.error;
+  if (toolName === "Write" || toolName === "Edit") return C.accent;
+  if (toolName === "Bash") return C.warning;
+  if (toolName === "TaskCreate" || toolName === "TaskUpdate") return C.primary;
+  return C.subtext;
 }
 
 function taskStats(p: ViewProject) {
@@ -501,9 +525,6 @@ function RightPanel({
         ) : project.agents.length > 0 ? (
           <Text color={C.dim}>{project.agents.length} agent{project.agents.length > 1 ? "s" : ""}  </Text>
         ) : null}
-        {project.docs.length > 0 && (
-          <Text color={C.subtext}>{project.docs.join("  ")}</Text>
-        )}
       </Box>
       {/* Team member list with process states */}
       {project.team && project.agentDetails.length > 0 && (
@@ -661,8 +682,31 @@ function RightPanel({
         </>
       )}
 
+      {/* Activity feed — recent tool calls from hook events */}
+      {project.activityLog.length > 0 && (
+        <>
+          <Text> </Text>
+          <Text color={C.dim}>─── Activity ─────────────────────</Text>
+          {project.activityLog
+            .slice()
+            .reverse()
+            .slice(0, 8)
+            .map((evt, i) => (
+              <Box key={i}>
+                <Text color={evt.isError ? C.error : C.dim}>
+                  {formatRelativeTime(evt.ts).padStart(4)}
+                </Text>
+                <Text color={C.dim}>  </Text>
+                <Text color={activityColor(evt.toolName, !!evt.isError)}>
+                  {evt.summary}
+                </Text>
+              </Box>
+            ))}
+        </>
+      )}
+
       {/* Empty state */}
-      {project.tasks.length === 0 && (
+      {project.tasks.length === 0 && project.activityLog.length === 0 && (
         <Text color={C.dim}>No tasks (session-only project)</Text>
       )}
     </Panel>
