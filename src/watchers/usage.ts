@@ -3,7 +3,7 @@
 
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import type { SessionUsageStats, ProjectUsageStats } from "../types.js";
+import type { SessionUsageStats, ProjectUsageStats, ActivityEvent } from "../types.js";
 
 // ─── Pricing table ──────────────────────────────────────────
 
@@ -230,6 +230,94 @@ export function getProjectUsage(claudeProjectDir: string): ProjectUsageStats | n
   };
 }
 
+// ─── Turn duration parsing ──────────────────────────────────
+
+// Long turn threshold: turns exceeding this are flagged
+const LONG_TURN_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+
+interface TurnDuration {
+  ts: string;           // ISO 8601
+  sessionId: string;
+  durationMs: number;
+}
+
+function extractTurnDuration(line: string): TurnDuration | null {
+  if (!line.includes('"turn_duration"')) return null;
+
+  try {
+    const obj = JSON.parse(line);
+    if (obj.type !== "system" || obj.subtype !== "turn_duration") return null;
+    if (!obj.durationMs || !obj.sessionId) return null;
+
+    return {
+      ts: obj.timestamp ?? "",
+      sessionId: obj.sessionId,
+      durationMs: obj.durationMs,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse turn_duration events from a session JSONL file.
+ * Returns ActivityEvent[] entries that can be merged into the activity log.
+ */
+export function parseTurnDurations(jsonlPath: string, projectPath: string): ActivityEvent[] {
+  let content: string;
+  try {
+    content = readFileSync(jsonlPath, "utf-8");
+  } catch {
+    return [];
+  }
+
+  const events: ActivityEvent[] = [];
+
+  for (const line of content.split("\n")) {
+    if (!line) continue;
+    const td = extractTurnDuration(line);
+    if (!td) continue;
+
+    const secs = Math.round(td.durationMs / 1000);
+    const formatted = secs >= 60
+      ? `${Math.floor(secs / 60)}m ${secs % 60}s`
+      : `${secs}s`;
+
+    events.push({
+      ts: td.ts,
+      sessionId: td.sessionId,
+      toolName: "_turn_complete",
+      summary: `Turn completed in ${formatted}`,
+      projectPath,
+      durationMs: td.durationMs,
+      ...(td.durationMs > LONG_TURN_THRESHOLD_MS && { isError: true }),
+    });
+  }
+
+  return events;
+}
+
+/**
+ * Get turn durations for all sessions in a project's Claude directory.
+ * On-demand — call when user views project detail.
+ */
+export function getProjectTurnDurations(claudeProjectDir: string, projectPath: string): ActivityEvent[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(claudeProjectDir);
+  } catch {
+    return [];
+  }
+
+  const events: ActivityEvent[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".jsonl")) continue;
+    events.push(...parseTurnDurations(join(claudeProjectDir, entry), projectPath));
+  }
+
+  return events.sort((a, b) => a.ts.localeCompare(b.ts));
+}
+
 // Exported for testing
-export { resolveModelPricing, calculateCostUSD, FALLBACK_PRICING };
-export type { ModelPricing, TokenAccumulator };
+export { resolveModelPricing, calculateCostUSD, FALLBACK_PRICING, LONG_TURN_THRESHOLD_MS };
+export type { ModelPricing, TokenAccumulator, TurnDuration };

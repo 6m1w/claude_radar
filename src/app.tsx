@@ -69,6 +69,7 @@ function toViewProject(p: MergedProjectData): ViewProject {
     docContents: p.docContents,
     lastActivity: p.lastActivity,
     activityLog: p.activityLog,
+    activityAlerts: p.activityAlerts,
   };
 }
 
