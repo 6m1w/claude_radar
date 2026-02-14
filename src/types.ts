@@ -26,13 +26,21 @@ export interface SessionMeta {
   gitBranch?: string;
 }
 
+// Display-layer metadata attached to items after store merge
+// Allows UI to distinguish live vs historical (gone) items
+export type DisplayItem = (TodoItem | TaskItem) & {
+  _gone?: boolean;
+  _goneAt?: string;
+};
+
 // Unified view model
 export interface SessionData {
   id: string;
   source: "todos" | "tasks";
   lastModified: Date;
-  items: (TodoItem | TaskItem)[];
+  items: DisplayItem[];
   meta?: SessionMeta;
+  gone?: boolean;        // session itself is no longer in live data
 }
 
 // Aggregated project view — groups sessions by projectPath
@@ -66,4 +74,62 @@ export interface SessionHistoryEntry {
   summary?: string;
   firstPrompt?: string;
   gitBranch?: string;
+}
+
+// ─── Persistence layer types (store.ts) ──────────────────────
+
+export type ItemStatus = "pending" | "in_progress" | "completed";
+
+// Stored item: union of TodoItem/TaskItem fields + tracking metadata
+export interface StoredItem {
+  // Original fields (TodoItem)
+  content?: string;
+  // Original fields (TaskItem)
+  id?: string;
+  subject?: string;
+  description?: string;
+  owner?: string;
+  blocks?: string[];
+  blockedBy?: string[];
+  // Shared fields
+  activeForm?: string;
+  status: ItemStatus;
+  // Tracking metadata
+  _firstSeenAt: string;
+  _lastSeenAt: string;
+  _gone: boolean;
+  _goneAt?: string;
+}
+
+// Persisted session data
+export interface SessionStore {
+  id: string;
+  source: "todos" | "tasks";
+  firstSeenAt: string;
+  lastSeenAt: string;
+  gone: boolean;
+  goneAt?: string;
+  meta?: SessionMeta;
+  items: StoredItem[];
+}
+
+// Per-project persistence file
+export interface ProjectStore {
+  projectPath: string;
+  projectName: string;
+  updatedAt: string;
+  sessions: Record<string, SessionStore>;
+}
+
+// Global store metadata
+export interface StoreMeta {
+  schemaVersion: number;
+  lastScanAt: string;
+  projectCount: number;
+}
+
+// Extended ProjectData with historical data from persistence
+export interface MergedProjectData extends ProjectData {
+  hasHistory: boolean;
+  goneSessionCount: number;
 }
