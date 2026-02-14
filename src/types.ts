@@ -158,10 +158,18 @@ export interface StoreMeta {
   projectCount: number;
 }
 
+// Active session info from hook events (SessionStart/Stop)
+export interface HookSessionInfo {
+  sessionId: string;
+  projectPath: string;
+  startedAt: string;   // ISO timestamp from SessionStart event
+}
+
 // Extended ProjectData with historical data from persistence
 export interface MergedProjectData extends ProjectData {
   hasHistory: boolean;
   goneSessionCount: number;
+  hookSessions: HookSessionInfo[]; // active sessions known from hooks (even without tasks)
 }
 
 // ─── Hook event types (capture.sh → events.jsonl) ───────────

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Store, mergeAndPersist, consumeEvents, resetEventsOffset, EVENTS_PATH, truncateEvents } from "../store.js";
 import { ingestHookEvents } from "../store.js";
-import type { ProjectData, SessionData, TodoItem, TaskItem, MergedProjectData, HookEvent } from "../../types.js";
+import type { ProjectData, SessionData, TodoItem, TaskItem, MergedProjectData, HookEvent, HookSessionInfo } from "../../types.js";
 
 // ─── Test helpers ────────────────────────────────────────────
 
@@ -586,6 +586,104 @@ describe("ingestHookEvents", () => {
           session_id: "unknown-session",
           reason: "user_exit",
         },
+      }]);
+
+      const merged = store.merge([]);
+      expect(merged).toHaveLength(0);
+    });
+  });
+
+  describe("SessionStart events", () => {
+    it("should track active session from start event", () => {
+      const store = new Store();
+
+      ingestHookEvents(store, [{
+        event: "start",
+        ts: "2025-06-01T10:00:00Z",
+        data: {
+          session_id: "sess-new",
+          cwd: "/projects/my-app",
+        },
+      }]);
+
+      const merged = store.merge([]);
+
+      // Should create a hook-only project with active session
+      expect(merged).toHaveLength(1);
+      expect(merged[0].projectPath).toBe("/projects/my-app");
+      expect(merged[0].isActive).toBe(true);
+      expect(merged[0].hookSessions).toHaveLength(1);
+      expect(merged[0].hookSessions[0].sessionId).toBe("sess-new");
+    });
+
+    it("should remove session from active on stop event", () => {
+      const store = new Store();
+
+      // Start
+      ingestHookEvents(store, [{
+        event: "start",
+        ts: "2025-06-01T10:00:00Z",
+        data: { session_id: "sess-new", cwd: "/projects/my-app" },
+      }]);
+
+      // Stop
+      ingestHookEvents(store, [{
+        event: "stop",
+        ts: "2025-06-01T10:30:00Z",
+        data: { session_id: "sess-new", reason: "done" },
+      }]);
+
+      const merged = store.merge([]);
+
+      // Hook-only project disappears (no tasks, no active sessions)
+      expect(merged).toHaveLength(0);
+    });
+
+    it("should track multiple active sessions in same project", () => {
+      const store = new Store();
+
+      ingestHookEvents(store, [
+        { event: "start", ts: "2025-06-01T10:00:00Z", data: { session_id: "sess-1", cwd: "/projects/my-app" } },
+        { event: "start", ts: "2025-06-01T10:00:01Z", data: { session_id: "sess-2", cwd: "/projects/my-app" } },
+      ]);
+
+      const merged = store.merge([]);
+
+      expect(merged).toHaveLength(1);
+      expect(merged[0].hookSessions).toHaveLength(2);
+      expect(merged[0].activeSessions).toBe(2);
+    });
+
+    it("should supplement existing project with hookSessions", () => {
+      const store = new Store();
+
+      // Start event for a project that also has live scan data
+      ingestHookEvents(store, [{
+        event: "start",
+        ts: "2025-06-01T10:00:00Z",
+        data: { session_id: "sess-hook", cwd: "/test/project" },
+      }]);
+
+      // Merge with live project data
+      const merged = store.merge([makeProject({
+        projectPath: "/test/project",
+        sessions: [makeSession({ id: "sess-scan" })],
+      })]);
+
+      expect(merged).toHaveLength(1);
+      expect(merged[0].hookSessions).toHaveLength(1);
+      expect(merged[0].hookSessions[0].sessionId).toBe("sess-hook");
+      // Live sessions + hook sessions visible
+      expect(merged[0].sessions).toHaveLength(1); // scan sessions
+    });
+
+    it("should skip start events without cwd", () => {
+      const store = new Store();
+
+      ingestHookEvents(store, [{
+        event: "start",
+        ts: "2025-06-01T10:00:00Z",
+        data: { session_id: "sess-no-cwd" },
       }]);
 
       const merged = store.merge([]);

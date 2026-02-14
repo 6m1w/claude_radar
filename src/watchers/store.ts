@@ -16,6 +16,7 @@ import type {
   StoreMeta,
   HookEvent,
   HookEventData,
+  HookSessionInfo,
 } from "../types.js";
 
 const STORE_DIR = join(homedir(), ".claude-monitor");
@@ -96,6 +97,11 @@ function updateStoredItem(stored: StoredItem, live: TodoItem | TaskItem, now: st
 export class Store {
   private projects = new Map<string, ProjectStore>();
   private dirty = new Set<string>(); // projectPaths that need saving
+
+  // Hook-tracked active sessions: projectPath → Map<sessionId, HookSessionInfo>
+  // Populated by SessionStart events, cleared by Stop events.
+  // Not persisted — rebuilt from events.jsonl on each TUI startup.
+  private _hookActiveSessions = new Map<string, Map<string, HookSessionInfo>>();
 
   // Load all project files from disk
   load(): void {
@@ -182,6 +188,13 @@ export class Store {
 
       // Build a MergedProjectData for historical-only projects
       merged.push(this.buildHistoricalProject(store));
+      seenPaths.add(projectPath);
+    }
+
+    // Include hook-only projects (active sessions but no tasks/store yet)
+    for (const [projectPath, sessions] of this._hookActiveSessions) {
+      if (seenPaths.has(projectPath) || sessions.size === 0) continue;
+      merged.push(this.buildHookOnlyProject(projectPath, [...sessions.values()]));
     }
 
     return merged;
@@ -336,6 +349,7 @@ export class Store {
       inProgressTasks,
       hasHistory: goneSessions.length > 0 || goneItemCount > 0,
       goneSessionCount: goneSessions.length,
+      hookSessions: this.getHookSessions(liveProject.projectPath),
     };
   }
 
@@ -400,6 +414,11 @@ export class Store {
   }
 
   markSessionStopped(sessionId: string, timestamp: string): void {
+    // Remove from hook active sessions
+    for (const [, sessions] of this._hookActiveSessions) {
+      sessions.delete(sessionId);
+    }
+
     for (const [projectPath, store] of this.projects) {
       const session = store.sessions[sessionId];
       if (!session) continue;
@@ -409,6 +428,55 @@ export class Store {
       this.dirty.add(projectPath);
       return;
     }
+  }
+
+  // Track a session as active via SessionStart hook event
+  markSessionStarted(projectPath: string, sessionId: string, timestamp: string): void {
+    let sessions = this._hookActiveSessions.get(projectPath);
+    if (!sessions) {
+      sessions = new Map();
+      this._hookActiveSessions.set(projectPath, sessions);
+    }
+    sessions.set(sessionId, { sessionId, projectPath, startedAt: timestamp });
+  }
+
+  // Get hook-tracked active sessions for a project
+  getHookSessions(projectPath: string): HookSessionInfo[] {
+    const sessions = this._hookActiveSessions.get(projectPath);
+    return sessions ? [...sessions.values()] : [];
+  }
+
+  // Get all hook-tracked active sessions across all projects
+  getAllHookSessions(): Map<string, HookSessionInfo[]> {
+    const result = new Map<string, HookSessionInfo[]>();
+    for (const [path, sessions] of this._hookActiveSessions) {
+      if (sessions.size > 0) {
+        result.set(path, [...sessions.values()]);
+      }
+    }
+    return result;
+  }
+
+  private buildHookOnlyProject(projectPath: string, hookSessions: HookSessionInfo[]): MergedProjectData {
+    return {
+      projectPath,
+      projectName: basename(projectPath),
+      sessions: [],
+      totalTasks: 0,
+      completedTasks: 0,
+      inProgressTasks: 0,
+      agents: [],
+      lastActivity: new Date(hookSessions[0]?.startedAt ?? Date.now()),
+      isActive: true, // has active hook sessions
+      totalSessions: 0,
+      activeSessions: hookSessions.length,
+      docs: [],
+      recentSessions: [],
+      agentDetails: [],
+      hasHistory: false,
+      goneSessionCount: 0,
+      hookSessions,
+    };
   }
 
   private buildHistoricalProject(store: ProjectStore): MergedProjectData {
@@ -432,6 +500,7 @@ export class Store {
       agentDetails: [],
       hasHistory: true,
       goneSessionCount: sessions.length,
+      hookSessions: this.getHookSessions(store.projectPath),
     };
   }
 }
@@ -592,9 +661,16 @@ export function ingestHookEvents(store: Store, events: HookEvent[]): void {
       store.mergeHookItem(projectPath, sessionId, item);
     }
 
+    if (event.event === "start") {
+      // Session started — track as active
+      const projectPath = cwd ? cwdToProjectPath(cwd) : undefined;
+      if (projectPath) {
+        store.markSessionStarted(projectPath, sessionId, event.ts || now);
+      }
+    }
+
     if (event.event === "stop") {
-      // Session stopped — mark session as gone if we have it
-      // Don't create new entries for unknown sessions
+      // Session stopped — remove from active, update store
       store.markSessionStopped(sessionId, event.ts || now);
     }
   }
