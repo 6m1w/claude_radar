@@ -24,8 +24,8 @@ type KanbanColumn = "todo" | "needs_input" | "doing" | "done";
 const ALL_COLUMNS: KanbanColumn[] = ["todo", "needs_input", "doing", "done"];
 
 const COLUMN_CONFIG: Record<KanbanColumn, { label: string; color: string; bold: boolean }> = {
-  todo: { label: "TODO", color: C.text, bold: false },
-  needs_input: { label: "Your attention!", color: C.error, bold: true },
+  todo: { label: "TODO", color: C.accent, bold: true },
+  needs_input: { label: "Attention!", color: C.error, bold: true },
   doing: { label: "DOING", color: C.warning, bold: true },
   done: { label: "DONE", color: C.success, bold: false },
 };
@@ -153,7 +153,7 @@ function SwimLaneLayout({
       {projects.map((project) => {
         const buckets = buildBuckets(project);
         const maxRows = Math.max(1, ...activeCols.map((c) => buckets[c].length));
-        const isActive = project.activeSessions > 0 || project.hookSessionCount > 0;
+        const isActive = project.isActive;
 
         return (
           <Box key={project.projectPath} flexDirection="column">
@@ -169,7 +169,7 @@ function SwimLaneLayout({
               let leftColor = C.text;
               if (ri === 0) {
                 leftText = project.name;
-                leftColor = isActive ? C.success : C.subtext;
+                leftColor = isActive ? C.warning : C.text;
               } else if (ri === 1) {
                 leftText = `⎇${project.branch}`;
                 leftColor = C.accent;

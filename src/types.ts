@@ -247,6 +247,7 @@ export type ViewProject = {
   gitLog: GitCommit[];
   docContents: Record<string, string>;
   lastActivity: Date;
+  isActive: boolean; // scanner-computed: considers session state + stale task decay
   planningLog: ActivityEvent[];
   activityLog: ActivityEvent[];
   activityAlerts: ActivityAlert[];
