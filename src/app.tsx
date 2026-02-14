@@ -133,34 +133,38 @@ export function App() {
   const [kanbanLayout, setKanbanLayout] = useState<"swimlane" | "column_first">("swimlane");
   const [kanbanHideDone, setKanbanHideDone] = useState(false);
 
-  // Convert real data → view model, sort: active first, then by task count
-  // Group worktrees after their main repo
+  // Convert real data → view model, group worktrees with their main repo
   const viewProjects = rawProjects.map(toViewProject);
   const sorted = (() => {
-    // Sort: active projects first, then by last activity time (most recent first)
-    const base = [...viewProjects].sort((a, b) => {
-      const aActive = a.activeSessions > 0 || a.hookSessionCount > 0;
-      const bActive = b.activeSessions > 0 || b.hookSessionCount > 0;
-      if (aActive !== bActive) return aActive ? -1 : 1;
-      return b.lastActivity.getTime() - a.lastActivity.getTime();
-    });
-    // Reorder: place worktrees right after their main repo
-    const result: ViewProject[] = [];
-    const placed = new Set<string>();
-    for (const p of base) {
-      if (placed.has(p.projectPath)) continue;
-      result.push(p);
-      placed.add(p.projectPath);
-      // Find worktrees that belong to this project's path (direct path comparison)
-      if (!p.worktreeOf) {
-        const worktrees = base.filter((w) => !placed.has(w.projectPath) && w.worktreeOf === p.projectPath);
-        for (const wt of worktrees) {
-          result.push(wt);
-          placed.add(wt.projectPath);
-        }
-      }
+    // Phase 1: Group projects — main repo + its worktrees share a group key
+    const groupMap = new Map<string, ViewProject[]>();
+    for (const p of viewProjects) {
+      const groupKey = p.worktreeOf ?? p.projectPath;
+      const group = groupMap.get(groupKey) ?? [];
+      group.push(p);
+      groupMap.set(groupKey, group);
     }
-    return result;
+
+    // Phase 2: Sort within each group — main repo first, then worktrees by activity
+    for (const [, group] of groupMap) {
+      group.sort((a, b) => {
+        if (!a.worktreeOf && b.worktreeOf) return -1;
+        if (a.worktreeOf && !b.worktreeOf) return 1;
+        return b.lastActivity.getTime() - a.lastActivity.getTime();
+      });
+    }
+
+    // Phase 3: Sort groups — active groups first, then by most recent activity
+    const groupEntries = [...groupMap.entries()].sort(([, a], [, b]) => {
+      const aActive = a.some((p) => p.activeSessions > 0 || p.hookSessionCount > 0);
+      const bActive = b.some((p) => p.activeSessions > 0 || p.hookSessionCount > 0);
+      if (aActive !== bActive) return aActive ? -1 : 1;
+      const aMax = Math.max(...a.map((p) => p.lastActivity.getTime()));
+      const bMax = Math.max(...b.map((p) => p.lastActivity.getTime()));
+      return bMax - aMax;
+    });
+
+    return groupEntries.flatMap(([, group]) => group);
   })();
 
   const current = sorted[projectIdx];
@@ -481,6 +485,9 @@ function RightPanel({
       {/* Project info header */}
       <Box>
         <Text color={C.accent}>⎇ {project.branch} </Text>
+        {project.worktreeOf && (
+          <Text color={C.dim}>↳ {project.worktreeOf.split("/").pop()} </Text>
+        )}
         {project.team && (
           <Text color={C.warning}>⚑ {project.team.teamName} </Text>
         )}
