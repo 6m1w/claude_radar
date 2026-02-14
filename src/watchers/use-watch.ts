@@ -1,53 +1,49 @@
 import { useState, useEffect, useRef } from "react";
-import { watch } from "chokidar";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { scanAll } from "./scanner.js";
 import type { SessionData } from "../types.js";
 
-const CLAUDE_DIR = join(homedir(), ".claude");
+const POLL_INTERVAL_MS = 1000;
 
-// React hook: watch ~/.claude/todos/ and ~/.claude/tasks/ for changes
+// React hook: poll ~/.claude/todos/ and ~/.claude/tasks/ for changes
 export function useWatchSessions(): {
   sessions: SessionData[];
   lastUpdate: Date | null;
 } {
   const [sessions, setSessions] = useState<SessionData[]>([]);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevSnapshotRef = useRef<string>("");
 
   useEffect(() => {
     // Initial scan
-    setSessions(scanAll());
+    const initial = scanAll();
+    setSessions(initial);
     setLastUpdate(new Date());
+    prevSnapshotRef.current = snapshotKey(initial);
 
-    const watcher = watch(
-      [join(CLAUDE_DIR, "todos", "*.json"), join(CLAUDE_DIR, "tasks", "**", "*.json")],
-      {
-        ignoreInitial: true,
-        // Debounce rapid changes from Claude writing multiple task files
-        awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-      }
-    );
-
-    const refresh = () => {
-      // Debounce: wait 300ms after last file change before re-scanning
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
-        setSessions(scanAll());
+    // Poll: re-scan every second, only re-render if data actually changed
+    const timer = setInterval(() => {
+      const current = scanAll();
+      const key = snapshotKey(current);
+      if (key !== prevSnapshotRef.current) {
+        prevSnapshotRef.current = key;
+        setSessions(current);
         setLastUpdate(new Date());
-      }, 300);
-    };
+      }
+    }, POLL_INTERVAL_MS);
 
-    watcher.on("change", refresh);
-    watcher.on("add", refresh);
-    watcher.on("unlink", refresh);
-
-    return () => {
-      watcher.close();
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
+    return () => clearInterval(timer);
   }, []);
 
   return { sessions, lastUpdate };
+}
+
+// Lightweight fingerprint to detect actual data changes
+function snapshotKey(sessions: SessionData[]): string {
+  return sessions
+    .map((s) =>
+      s.items
+        .map((i) => ("id" in i ? `${i.id}:${i.status}` : `${i.content}:${i.status}`))
+        .join(",")
+    )
+    .join("|");
 }
