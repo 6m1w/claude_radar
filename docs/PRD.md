@@ -66,16 +66,19 @@
 - [ ] `q`：退出
 
 #### 设计风格
-- [ ] 黑客美学 / cyberpunk 终端风格
-- [ ] 绿色/青色为主的配色方案
+- [x] 黑客美学 / cyberpunk 终端风格
+- [x] Catppuccin Mocha 配色方案（+ 预留 Retro / Cyberpunk 主题）
 - [ ] ASCII art header
-- [ ] 扫描线 / 闪烁效果等终端特效
-- [ ] Design Playground 原型验证
+- [x] Design Playground 原型验证
+- [x] 系统指标状态栏（CPU sparkline + MEM + 网络 + spinner）
+- [x] Mini mascot（☻ 状态指示，内嵌 status bar）
 
 #### 视图
+- [ ] **Dashboard 视图**（默认）：全项目一览，OVERVIEW + ACTIVE NOW + PROJECTS + ACTIVITY
+- [ ] **Project Detail 视图**：Tasks + Git History + PRD/Docs 三栏
+- [ ] **Focus/Kanban 视图**：By Agent 布局 + Swimlane 表格布局（共享表头 TODO/DOING/DONE）
 - [ ] **当前 session 高亮**：最新活跃 session 置顶 + 高亮边框
 - [ ] **折叠/展开**：旧 session 折叠成单行摘要
-- [ ] **看板视图**：三列 Pending | In Progress | Done
 
 ### v0.3 — 多 Agent 监控
 
@@ -89,6 +92,14 @@
 - [ ] **Hook 事件接收**：接入 Claude Code hook 系统，实时显示事件流
 - [ ] **事件时间线**：底部面板显示最近的 hook 事件（start, submit, complete, error...）
 - [ ] **与 Sound FX 联动**：共享 hook 基础设施（同一个 event collector）
+
+### v0.5 — 动效与润色
+
+- [ ] **Phase 1 微动效**：活跃 task 脉冲闪烁、新 task 高亮 flash、数字滚动
+- [ ] **Phase 2 过渡效果**：视图切换淡入淡出、进度条动画
+- [ ] **Phase 3 角色动画**（stretch goal）：mascot 水平跑动、获取数据冲撞特效、跳跃/掉落
+- [ ] **可展开指标面板**：按 `m` 展开 braille 折线图（CPU/MEM/NET 1 分钟历史）
+- [ ] **多套主题切换**：Catppuccin Mocha / Retro Terminal / Cyberpunk，`t` 键或 CLI flag
 
 ### 未来考虑（不承诺时间）
 

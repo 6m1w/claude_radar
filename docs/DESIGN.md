@@ -42,7 +42,7 @@ All-projects-at-a-glance. The "home screen".
 │  10:05  outclaws  ▶ #2 User dashboard                                        │
 │  10:03  monitor   ✓ #3 Polling watcher                                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- CPU ▁▃▅▇▅▃▁▃ 23% │ MEM ██████░░ 4.2/8G │ ↑ 1.2 KB/s ↓ 45.3 KB/s │ ⠋ polling
+ ☻⌨ · │ CPU ▁▃▅▇▅▃▁▃ 23% │ MEM ██████░░ 4.2/8G │ ↑ 1.2 KB/s ↓ 45.3 KB/s │ ⠋ polling
  ↑↓ nav  Enter select  Tab switch  1-3 panel  h hide done  t theme  q quit
 ```
 
@@ -248,67 +248,72 @@ Shows what each agent is currently doing:
 ◍ outclaws/str-a  ▶ #2 User dashboard      5m
 ```
 
-### System Metrics Bar
+### System Metrics + Mascot (Status Bar)
 
-Persistent status bar showing live system metrics. The constantly fluctuating numbers create a strong "alive" signal.
+Single-line status bar combining system metrics and mini mascot. Position: bottom of screen, above keyboard hints.
 
 ```
-╭─ SYSTEM ─────────────────────────────────────────────────────────────────────╮
-│  CPU ▁▃▅▇▅▃▁▃ 23%  │  MEM ██████░░ 4.2/8 GB  │  ↑ 1.2 KB/s  ↓ 45.3 KB/s │
-╰──────────────────────────────────────────────────────────────────────────────╯
+☻⌨ · │ CPU ▁▃▅▇▅▃▁▃ 23% │ MEM ██████░░ 4.2/8G │ ↑ 1.2 KB/s ↓ 45.3 KB/s │ ⠋ polling
 ```
 
-- **CPU**: Sparkline mini-graph (last 8 samples) + current percentage
-- **MEM**: Bar + used/total
-- **Network**: Upload/download rate with `↑` `↓` arrows
-- Position: Bottom of screen, above the keyboard hint bar
-- Data source: `os.cpus()`, `os.freemem()/totalmem()`, network via `process.cpuUsage()` or `/proc/net/dev` (macOS: `netstat`)
-- Refresh: 1s (same interval as data polling — reuse the timer)
+**Mini Mascot** (leftmost, inline):
 
-### ASCII Character (Mascot)
+| State | Frames | Trigger |
+|-------|--------|---------|
+| idle | `☻ zzZ` ↔ `☻ zZ ` | No active agents |
+| working | `☻⌨ ·` → `☻⌨ ··` → `☻⌨···` | Any agent working |
+| done | `☻♪` | All projects completed |
 
-Animated character that reflects system state. Placed in the Dashboard OVERVIEW panel or bottom-right corner.
+**System Metrics**:
+- **CPU**: Sparkline (8 samples) + percentage. Data: `os.cpus()`
+- **MEM**: Bar (8 chars) + used/total. Data: `os.freemem()/totalmem()`
+- **Network**: `↑` upload `↓` download rates. Data: macOS `netstat` / Linux `/proc/net/dev`
+- **Spinner**: Braille rotation indicating active polling
 
-**Idle** (no active agents):
+Refresh: 1s (shared timer with data polling).
+
+**Expandable metrics (future)**: Press `m` to open full-screen metrics panel with larger braille line charts showing CPU/MEM/NET history over time. Uses braille characters `⠀⡀⣀⣄⣤⣦⣶⣷⣿` for 2×4 sub-character resolution per cell.
+
 ```
-    ○
-   /|＼
-   / ＼
-  zzZ...
-```
-
-**Working** (agents running — 2 frame loop):
-```
- Frame 1:        Frame 2:
-    ○                ○
-   /|＼    ⌨       ＜|＼    ⌨
-   / ＼             / ＼
+CPU History (1 min) ────────────────────────────────────
+⡇⠀⠀⠀⠀⠀⢀⡀⠀⠀⠀⠀⣠⠤⡄⠀⠀⠀⠀⠀⠀⢀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⠤⠒⠒⠤⣄
+⡇⣀⣀⣀⣀⡴⠋⠙⠲⣄⣴⠋⠀⠀⠙⠲⣄⣤⣀⣤⠞⠉⠀⠙⠲⣄⣀⣀⣀⣀⣀⣤⠴⠊⠁⠀⠀⠀⠀⠀
 ```
 
-**All done** (everything completed):
-```
-   ＼○／
-    |
-   / ＼
-  done!
-```
+### Animations (v0.4+)
 
-- Frames cycle at 500ms (2 fps)
-- State auto-detects from agent status: any `working` → working animation, all `done` → celebration, else idle
-- Disable with `animations: false` in config
+All animations are low priority — implement after core views and data layer are solid. Toggled via config `{ "animations": true }` or `--no-animations` CLI flag.
 
-### Animations
-
-All animations are optional — toggled via config `{ "animations": true }` or `--no-animations` flag.
+**Phase 1 — Subtle indicators** (low effort):
 
 | Animation | Where | FPS | Description |
 |-----------|-------|-----|-------------|
-| Spinner | Activity panel, status bar | 10 | `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` braille rotation |
+| Spinner | Status bar | 10 | `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` braille rotation |
 | Active task pulse | Task list | 2 | `▶` blinks yellow/dim |
-| New task flash | Task list | — | 1.5s yellow highlight on new items |
-| ASCII mascot | Dashboard corner | 2 | State-dependent character animation |
-| Sparkline | System metrics | 1 | CPU history graph updates each second |
-| Number roll | Progress bars | — | Counter animates from old to new value on change |
+| Sparkline | Status bar | 1 | CPU history updates each second |
+| Mascot state | Status bar | 1 | `☻⌨` / `☻zzZ` / `☻♪` based on agent state |
+
+**Phase 2 — Transition effects** (medium effort):
+
+| Animation | Where | Description |
+|-----------|-------|-------------|
+| New task flash | Task list | 1.5s yellow highlight when new task appears |
+| Number roll | Progress bars | Counter animates from old value to new |
+| View transition | All | Brief fade/slide when switching views |
+
+**Phase 3 — Character animation** (high effort, stretch goal):
+
+Mascot with movement and interaction effects:
+- Horizontal running across the status bar (marginLeft animation)
+- "Fetching data" sequence: mascot runs toward `[DATA]`, collision spark `💥`, data refreshes
+- Jump/fall: parabolic y-coordinate for jump, gravity for fall
+- Implementation: dedicated animation layer with `{x, y, state}` tracked per frame at 5-8 fps
+
+Feasibility notes:
+- Ink uses Flexbox, not Canvas — movement simulated via `marginLeft`/padding or fixed-width string padding
+- Ink's React reconciler diffs output, so only changed characters redraw — low perf cost for small animations
+- Keep animated region to 1-2 lines max to avoid full-screen flicker at high frame rates
+- All animations must be disableable for performance-sensitive environments
 
 ```typescript
 // Animation config in Theme

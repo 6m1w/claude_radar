@@ -294,44 +294,20 @@ function ActivityLog({ panelFocused }: { panelFocused: boolean }) {
   );
 }
 
-// ─── ASCII Mascot ────────────────────────────────────────────
-const MASCOT_FRAMES = {
-  idle: [
-    ["   ○   ", "  /|\\  ", "  / \\  ", " zzZ.. "],
-    ["   ○   ", "  /|\\  ", "  / \\  ", " zZ... "],
-  ],
-  working: [
-    ["   ○    ", "  /|\\  ⌨", "  / \\   ", "        "],
-    ["   ○    ", "  <|\\  ⌨", "  / \\   ", "        "],
-  ],
-  done: [
-    ["  \\○/  ", "   |   ", "  / \\  ", " done! "],
-  ],
+// ─── Mini Mascot (inline, 1-char) ────────────────────────────
+const MINI_MASCOT = {
+  idle:    ["☻ zzZ", "☻ zZ "],
+  working: ["☻⌨ ·", "☻⌨ ··", "☻⌨···"],
+  done:    ["☻♪"],
 };
 
-function Mascot({ status }: { status: "idle" | "working" | "done" }) {
-  const [frame, setFrame] = useState(0);
-  useEffect(() => {
-    const frames = MASCOT_FRAMES[status];
-    if (frames.length <= 1) return;
-    const t = setInterval(() => setFrame((v) => (v + 1) % frames.length), 500);
-    return () => clearInterval(t);
-  }, [status]);
-
-  const lines = MASCOT_FRAMES[status][frame % MASCOT_FRAMES[status].length];
-  const color = status === "working" ? C.yellow : status === "done" ? C.green : C.dim;
-
-  return (
-    <Box flexDirection="column" alignItems="center">
-      {lines.map((line, i) => (
-        <Text key={i} color={color}>{line}</Text>
-      ))}
-    </Box>
-  );
+function miniMascotFrame(status: "idle" | "working" | "done", tick: number): string {
+  const frames = MINI_MASCOT[status];
+  return frames[tick % frames.length];
 }
 
 // ─── System Metrics Bar ──────────────────────────────────────
-function SystemMetrics({ tick }: { tick: number }) {
+function SystemMetrics({ tick, mascotStatus }: { tick: number; mascotStatus: "idle" | "working" | "done" }) {
   // Simulated fluctuating data for demo
   const cpuBase = [12, 18, 35, 62, 45, 28, 15, 22];
   const cpuHistory = cpuBase.map((v, i) => v + ((tick + i) * 7 % 15) - 7);
@@ -352,9 +328,14 @@ function SystemMetrics({ tick }: { tick: number }) {
 
   const spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][tick % 10];
 
+  const mascot = miniMascotFrame(mascotStatus, tick);
+  const mascotColor = mascotStatus === "working" ? C.yellow : mascotStatus === "done" ? C.green : C.dim;
+
   return (
     <Box>
       <Text>
+        <Text color={mascotColor}>{mascot}</Text>
+        <Text color={C.dim}> │ </Text>
         <Text color={C.subtext}>CPU </Text>
         <Text color={C.green}>{spark}</Text>
         <Text color={C.text}> {cpuNow}%</Text>
@@ -506,14 +487,9 @@ function App() {
     <Box flexDirection="column">
       {page === "global" ? (
         <>
-          {/* Top: Projects + Detail (with mascot) side by side */}
+          {/* Top: Projects + Detail side by side */}
           <Box>
-            <Box flexDirection="column" width={34}>
-              <ProjectList focusIdx={focusIdx} panelFocused={activePanel === 1} />
-              <Box justifyContent="center" marginTop={1}>
-                <Mascot status={mascotState} />
-              </Box>
-            </Box>
+            <ProjectList focusIdx={focusIdx} panelFocused={activePanel === 1} />
             <ProjectDetail project={currentProject} panelFocused={activePanel === 2} />
           </Box>
           {/* Activity log */}
@@ -524,7 +500,7 @@ function App() {
       )}
       {/* System metrics + keyboard hints */}
       <Box marginTop={1}>
-        <SystemMetrics tick={tick} />
+        <SystemMetrics tick={tick} mascotStatus={mascotState} />
       </Box>
       <BottomBar page={page} />
     </Box>
