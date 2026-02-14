@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Box, Text, useInput, useApp } from "ink";
 import { useWatchSessions } from "./watchers/use-watch.js";
+import { useMetrics } from "./hooks/use-metrics.js";
 import { Panel } from "./components/panel.js";
 import { Progress } from "./components/progress.js";
 import { C, I } from "./theme.js";
@@ -9,8 +10,16 @@ import type { ProjectData } from "./types.js";
 
 export function App() {
   const { projects, lastUpdate } = useWatchSessions();
+  const metrics = useMetrics();
   const { exit } = useApp();
   const [cursorIdx, setCursorIdx] = useState(0);
+  const [tick, setTick] = useState(0);
+
+  // Tick for spinner animation
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 100);
+    return () => clearInterval(t);
+  }, []);
 
   // Keyboard: q to quit, j/k or arrows to navigate
   useInput((input, key) => {
@@ -74,7 +83,14 @@ export function App() {
       <ActivityPanel projects={projects} />
 
       {/* Status bar */}
-      <StatusBar lastUpdate={lastUpdate} projectCount={totalProjects} />
+      <StatusBar
+        lastUpdate={lastUpdate}
+        projectCount={totalProjects}
+        metrics={metrics}
+        hasActive={activePairs.length > 0}
+        allDone={totalTasks > 0 && totalCompleted === totalTasks}
+        tick={tick}
+      />
     </Box>
   );
 }
@@ -295,33 +311,102 @@ function ActivityPanel({ projects }: { projects: ProjectData[] }) {
   );
 }
 
-// ─── Status bar ──────────────────────────────────────────────
+// ─── Status bar with metrics, mascot, spinner ───────────────
+import type { SystemMetrics } from "./hooks/use-metrics.js";
+
+const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+const SPARK = "▁▂▃▄▅▆▇█";
+const MASCOT = {
+  idle: ["☻ zzZ", "☻ zZ "],
+  working: ["☻⌨ ·", "☻⌨··", "☻⌨···"],
+  done: ["☻♪"],
+};
+
+function sparkline(values: number[], max = 100): string {
+  return values
+    .map((v) => {
+      const idx = Math.min(7, Math.floor((v / max) * 8));
+      return SPARK[Math.max(0, idx)];
+    })
+    .join("");
+}
+
 function StatusBar({
   lastUpdate,
   projectCount,
+  metrics,
+  hasActive,
+  allDone,
+  tick,
 }: {
   lastUpdate: Date | null;
   projectCount: number;
+  metrics: SystemMetrics;
+  hasActive: boolean;
+  allDone: boolean;
+  tick: number;
 }) {
-  const time = lastUpdate?.toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }) ?? "--:--:--";
+  // Mascot state
+  const mascotState = allDone ? "done" : hasActive ? "working" : "idle";
+  const mascotFrames = MASCOT[mascotState];
+  const mascotFrame = mascotFrames[Math.floor(tick / 10) % mascotFrames.length];
+
+  // Spinner
+  const spinnerChar = SPINNER[tick % SPINNER.length];
+
+  // CPU sparkline
+  const cpuSpark = sparkline(metrics.cpuHistory);
+
+  // MEM bar (8 chars)
+  const memBarLen = 8;
+  const memFilled = Math.round((metrics.memPercent / 100) * memBarLen);
+  const memBar = "█".repeat(memFilled) + "░".repeat(memBarLen - memFilled);
+
+  // Network
+  const netUp = metrics.netUp > 1024
+    ? `${(metrics.netUp / 1024).toFixed(1)}M`
+    : `${metrics.netUp.toFixed(0)}K`;
+  const netDown = metrics.netDown > 1024
+    ? `${(metrics.netDown / 1024).toFixed(1)}M`
+    : `${metrics.netDown.toFixed(0)}K`;
 
   return (
-    <Box>
-      <Text color={C.primary} bold> DASHBOARD </Text>
-      <Text color={C.dim}> │ </Text>
-      <Text color={C.success}>↑↓</Text>
-      <Text color={C.subtext}> nav  </Text>
-      <Text color={C.success}>q</Text>
-      <Text color={C.subtext}> quit  </Text>
-      <Text color={C.dim}> │ </Text>
-      <Text color={C.dim}>
-        {projectCount} project{projectCount !== 1 ? "s" : ""} · {time}
-      </Text>
+    <Box flexDirection="column">
+      {/* Metrics line */}
+      <Box>
+        <Text color={C.warning}> {mascotFrame} </Text>
+        <Text color={C.dim}>│ </Text>
+        <Text color={C.subtext}>CPU </Text>
+        <Text color={C.success}>{cpuSpark}</Text>
+        <Text color={C.text}> {String(metrics.cpuPercent).padStart(2)}%</Text>
+        <Text color={C.dim}> │ </Text>
+        <Text color={C.subtext}>MEM </Text>
+        <Text color={C.primary}>{memBar}</Text>
+        <Text color={C.text}> {metrics.memUsedGB}/{metrics.memTotalGB}G</Text>
+        <Text color={C.dim}> │ </Text>
+        <Text color={C.success}>↑</Text>
+        <Text color={C.subtext}>{netUp} </Text>
+        <Text color={C.primary}>↓</Text>
+        <Text color={C.subtext}>{netDown}</Text>
+        <Text color={C.dim}> │ </Text>
+        <Text color={C.primary}>{spinnerChar}</Text>
+      </Box>
+
+      {/* Keyboard hints */}
+      <Box>
+        <Text color={C.primary} bold> DASHBOARD </Text>
+        <Text color={C.dim}>│ </Text>
+        <Text color={C.success}>↑↓</Text>
+        <Text color={C.subtext}> nav  </Text>
+        <Text color={C.success}>Enter</Text>
+        <Text color={C.subtext}> detail  </Text>
+        <Text color={C.success}>Space</Text>
+        <Text color={C.subtext}> select  </Text>
+        <Text color={C.success}>Tab</Text>
+        <Text color={C.subtext}> kanban  </Text>
+        <Text color={C.success}>q</Text>
+        <Text color={C.subtext}> quit</Text>
+      </Box>
     </Box>
   );
 }
