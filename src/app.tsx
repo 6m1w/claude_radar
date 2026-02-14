@@ -28,6 +28,7 @@ type DisplayTask = {
 // View model: mirrors old MockProject shape for minimal UI changes
 type ViewProject = {
   name: string;
+  projectPath: string;
   branch: string;
   agents: string[];
   activeSessions: number;
@@ -41,6 +42,7 @@ type ViewProject = {
   team?: TeamConfig;
   gitLog: GitCommit[];
   docContents: Record<string, string>;
+  lastActivity: Date;
 };
 
 // ─── Adapter: MergedProjectData → ViewProject ───────────────
@@ -81,6 +83,7 @@ function toViewProject(p: MergedProjectData): ViewProject {
 
   return {
     name: p.projectName,
+    projectPath: p.projectPath,
     branch: p.git?.branch ?? p.gitBranch ?? "main",
     agents: p.agents,
     activeSessions: p.activeSessions,
@@ -94,6 +97,7 @@ function toViewProject(p: MergedProjectData): ViewProject {
     team: p.team,
     gitLog: p.gitLog,
     docContents: p.docContents,
+    lastActivity: p.lastActivity,
   };
 }
 
@@ -147,24 +151,27 @@ export function App() {
   // Group worktrees after their main repo
   const viewProjects = rawProjects.map(toViewProject);
   const sorted = (() => {
-    // First: normal sort (active first, then by task count)
+    // Sort: active projects first, then by last activity time (most recent first)
     const base = [...viewProjects].sort((a, b) => {
-      if (a.activeSessions > 0 && b.activeSessions === 0) return -1;
-      if (b.activeSessions > 0 && a.activeSessions === 0) return 1;
-      return b.tasks.length - a.tasks.length;
+      const aActive = a.activeSessions > 0 || a.hookSessionCount > 0;
+      const bActive = b.activeSessions > 0 || b.hookSessionCount > 0;
+      if (aActive !== bActive) return aActive ? -1 : 1;
+      return b.lastActivity.getTime() - a.lastActivity.getTime();
     });
     // Reorder: place worktrees right after their main repo
     const result: ViewProject[] = [];
     const placed = new Set<string>();
     for (const p of base) {
-      if (placed.has(p.name)) continue;
+      if (placed.has(p.projectPath)) continue;
       result.push(p);
-      placed.add(p.name);
-      // Find worktrees that belong to this project's path
-      const worktrees = base.filter((w) => !placed.has(w.name) && w.worktreeOf === rawProjects.find((r) => r.projectName === p.name)?.projectPath);
-      for (const wt of worktrees) {
-        result.push(wt);
-        placed.add(wt.name);
+      placed.add(p.projectPath);
+      // Find worktrees that belong to this project's path (direct path comparison)
+      if (!p.worktreeOf) {
+        const worktrees = base.filter((w) => !placed.has(w.projectPath) && w.worktreeOf === p.projectPath);
+        for (const wt of worktrees) {
+          result.push(wt);
+          placed.add(wt.projectPath);
+        }
       }
     }
     return result;
@@ -230,10 +237,10 @@ export function App() {
       if (input === " " && current) {
         setSelectedNames((prev) => {
           const next = new Set(prev);
-          if (next.has(current.name)) {
-            next.delete(current.name);
+          if (next.has(current.projectPath)) {
+            next.delete(current.projectPath);
           } else {
-            next.add(current.name);
+            next.add(current.projectPath);
           }
           return next;
         });
@@ -306,7 +313,7 @@ export function App() {
   if (focus === "kanban") {
     // Filter: selected projects, or all projects with tasks if none selected
     const kanbanProjects = selectedNames.size > 0
-      ? sorted.filter((p) => selectedNames.has(p.name) && p.tasks.length > 0)
+      ? sorted.filter((p) => selectedNames.has(p.projectPath) && p.tasks.length > 0)
       : sorted.filter((p) => p.tasks.length > 0);
     return (
       <Box flexDirection="column" height={termRows} paddingBottom={1}>
@@ -376,14 +383,17 @@ export function App() {
             const isActive = p.activeSessions > 0 || p.hookSessionCount > 0;
             const icon = isActive ? I.working : stats.total > 0 && stats.done === stats.total ? I.done : I.idle;
             const iconColor = isActive ? C.warning : stats.done === stats.total && stats.total > 0 ? C.success : C.dim;
-            const isSelected = selectedNames.has(p.name);
+            const isSelected = selectedNames.has(p.projectPath);
             const isWorktree = !!p.worktreeOf;
             // Check if this is the last worktree in a consecutive group
             const nextP = visSlice[vi + 1];
             const isLastWorktree = isWorktree && (!nextP || !nextP.worktreeOf || nextP.worktreeOf !== p.worktreeOf);
-            const treePrefix = isWorktree ? (isLastWorktree ? "└─" : "├─") : "  ";
+            const treePrefix = isWorktree ? (isLastWorktree ? "└" : "├") : " ";
+            // Truncate name to fit within panel (inner width ~30)
+            const maxName = p.branch !== "main" ? 14 : 20;
+            const displayName = p.name.length > maxName ? p.name.slice(0, maxName - 1) + "…" : p.name;
             return (
-              <Box key={p.name}>
+              <Box key={p.projectPath} overflow="hidden">
                 <Text color={isCursor ? C.primary : C.dim}>
                   {isCursor ? I.cursor : " "}
                 </Text>
@@ -396,10 +406,10 @@ export function App() {
                 )}
                 <Text color={iconColor}>{icon} </Text>
                 <Text color={isCursor ? C.text : C.subtext} bold={isCursor}>
-                  {p.name.length > 20 ? p.name.slice(0, 19) + "…" : p.name.padEnd(20)}
+                  {displayName}
                 </Text>
                 {p.branch !== "main" && (
-                  <Text color={C.accent}> ⎇{p.branch.slice(0, 5)}</Text>
+                  <Text color={C.accent}> ⎇{p.branch.length > 12 ? p.branch.slice(0, 11) + "…" : p.branch}</Text>
                 )}
                 {p.agentDetails.length > 0 && (
                   <Text color={C.dim}>{" "}
@@ -523,6 +533,10 @@ function RightPanel({
         const goneTasks = project.tasks.filter((t) => t.gone);
         const isMultiAgent = project.agents.length > 1;
 
+        // Determine max task ID width for alignment
+        const allIds = project.tasks.map((t) => t.id);
+        const maxIdLen = Math.min(6, Math.max(...allIds.map((id) => id.length), 1));
+
         const renderTask = (t: DisplayTask, idx: number) => {
           const isCursor = isInner && !bottomFocused && idx === taskIdx;
           const isGone = !!t.gone;
@@ -530,19 +544,22 @@ function RightPanel({
           const iconColor = isGone ? C.dim
             : t.status === "completed" ? C.success
             : t.status === "in_progress" ? C.warning : C.dim;
+          // Truncate long IDs (e.g., timestamp-based) and pad for alignment
+          const displayId = t.id.length > 6 ? t.id.slice(0, 5) + "…" : t.id.padStart(maxIdLen);
           return (
             <Box key={`${t.id}-${isGone ? "g" : "l"}`}>
               <Text color={isCursor ? C.primary : C.dim}>
                 {isCursor ? I.cursor : " "}{" "}
               </Text>
               <Text color={iconColor} dimColor={isGone}>{icon} </Text>
+              <Text color={isGone ? C.dim : C.subtext} dimColor={isGone}>#{displayId} </Text>
               <Text
                 color={isGone ? C.dim : t.status === "completed" ? C.dim : isCursor ? C.text : C.subtext}
                 bold={!isGone && isCursor}
                 dimColor={isGone}
                 strikethrough={isGone || t.status === "completed"}
               >
-                #{t.id} {t.subject}
+                {t.subject}
               </Text>
               {!isGone && t.owner && <Text color={C.accent}> ({t.owner})</Text>}
               {!isGone && t.blockedBy && <Text color={C.error}> ⊘#{t.blockedBy}</Text>}
