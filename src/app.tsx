@@ -3,9 +3,9 @@ import { Box, Text, useInput, useApp } from "ink";
 import { useWatchSessions } from "./watchers/use-watch.js";
 import { Panel } from "./components/panel.js";
 import { Progress } from "./components/progress.js";
-import { C, I, theme } from "./theme.js";
+import { C, I } from "./theme.js";
 import { formatTimeAgo } from "./utils.js";
-import type { ProjectData, TodoItem, TaskItem } from "./types.js";
+import type { ProjectData } from "./types.js";
 
 export function App() {
   const { projects, lastUpdate } = useWatchSessions();
@@ -27,23 +27,109 @@ export function App() {
   const safeCursor = Math.min(cursorIdx, Math.max(0, projects.length - 1));
   const currentProject = projects[safeCursor];
 
+  // Aggregate stats
+  const totalProjects = projects.length;
+  const totalTasks = projects.reduce((s, p) => s + p.totalTasks, 0);
+  const totalCompleted = projects.reduce((s, p) => s + p.completedTasks, 0);
+  const totalAgents = new Set(projects.flatMap((p) => p.agents)).size;
+
+  // Active agent+task pairs
+  const activePairs: { projectName: string; agent: string; label: string; time: string }[] = [];
+  for (const p of projects) {
+    for (const s of p.sessions) {
+      for (const item of s.items) {
+        if (item.status !== "in_progress") continue;
+        const label = "subject" in item ? `#${item.id} ${item.subject}` : item.content;
+        const agent = "owner" in item && item.owner ? item.owner : "main";
+        activePairs.push({
+          projectName: p.projectName,
+          agent,
+          label,
+          time: formatTimeAgo(s.lastModified),
+        });
+      }
+    }
+  }
+
   return (
     <Box flexDirection="column">
-      {/* Top row: Projects list + Detail panel */}
+      {/* Row 1: Overview + Active Now */}
       <Box>
-        <ProjectList
-          projects={projects}
-          cursorIdx={safeCursor}
+        <OverviewPanel
+          totalProjects={totalProjects}
+          totalAgents={totalAgents}
+          totalTasks={totalTasks}
+          totalCompleted={totalCompleted}
         />
+        <ActiveNowPanel activePairs={activePairs} />
+      </Box>
+
+      {/* Row 2: Projects list + Detail panel */}
+      <Box>
+        <ProjectList projects={projects} cursorIdx={safeCursor} />
         <DetailPanel project={currentProject} />
       </Box>
 
-      {/* Bottom row: Activity log */}
+      {/* Row 3: Activity log */}
       <ActivityPanel projects={projects} />
 
       {/* Status bar */}
-      <StatusBar lastUpdate={lastUpdate} projectCount={projects.length} />
+      <StatusBar lastUpdate={lastUpdate} projectCount={totalProjects} />
     </Box>
+  );
+}
+
+// ─── Overview panel (aggregate stats) ────────────────────────
+function OverviewPanel({
+  totalProjects,
+  totalAgents,
+  totalTasks,
+  totalCompleted,
+}: {
+  totalProjects: number;
+  totalAgents: number;
+  totalTasks: number;
+  totalCompleted: number;
+}) {
+  return (
+    <Panel title="OVERVIEW" flexGrow={1}>
+      <Box>
+        <Text color={C.text} bold>{totalProjects}</Text>
+        <Text color={C.subtext}> projects  </Text>
+        <Text color={C.text} bold>{totalAgents}</Text>
+        <Text color={C.subtext}> agents  </Text>
+        <Text color={C.text} bold>{totalTasks}</Text>
+        <Text color={C.subtext}> tasks</Text>
+      </Box>
+      <Progress done={totalCompleted} total={totalTasks} width={20} />
+    </Panel>
+  );
+}
+
+// ─── Active Now panel (in-progress agent+task pairs) ─────────
+function ActiveNowPanel({
+  activePairs,
+}: {
+  activePairs: { projectName: string; agent: string; label: string; time: string }[];
+}) {
+  return (
+    <Panel title="ACTIVE NOW" flexGrow={1}>
+      {activePairs.length === 0 ? (
+        <Text color={C.dim}>No active agents</Text>
+      ) : (
+        activePairs.slice(0, 4).map((pair, i) => (
+          <Box key={i}>
+            <Text color={C.warning}>{I.working} </Text>
+            <Text color={C.subtext}>
+              {pair.projectName}/{pair.agent}
+            </Text>
+            <Text color={C.dim}>  </Text>
+            <Text color={C.text}>{pair.label}</Text>
+            <Text color={C.dim}>  {pair.time}</Text>
+          </Box>
+        ))
+      )}
+    </Panel>
   );
 }
 
@@ -62,10 +148,16 @@ function ProjectList({
       ) : (
         projects.map((p, i) => {
           const isCursor = i === cursorIdx;
-          const icon = p.isActive ? I.working : p.completedTasks === p.totalTasks && p.totalTasks > 0 ? I.done : I.idle;
-          const iconColor = p.isActive ? C.warning : p.completedTasks === p.totalTasks && p.totalTasks > 0 ? C.success : C.dim;
-          const branch = p.gitBranch && p.gitBranch !== "main" ? ` ${p.gitBranch}` : "";
-          const agentCount = p.agents.length;
+          const icon = p.isActive
+            ? I.working
+            : p.completedTasks === p.totalTasks && p.totalTasks > 0
+              ? I.done
+              : I.idle;
+          const iconColor = p.isActive
+            ? C.warning
+            : p.completedTasks === p.totalTasks && p.totalTasks > 0
+              ? C.success
+              : C.dim;
           const timeAgo = formatTimeAgo(p.lastActivity);
 
           return (
@@ -112,7 +204,7 @@ function DetailPanel({ project }: { project?: ProjectData }) {
         {agentLabel && <Text color={C.dim}>{agentLabel} </Text>}
         <Progress done={project.completedTasks} total={project.totalTasks} width={12} />
       </Box>
-      <Text color={C.dim}> </Text>
+      <Text> </Text>
 
       {/* Task list */}
       {allItems.map((item, i) => {
@@ -145,7 +237,6 @@ function DetailPanel({ project }: { project?: ProjectData }) {
 
 // ─── Activity panel (recent task events across all projects) ─
 function ActivityPanel({ projects }: { projects: ProjectData[] }) {
-  // Collect recent active items across all projects
   type ActivityEntry = {
     projectName: string;
     label: string;
