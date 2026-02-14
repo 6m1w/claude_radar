@@ -13,6 +13,8 @@
 - **Information density** — Show maximum useful data per screen, no wasted space
 - **Progressive disclosure** — Summary first, drill down for details
 - **Hacker aesthetic** — ASCII art, retro progress bars, terminal-native feel
+- **Responsive** — Panels stretch to fill terminal width; extra space used for metrics charts
+- **Performance-first** — Animations and charts must not impact responsiveness; all optional via config
 
 ## View System
 
@@ -208,6 +210,80 @@ Access: `Tab` from Dashboard. Shows projects selected with `Space`; if none sele
 
 Key principle: **`Enter` and `Space` are independent**. `Enter` always acts on the cursor position (drill into one project). `Space` toggles selection marks (for Kanban). The two don't interfere.
 
+## Responsive Layout
+
+Panels adapt to terminal width using Ink's flexbox model. The goal: **useful at 80 cols, expansive at 160+ cols**.
+
+### Panel Sizing Strategy
+
+Each panel has one of two sizing modes:
+
+| Mode | Ink prop | Behavior |
+|------|----------|----------|
+| **Fixed** | `width={N}` | Always N columns. Used for compact, scannable panels (project list). |
+| **Flex** | `flexGrow={1}` | Expands to fill remaining space. Used for content-heavy panels (detail, activity). |
+
+When multiple flex panels share a row, they split the extra space equally.
+
+### Dashboard Layout (default view)
+
+**Narrow terminal (80-100 cols)** — 2 rows, 3 panels:
+
+```
+┌───────────────────────────┐┌───────────────────────────────────────────────┐
+│ [1] Projects  (fixed 34)  ││ [2] Detail                        (flexGrow) │
+└───────────────────────────┘└───────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ [3] Activity                                                    (flexGrow)  │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Wide terminal (120+ cols)** — 2 rows, 4 panels:
+
+```
+┌───────────────────────────┐┌──────────────────────────────────────────────────────────┐
+│ [1] Projects  (fixed 34)  ││ [2] Detail                                   (flexGrow)  │
+└───────────────────────────┘└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────┐┌──────────────────────────────────────────┐
+│ [3] Activity                 (flexGrow)  ││ [4] Metrics Chart            (flexGrow)  │
+└──────────────────────────────────────────┘└──────────────────────────────────────────┘
+```
+
+The `[4] Metrics Chart` panel appears automatically when terminal width exceeds ~120 cols. It provides 30-point sparkline history charts for CPU, MEM, and NET — filling what would otherwise be dead whitespace.
+
+### Project Detail Layout
+
+```
+┌─────────────────────┐┌─────────────────────┐┌─────────────────────┐
+│ Tasks    (flexGrow)  ││ Git History (fixed)  ││ PRD/Docs (flexGrow) │
+└─────────────────────┘└─────────────────────┘└─────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│ Task Detail                                           (flexGrow)   │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Implementation
+
+The `Panel` component accepts an optional `flexGrow` prop:
+
+```typescript
+function Panel({ title, children, width, flexGrow }: {
+  title: string;
+  children: React.ReactNode;
+  width?: number | string;  // fixed sizing
+  flexGrow?: number;        // flex sizing (1 = fill available space)
+}) {
+  return (
+    <Box flexDirection="column" borderStyle="round"
+      width={width} flexGrow={flexGrow} paddingX={1}>
+      {/* ... */}
+    </Box>
+  );
+}
+```
+
+Rule: A panel uses **either** `width` or `flexGrow`, never both. If neither is set, it sizes to content.
+
 ## Data Capture Scope
 
 ### What IS captured (structured data)
@@ -314,6 +390,29 @@ Single-line status bar combining system metrics and mini mascot. Position: botto
 - **Spinner**: Braille rotation indicating active polling
 
 Refresh: 1s (shared timer with data polling).
+
+### Metrics Chart Panel (Dashboard [4])
+
+Visible on wide terminals (120+ cols). Shows 30-point sparkline history for each metric, updated every poll tick.
+
+```
+╭─ Metrics ──── 4 ─────────────────────────╮
+│                                           │
+│  CPU  ▁▂▃▅▇▅▃▂▁▂▃▄▅▆▇▆▅▃▂▁▂▃▅▇▅▃▂▁  23% │
+│  MEM  ▅▅▅▅▅▅▅▅▅▅▅▅▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆  52% │
+│  NET  ▁▁▁▂▅▇▃▁▁▁▁▂▃▇▅▂▁▁▁▁▃▅▇▃▁▁▁▁▂▃  ↓45K │
+│                                           │
+╰───────────────────────────────────────────╯
+```
+
+**Data**:
+- Circular buffer of 30 samples per metric (30 seconds of history at 1s poll)
+- Sparkline chars: `▁▂▃▄▅▆▇█` — value mapped to 0-7 index based on min/max range
+- CPU: `os.cpus()` user+system time delta between ticks
+- MEM: `os.freemem() / os.totalmem()` percentage
+- NET: delta bytes from `netstat` (macOS) or `/proc/net/dev` (Linux)
+
+**Sizing**: `flexGrow={1}` — fills remaining horizontal space alongside Activity panel. On narrow terminals, this panel is hidden entirely.
 
 **Expandable metrics (future)**: Press `m` to open full-screen metrics panel with larger braille line charts showing CPU/MEM/NET history over time. Uses braille characters `⠀⡀⣀⣄⣤⣦⣶⣷⣿` for 2×4 sub-character resolution per cell.
 
