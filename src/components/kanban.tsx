@@ -279,12 +279,19 @@ function ByAgentLayout({
     return b.tasks.length - a.tasks.length;
   });
 
-  // Sort tasks within each agent: doing > needs_input > todo > done
+  // Sort tasks within each agent: group by project, then by status priority
   const statusPriority: Record<KanbanColumn, number> = {
     doing: 0, needs_input: 1, todo: 2, done: 3,
   };
   for (const agent of agents) {
-    agent.tasks.sort((a, b) => statusPriority[a.column] - statusPriority[b.column]);
+    agent.tasks.sort((a, b) => {
+      // Primary: group by project (same project together)
+      if (a.project.projectPath !== b.project.projectPath) {
+        return a.project.name.localeCompare(b.project.name);
+      }
+      // Secondary: status priority within project
+      return statusPriority[a.column] - statusPriority[b.column];
+    });
   }
 
   if (agents.length === 0) {
@@ -330,24 +337,46 @@ function ByAgentLayout({
         ).join("")}
       </Text>
 
-      {/* Task columns */}
+      {/* Task columns — grouped by project within each agent */}
       <Box>
-        {visibleAgents.map((agent, i) => (
-          <React.Fragment key={agent.name}>
-            {i > 0 && <Sep />}
-            <Box flexDirection="column" width={perCol}>
-              {agent.tasks.length > 0 ? (
-                agent.tasks.map((entry, ti) => (
-                  <Box key={`${entry.task.id}-${entry.project.projectPath}-${ti}`} width={perCol}>
-                    <AgentTaskCard task={entry.task} column={entry.column} />
-                  </Box>
-                ))
-              ) : (
-                <Text color={C.dim}>  —</Text>
-              )}
-            </Box>
-          </React.Fragment>
-        ))}
+        {visibleAgents.map((agent, i) => {
+          // Group tasks by project for display
+          const byProject: { project: ViewProject; entries: typeof agent.tasks }[] = [];
+          let currentPath = "";
+          for (const entry of agent.tasks) {
+            if (entry.project.projectPath !== currentPath) {
+              currentPath = entry.project.projectPath;
+              byProject.push({ project: entry.project, entries: [] });
+            }
+            byProject[byProject.length - 1].entries.push(entry);
+          }
+
+          return (
+            <React.Fragment key={agent.name}>
+              {i > 0 && <Sep />}
+              <Box flexDirection="column" width={perCol}>
+                {byProject.length > 0 ? (
+                  byProject.map((group) => (
+                    <React.Fragment key={group.project.projectPath}>
+                      {/* Project header */}
+                      <Text wrap="truncate" color={C.accent}>
+                        {"▸ "}{group.project.name}
+                      </Text>
+                      {/* Tasks for this project */}
+                      {group.entries.map((entry, ti) => (
+                        <Box key={`${entry.task.id}-${ti}`} width={perCol}>
+                          <AgentTaskCard task={entry.task} column={entry.column} />
+                        </Box>
+                      ))}
+                    </React.Fragment>
+                  ))
+                ) : (
+                  <Text color={C.dim}>  —</Text>
+                )}
+              </Box>
+            </React.Fragment>
+          );
+        })}
       </Box>
 
       {/* Overflow indicator */}
