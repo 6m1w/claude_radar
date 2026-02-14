@@ -199,6 +199,41 @@ export interface ActivityEvent {
   isError?: boolean;     // true if tool failed (PostToolUseFailure)
 }
 
+// ─── Display types (normalized from real data for UI) ────────
+
+// Normalized task for display (from TodoItem/TaskItem after store merge)
+export type DisplayTask = {
+  id: string;
+  subject: string;
+  status: "pending" | "in_progress" | "completed";
+  owner?: string;
+  blockedBy?: string;
+  description?: string;
+  gone?: boolean; // historical item preserved by store after Claude Code deletion
+  statusChangedAt?: string; // ISO timestamp for dwell time calculation
+};
+
+// View model: mirrors ProjectData shape for UI components
+export type ViewProject = {
+  name: string;
+  projectPath: string;
+  branch: string;
+  agents: string[];
+  activeSessions: number;
+  hookSessionCount: number; // active sessions from hook events
+  docs: string[];
+  tasks: DisplayTask[];
+  recentSessions: SessionHistoryEntry[];
+  goneSessionCount: number;
+  agentDetails: AgentInfo[];
+  worktreeOf?: string; // main repo path if this is a worktree
+  team?: TeamConfig;
+  gitLog: GitCommit[];
+  docContents: Record<string, string>;
+  lastActivity: Date;
+  activityLog: ActivityEvent[];
+};
+
 // ─── Hook event types (capture.sh → events.jsonl) ───────────
 
 // Raw event line from events.jsonl

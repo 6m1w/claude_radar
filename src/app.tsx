@@ -11,40 +11,9 @@ import { Panel } from "./components/panel.js";
 import { Progress } from "./components/progress.js";
 import { useWatchSessions } from "./watchers/use-watch.js";
 import { useMetrics } from "./hooks/use-metrics.js";
-import type { MergedProjectData, TaskItem, TodoItem, SessionHistoryEntry, AgentInfo, TeamConfig, GitCommit, ActivityEvent } from "./types.js";
-
-// ─── Display types (normalized from real data) ──────────────
-type DisplayTask = {
-  id: string;
-  subject: string;
-  status: "pending" | "in_progress" | "completed";
-  owner?: string;
-  blockedBy?: string;
-  description?: string;
-  gone?: boolean; // historical item preserved by store after Claude Code deletion
-  statusChangedAt?: string; // ISO timestamp for dwell time calculation
-};
-
-// View model: mirrors old MockProject shape for minimal UI changes
-type ViewProject = {
-  name: string;
-  projectPath: string;
-  branch: string;
-  agents: string[];
-  activeSessions: number;
-  hookSessionCount: number; // active sessions from hook events
-  docs: string[];
-  tasks: DisplayTask[];
-  recentSessions: SessionHistoryEntry[];
-  goneSessionCount: number;
-  agentDetails: AgentInfo[];
-  worktreeOf?: string; // main repo path if this is a worktree
-  team?: TeamConfig;
-  gitLog: GitCommit[];
-  docContents: Record<string, string>;
-  lastActivity: Date;
-  activityLog: ActivityEvent[];
-};
+import type { MergedProjectData, TaskItem, TodoItem, SessionHistoryEntry, AgentInfo, TeamConfig, GitCommit, ActivityEvent, DisplayTask, ViewProject } from "./types.js";
+import { formatDwell } from "./utils.js";
+import { KanbanView } from "./components/kanban.js";
 
 // ─── Adapter: MergedProjectData → ViewProject ───────────────
 function toViewProject(p: MergedProjectData): ViewProject {
@@ -105,20 +74,6 @@ function toViewProject(p: MergedProjectData): ViewProject {
 
 // ─── Helper functions ───────────────────────────────────────
 
-// Format dwell time: how long a task has been in current status
-function formatDwell(statusChangedAt?: string): string {
-  if (!statusChangedAt) return "";
-  const elapsed = Date.now() - new Date(statusChangedAt).getTime();
-  if (elapsed < 0) return "";
-  const mins = Math.floor(elapsed / 60_000);
-  if (mins < 1) return "<1m";
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  return `${days}d`;
-}
-
 // Format relative time with seconds-level granularity for activity feed
 function formatRelativeTime(isoDate: string): string {
   const elapsed = Date.now() - new Date(isoDate).getTime();
@@ -170,6 +125,10 @@ export function App() {
   const [bottomDocIdx, setBottomDocIdx] = useState(0);
   const [bottomScrollY, setBottomScrollY] = useState(0);
   const [bottomFocused, setBottomFocused] = useState(false);
+
+  // Kanban state
+  const [kanbanLayout, setKanbanLayout] = useState<"swimlane" | "column_first">("swimlane");
+  const [kanbanHideDone, setKanbanHideDone] = useState(false);
 
   // Convert real data → view model, sort: active first, then by task count
   // Group worktrees after their main repo
@@ -323,6 +282,8 @@ export function App() {
 
     if (focus === "kanban") {
       if (key.escape) setFocus("outer");
+      if (input === "s") setKanbanLayout((l) => l === "swimlane" ? "column_first" : "swimlane");
+      if (input === "h") setKanbanHideDone((h) => !h);
     }
   });
 
@@ -341,7 +302,12 @@ export function App() {
       : sorted.filter((p) => p.tasks.length > 0);
     return (
       <Box flexDirection="column" height={termRows} paddingBottom={1}>
-        <KanbanView projects={kanbanProjects} selectedCount={selectedNames.size} />
+        <KanbanView
+          projects={kanbanProjects}
+          selectedCount={selectedNames.size}
+          layout={kanbanLayout}
+          hideDone={kanbanHideDone}
+        />
         <StatusBar view="kanban" label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} bottomFocused={false} />
       </Box>
     );
@@ -991,141 +957,6 @@ function SessionsContent({
         <Text color={C.dim}>  ▼ {sessions.length - scrollY - contentHeight} more</Text>
       )}
     </>
-  );
-}
-
-// ─── Lazy Kanban view ───────────────────────────────────────
-function KanbanView({ projects, selectedCount }: { projects: ViewProject[]; selectedCount: number }) {
-  const labelW = 18;
-  const colW = 24;
-
-  const filterLabel = selectedCount > 0 ? ` (${selectedCount} selected)` : "";
-  return (
-    <Panel title={`KANBAN — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}`} flexGrow={1}>
-      {/* Header row */}
-      <Box>
-        <Text color={C.subtext} bold>{"PROJECTS".padEnd(labelW)}</Text>
-        <Text color={C.dim}>│ </Text>
-        <Text color={C.subtext}>{"TODO".padEnd(colW - 6)}</Text>
-        <Text color={C.dim}>{String(projects.reduce((s, p) => s + p.tasks.filter((t) => !t.gone && t.status === "pending").length, 0)).padStart(3)}  </Text>
-        <Text color={C.dim}>│ </Text>
-        <Text color={C.warning} bold>{"DOING".padEnd(colW - 6)}</Text>
-        <Text color={C.dim}>{String(projects.reduce((s, p) => s + p.tasks.filter((t) => !t.gone && t.status === "in_progress").length, 0)).padStart(3)}  </Text>
-        <Text color={C.dim}>│ </Text>
-        <Text color={C.success} bold>{"DONE".padEnd(colW - 6)}</Text>
-        <Text color={C.dim}>{String(projects.reduce((s, p) => s + p.tasks.filter((t) => !t.gone || t.status === "completed").length, 0)).padStart(3)}  </Text>
-      </Box>
-
-      {projects.map((project) => {
-        const todo = project.tasks.filter((t) => !t.gone && t.status === "pending");
-        const doing = project.tasks.filter((t) => !t.gone && t.status === "in_progress");
-        const done = [
-          ...project.tasks.filter((t) => !t.gone && t.status === "completed"),
-          ...project.tasks.filter((t) => t.gone),
-        ];
-        const maxRows = Math.max(1, todo.length, doing.length, done.length);
-
-        return (
-          <Box key={project.name} flexDirection="column">
-            {/* Separator */}
-            <Box>
-              <Text color={C.dim}>{"─".repeat(labelW)}┼{"─".repeat(colW)}┼{"─".repeat(colW)}┼{"─".repeat(colW)}</Text>
-            </Box>
-
-            {/* Project rows */}
-            {Array.from({ length: maxRows }, (_, ri) => {
-              const todoTask = todo[ri];
-              const doingTask = doing[ri];
-              const doneTask = done[ri];
-
-              // Left label
-              let leftLine1 = "";
-              let leftLine1Color = C.text;
-              if (ri === 0) { leftLine1 = project.name; leftLine1Color = project.activeSessions > 0 ? C.success : C.subtext; }
-              else if (ri === 1) { leftLine1 = `⎇ ${project.branch}`; leftLine1Color = C.accent; }
-              else if (ri === 2 && project.agents.length > 0) {
-                leftLine1 = project.activeSessions > 0 ? `${project.agents.length} agent${project.agents.length > 1 ? "s" : ""}` : "idle";
-                leftLine1Color = C.dim;
-              }
-
-              return (
-                <Box key={ri}>
-                  <Text color={leftLine1Color} bold={ri === 0}>
-                    {leftLine1.padEnd(labelW).slice(0, labelW)}
-                  </Text>
-                  <Text color={C.dim}>│ </Text>
-                  <KanbanCard task={todoTask} width={colW} status="pending" />
-                  <Text color={C.dim}>│ </Text>
-                  <KanbanCard task={doingTask} width={colW} status="in_progress" />
-                  <Text color={C.dim}>│ </Text>
-                  <KanbanCard task={doneTask} width={colW} status="completed" />
-                </Box>
-              );
-            })}
-          </Box>
-        );
-      })}
-    </Panel>
-  );
-}
-
-function KanbanCard({
-  task,
-  width,
-  status,
-}: {
-  task?: DisplayTask;
-  width: number;
-  status: "pending" | "in_progress" | "completed";
-}) {
-  if (!task) {
-    return <Text color={C.dim}>{" ".repeat(width)}</Text>;
-  }
-
-  const isGone = !!task.gone;
-
-  // Colored left accent border — gone items always dim
-  const accentColor = isGone ? C.dim
-    : task.blockedBy ? C.error
-    : status === "completed" ? C.success
-    : status === "in_progress" ? C.warning
-    : C.dim;
-
-  const textColor = isGone || status === "completed" ? C.dim : C.text;
-  const label = `#${task.id} ${task.subject}`.slice(0, width - 4);
-
-  // Build metadata line: owner + dependency info
-  const metaParts: string[] = [];
-  if (!isGone && task.owner) metaParts.push(task.owner);
-  if (!isGone && task.blockedBy) metaParts.push(`⊘#${task.blockedBy}`);
-  const metaLine = metaParts.length > 0 ? `└ ${metaParts.join(" ")}` : "";
-
-  if (metaLine) {
-    // Two-line card: task + metadata
-    return (
-      <Box flexDirection="column" width={width}>
-        <Box>
-          <Text color={accentColor}>┃ </Text>
-          <Text color={textColor} bold={status === "in_progress"} dimColor={isGone} strikethrough={isGone || status === "completed"}>
-            {label.padEnd(width - 3).slice(0, width - 3)}
-          </Text>
-        </Box>
-        <Box>
-          <Text color={accentColor}>┃ </Text>
-          <Text color={task.blockedBy ? C.error : C.dim}>{metaLine.padEnd(width - 3).slice(0, width - 3)}</Text>
-        </Box>
-      </Box>
-    );
-  }
-
-  // Single-line card
-  return (
-    <Box width={width}>
-      <Text color={accentColor}>┃ </Text>
-      <Text color={textColor} bold={!isGone && status === "in_progress"} dimColor={isGone} strikethrough={isGone || status === "completed"}>
-        {label.padEnd(width - 3).slice(0, width - 3)}
-      </Text>
-    </Box>
   );
 }
 
