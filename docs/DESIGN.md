@@ -25,34 +25,32 @@ All-projects-at-a-glance. The "home screen".
 │                                      ││                                      │
 │  4 projects  7 agents  23 tasks      ││  ◍ monitor/main    #4 Design UI      │
 │  [===============>........] 65%      ││  ◍ outclaws/str-a  #2 Dashboard      │
-│                       ○              ││  ◍ outclaws/str-b  #2 Migrations     │
-│                      /|＼    ⌨       ││                                      │
-│                      / ＼            ││                                      │
+│                                      ││  ◍ outclaws/str-b  #2 Migrations     │
 ╰──────────────────────────────────────╯╰──────────────────────────────────────╯
 ╭─ PROJECTS ───────────────────────────────────────────────────────────────────╮
 │                                                                              │
-│  ● claude_monitor   ⎇ main   [============>........] 3/5   ◍ 1 agent  2m   │
-│  ● outclaws         ⎇ main   [========>............] 4/10  ◍ 3 agents 5m   │
-│  ✓ sound_effects    ⎇ main   [=====================] 3/3   ○ 1 agent  1h   │
-│  ○ keyboard         ⎇ main   [===============>....] 7/8    ○ 1 agent  20d  │
+│  ▸ ☑ ● claude_monitor   ⎇ main  [============>........] 3/5  ◍ 1 agent  2m │
+│    ☐ ● outclaws         ⎇ main  [========>............] 4/10 ◍ 3 agents 5m │
+│    ☑ ✓ sound_effects    ⎇ main  [=====================] 3/3  ○ 1 agent  1h │
+│    ☐ ○ keyboard         ⎇ main  [===============>....] 7/8  ○ 1 agent 20d │
 │                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ ACTIVITY ───────────────────────────────────────────────────────────────────╮
-│  10:08  monitor   ▶ #4 Design hacker UI theme                                │
-│  10:05  outclaws  ▶ #2 User dashboard                                        │
-│  10:03  monitor   ✓ #3 Polling watcher                                       │
+│  10:08  monitor    › #4 Design hacker UI theme                               │
+│  10:05  outclaws   › #2 User dashboard                                       │
+│  10:03  monitor    ✓ #3 Polling watcher                                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- ☻⌨ · │ CPU ▁▃▅▇▅▃▁▃ 23% │ MEM ██████░░ 4.2/8G │ ↑ 1.2 KB/s ↓ 45.3 KB/s │ ⠋ polling
- ↑↓ nav  Enter select  Tab switch  1-3 panel  h hide done  t theme  q quit
+ ☻⌨ · │ CPU ▁▃▅▇▅▃▁▃ 23% │ MEM ██████░░ 4.2/8G │ ↑1.2 ↓45.3 KB/s │ ⠋
+ GLOBAL │ ↑↓ nav  Enter detail  Space select  Tab kanban  h hide  t theme  q quit
 ```
 
 Key features:
 - **OVERVIEW** panel: aggregate stats + overall progress bar
 - **ACTIVE NOW** panel: currently running agent+task pairs (the most important info)
-- **PROJECTS** panel: one line per project with inline progress bar
+- **PROJECTS** panel: one line per project with `▸` cursor, `☑`/`☐` selection, inline progress bar
 - **ACTIVITY** panel: recent events timeline
-
-Navigation: `j/k` moves cursor in PROJECTS, `Enter` drills into Project Detail view.
+- **Status bar**: mini mascot + CPU sparkline + MEM bar + network rates + spinner
+- `Enter` = drill into cursor project Detail; `Space` = toggle ☑; `Tab` = open Kanban for ☑ projects
 
 ### View 2: Project Detail
 
@@ -153,17 +151,62 @@ Key features:
 - DONE column requires local persistence (tasks vanish from Claude Code after completion)
 - Only shows projects with `status != "done"` by default (toggle with `h`)
 
-Access: `Tab` from Dashboard, or `f` to filter which projects appear.
+Access: `Tab` from Dashboard. Shows projects selected with `Space`; if none selected, shows all active.
 
-### View Navigation Map
+### View Navigation
 
 ```
-  Dashboard ──Enter──▸ Project Detail
-     │                    │
-     │                    Esc
-     │                    │
-     Tab ◂────────────▸ Focus/Kanban
+                    ┌─────────────────┐
+               Enter│                 │Esc
+                    ▼                 │
+┌───────────┐     ┌─────────────────┐
+│ Dashboard │     │ Project Detail  │
+│  (home)   │     │  (single)      │
+└───────────┘     └─────────────────┘
+      │
+      │ Tab
+      ▼
+┌─────────────────┐
+│ Focus / Kanban  │
+│  (multi)        │──── Esc ──▸ back to Dashboard
+└─────────────────┘
 ```
+
+**Dashboard actions:**
+
+| Key | Action | Notes |
+|-----|--------|-------|
+| `↑` `↓` (or `j` `k`) | Move cursor | `▸` indicates current row |
+| `Enter` | Drill into cursor project | Opens Project Detail for that project (ignores ☑) |
+| `Space` | Toggle ☑ selection | Marks project for Kanban view |
+| `Tab` | Open Focus/Kanban | Shows ☑ projects; if none ☑, shows all active |
+| `Esc` | — | No-op on Dashboard (already home) |
+
+**Project Detail actions:**
+
+| Key | Action |
+|-----|--------|
+| `↑` `↓` | Navigate tasks |
+| `1` `2` `3` | Focus panel (Tasks / Git History / Docs) |
+| `Esc` | Back to Dashboard |
+
+**Focus/Kanban actions:**
+
+| Key | Action |
+|-----|--------|
+| `s` | Toggle layout: By Agent ↔ Swimlane Table |
+| `h` | Hide/show completed projects |
+| `Esc` | Back to Dashboard |
+
+**Global keys (work in all views):**
+
+| Key | Action |
+|-----|--------|
+| `t` | Cycle theme |
+| `/` | Search filter |
+| `q` | Quit |
+
+Key principle: **`Enter` and `Space` are independent**. `Enter` always acts on the cursor position (drill into one project). `Space` toggles selection marks (for Kanban). The two don't interfere.
 
 ## Data Capture Scope
 
@@ -404,28 +447,11 @@ Icons: ◆ ◈ ◇ ✦ ✧
 - Runtime toggle: `t` key cycles themes
 - CLI flag: `claude-monitor --theme retro`
 
-## Keyboard Map (Full)
+## Keyboard Map
 
-```
-Global:
-  q           Quit
-  Tab         Cycle views: Dashboard → Focus → Dashboard
-  t           Cycle theme
-  /           Search filter (fuzzy match project/task names)
-  h           Hide/show completed projects
-  ?           Show help overlay
+See **View Navigation** section above for the full key reference per view.
 
-Navigation:
-  j / ↓       Move cursor down
-  k / ↑       Move cursor up
-  Enter       Drill in (Dashboard → Project Detail, or expand task)
-  Esc         Back / close overlay
-  1-3         Jump to panel (when view has numbered panels)
-
-Focus view:
-  f           Filter: choose which projects to show
-  Space       Toggle project selection (multi-select in filter mode)
-```
+Summary: `↑↓` navigate, `Enter` drill into project, `Space` toggle ☑ selection, `Tab` open Kanban (shows ☑ projects), `Esc` back, `s` toggle kanban layout, `t` theme, `h` hide done, `q` quit.
 
 ## Data Flow
 

@@ -90,7 +90,7 @@ const STATUS = {
 
 const TASK_STATUS = {
   done: { icon: "✓", color: C.green },
-  active: { icon: "▶", color: C.yellow },
+  active: { icon: "›", color: C.yellow },
   pending: { icon: "○", color: C.dim },
   blocked: { icon: "⊘", color: C.red },
 } as const;
@@ -250,7 +250,7 @@ function ProjectDetail({ project, panelFocused }: { project: MockProject; panelF
                 const ts = TASK_STATUS[t.status];
                 return (
                   <Box key={t.id}>
-                    <Text color={ts.color}>  {ts.icon} </Text>
+                    <Text color={ts.color}>{`  ${ts.icon} `.padEnd(5)}</Text>
                     <Text
                       color={t.status === "done" ? C.dim : C.text}
                       strikethrough={t.status === "done"}
@@ -271,8 +271,8 @@ function ProjectDetail({ project, panelFocused }: { project: MockProject; panelF
 // ─── Global View: Activity Log ───────────────────────────────
 function ActivityLog({ panelFocused }: { panelFocused: boolean }) {
   const logs = [
-    { time: "10:08", project: "monitor", action: "▶", task: "#4 Design hacker UI", color: C.yellow },
-    { time: "10:05", project: "outclaws", action: "▶", task: "#2 User dashboard", color: C.yellow },
+    { time: "10:08", project: "monitor", action: "›", task: "#4 Design hacker UI", color: C.yellow },
+    { time: "10:05", project: "outclaws", action: "›", task: "#2 User dashboard", color: C.yellow },
     { time: "10:03", project: "monitor", action: "✓", task: "#3 Polling watcher", color: C.green },
     { time: "09:58", project: "outclaws", action: "✓", task: "#1 Auth module", color: C.green },
     { time: "09:45", project: "sound_fx", action: "✓", task: "#3 Opencode plugin", color: C.green },
@@ -283,9 +283,9 @@ function ActivityLog({ panelFocused }: { panelFocused: boolean }) {
       <Box flexDirection="column" marginTop={1}>
         {logs.map((log, i) => (
           <Box key={i}>
-            <Text color={C.dim}>{log.time} </Text>
-            <Text color={C.subtext}>{log.project.padEnd(10)} </Text>
-            <Text color={log.color}>{log.action} </Text>
+            <Text color={C.dim}>{log.time}  </Text>
+            <Text color={C.subtext}>{log.project.padEnd(10)}</Text>
+            <Text color={log.color}> {log.action} </Text>
             <Text color={C.text}>{log.task}</Text>
           </Box>
         ))}
@@ -345,13 +345,11 @@ function SystemMetrics({ tick, mascotStatus }: { tick: number; mascotStatus: "id
         <Text color={C.dim}>{"░".repeat(8 - memFilled)}</Text>
         <Text color={C.text}> {memUsed.toFixed(1)}/{memTotal}G</Text>
         <Text color={C.dim}> │ </Text>
-        <Text color={C.green}>↑</Text><Text color={C.text}> {netUp}</Text>
-        <Text color={C.subtext}> KB/s </Text>
-        <Text color={C.cyan}>↓</Text><Text color={C.text}> {netDown}</Text>
+        <Text color={C.green}>↑</Text><Text color={C.text}>{netUp} </Text>
+        <Text color={C.cyan}>↓</Text><Text color={C.text}>{netDown}</Text>
         <Text color={C.subtext}> KB/s</Text>
         <Text color={C.dim}> │ </Text>
         <Text color={C.green}>{spinner}</Text>
-        <Text color={C.dim}> polling</Text>
       </Text>
     </Box>
   );
@@ -395,7 +393,7 @@ function KanbanBoard({ project }: { project: MockProject }) {
                   const ts = TASK_STATUS[t.status];
                   return (
                     <Box key={t.id}>
-                      <Text color={ts.color}>{ts.icon} </Text>
+                      <Text color={ts.color}>{`${ts.icon} `.padEnd(3)}</Text>
                       <Text
                         color={t.status === "done" ? C.dim : C.text}
                         strikethrough={t.status === "done"}
@@ -433,17 +431,15 @@ function FocusView() {
 function BottomBar({ page }: { page: string }) {
   return (
     <Box>
-      <Text>
-        <Text color={C.cyan} bold> {page === "global" ? "GLOBAL" : "FOCUS"} </Text>
-        <Text color={C.dim}> │ </Text>
-        <Text color={C.green}>↑↓</Text><Text color={C.subtext}> nav </Text>
-        <Text color={C.green}>Enter</Text><Text color={C.subtext}> select </Text>
-        <Text color={C.green}>Tab</Text><Text color={C.subtext}> view </Text>
-        <Text color={C.green}>1-3</Text><Text color={C.subtext}> panel </Text>
-        <Text color={C.green}>h</Text><Text color={C.subtext}> hide </Text>
-        <Text color={C.green}>t</Text><Text color={C.subtext}> theme </Text>
-        <Text color={C.green}>q</Text><Text color={C.subtext}> quit</Text>
-      </Text>
+      <Text color={C.cyan} bold>{` ${page === "global" ? "GLOBAL" : "FOCUS"} `}</Text>
+      <Text color={C.dim}> │ </Text>
+      <Text color={C.green}>↑↓</Text><Text color={C.subtext}> nav  </Text>
+      <Text color={C.green}>Enter</Text><Text color={C.subtext}> detail  </Text>
+      <Text color={C.green}>Space</Text><Text color={C.subtext}> select  </Text>
+      <Text color={C.green}>Tab</Text><Text color={C.subtext}> kanban  </Text>
+      <Text color={C.green}>h</Text><Text color={C.subtext}> hide  </Text>
+      <Text color={C.green}>t</Text><Text color={C.subtext}> theme  </Text>
+      <Text color={C.green}>q</Text><Text color={C.subtext}> quit</Text>
     </Box>
   );
 }
