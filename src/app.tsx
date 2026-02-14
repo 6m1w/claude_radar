@@ -1,18 +1,25 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { Box, Text, useInput, useApp } from "ink";
 import { useWatchSessions } from "./watchers/use-watch.js";
-import { useMetrics } from "./hooks/use-metrics.js";
+import { useMetrics, type SystemMetrics } from "./hooks/use-metrics.js";
 import { Panel } from "./components/panel.js";
 import { Progress } from "./components/progress.js";
 import { C, I } from "./theme.js";
 import { formatTimeAgo } from "./utils.js";
-import type { ProjectData } from "./types.js";
+import type { ProjectData, TodoItem, TaskItem } from "./types.js";
+
+// ─── View state machine ─────────────────────────────────────
+type ViewState =
+  | { view: "dashboard" }
+  | { view: "detail"; projectPath: string };
 
 export function App() {
   const { projects, lastUpdate } = useWatchSessions();
   const metrics = useMetrics();
   const { exit } = useApp();
+  const [viewState, setViewState] = useState<ViewState>({ view: "dashboard" });
   const [cursorIdx, setCursorIdx] = useState(0);
+  const [taskCursorIdx, setTaskCursorIdx] = useState(0);
   const [tick, setTick] = useState(0);
 
   // Tick for spinner animation
@@ -21,22 +28,48 @@ export function App() {
     return () => clearInterval(t);
   }, []);
 
-  // Keyboard: q to quit, j/k or arrows to navigate
+  // Find the detail project by path (stays current as data refreshes)
+  const detailProject = viewState.view === "detail"
+    ? projects.find((p) => p.projectPath === viewState.projectPath)
+    : undefined;
+
+  // Keep cursors in bounds
+  const safeCursor = Math.min(cursorIdx, Math.max(0, projects.length - 1));
+  const currentProject = projects[safeCursor];
+  const detailItems = detailProject?.sessions.flatMap((s) => s.items) ?? [];
+  const safeTaskCursor = Math.min(taskCursorIdx, Math.max(0, detailItems.length - 1));
+
+  // Keyboard input
   useInput((input, key) => {
     if (input === "q") exit();
-    if ((input === "k" || key.upArrow) && cursorIdx > 0) {
-      setCursorIdx((i) => i - 1);
+
+    if (viewState.view === "dashboard") {
+      if ((input === "k" || key.upArrow) && cursorIdx > 0) {
+        setCursorIdx((i) => i - 1);
+      }
+      if ((input === "j" || key.downArrow) && cursorIdx < projects.length - 1) {
+        setCursorIdx((i) => i + 1);
+      }
+      if (key.return && currentProject) {
+        setViewState({ view: "detail", projectPath: currentProject.projectPath });
+        setTaskCursorIdx(0);
+      }
     }
-    if ((input === "j" || key.downArrow) && cursorIdx < projects.length - 1) {
-      setCursorIdx((i) => i + 1);
+
+    if (viewState.view === "detail") {
+      if (key.escape) {
+        setViewState({ view: "dashboard" });
+      }
+      if ((input === "k" || key.upArrow) && taskCursorIdx > 0) {
+        setTaskCursorIdx((i) => i - 1);
+      }
+      if ((input === "j" || key.downArrow) && taskCursorIdx < detailItems.length - 1) {
+        setTaskCursorIdx((i) => i + 1);
+      }
     }
   });
 
-  // Keep cursor in bounds when project list changes
-  const safeCursor = Math.min(cursorIdx, Math.max(0, projects.length - 1));
-  const currentProject = projects[safeCursor];
-
-  // Aggregate stats
+  // Aggregate stats for Dashboard
   const totalProjects = projects.length;
   const totalTasks = projects.reduce((s, p) => s + p.totalTasks, 0);
   const totalCompleted = projects.reduce((s, p) => s + p.completedTasks, 0);
@@ -60,32 +93,45 @@ export function App() {
     }
   }
 
+  const viewLabel = viewState.view === "dashboard" ? "DASHBOARD" : "DETAIL";
+
   return (
     <Box flexDirection="column">
-      {/* Row 1: Overview + Active Now */}
-      <Box>
-        <OverviewPanel
-          totalProjects={totalProjects}
-          totalAgents={totalAgents}
-          totalTasks={totalTasks}
-          totalCompleted={totalCompleted}
+      {viewState.view === "dashboard" ? (
+        <>
+          {/* Row 1: Overview + Active Now */}
+          <Box>
+            <OverviewPanel
+              totalProjects={totalProjects}
+              totalAgents={totalAgents}
+              totalTasks={totalTasks}
+              totalCompleted={totalCompleted}
+            />
+            <ActiveNowPanel activePairs={activePairs} />
+          </Box>
+
+          {/* Row 2: Projects list + Detail preview */}
+          <Box>
+            <ProjectList projects={projects} cursorIdx={safeCursor} />
+            <DetailPreview project={currentProject} />
+          </Box>
+
+          {/* Row 3: Activity log */}
+          <ActivityPanel projects={projects} />
+        </>
+      ) : (
+        /* Project Detail view */
+        <ProjectDetailView
+          project={detailProject}
+          items={detailItems}
+          taskCursorIdx={safeTaskCursor}
         />
-        <ActiveNowPanel activePairs={activePairs} />
-      </Box>
+      )}
 
-      {/* Row 2: Projects list + Detail panel */}
-      <Box>
-        <ProjectList projects={projects} cursorIdx={safeCursor} />
-        <DetailPanel project={currentProject} />
-      </Box>
-
-      {/* Row 3: Activity log */}
-      <ActivityPanel projects={projects} />
-
-      {/* Status bar */}
+      {/* Status bar (shared across views) */}
       <StatusBar
-        lastUpdate={lastUpdate}
-        projectCount={totalProjects}
+        viewLabel={viewLabel}
+        isDashboard={viewState.view === "dashboard"}
         metrics={metrics}
         hasActive={activePairs.length > 0}
         allDone={totalTasks > 0 && totalCompleted === totalTasks}
@@ -95,7 +141,7 @@ export function App() {
   );
 }
 
-// ─── Overview panel (aggregate stats) ────────────────────────
+// ─── Overview panel ──────────────────────────────────────────
 function OverviewPanel({
   totalProjects,
   totalAgents,
@@ -122,7 +168,7 @@ function OverviewPanel({
   );
 }
 
-// ─── Active Now panel (in-progress agent+task pairs) ─────────
+// ─── Active Now panel ────────────────────────────────────────
 function ActiveNowPanel({
   activePairs,
 }: {
@@ -196,8 +242,8 @@ function ProjectList({
   );
 }
 
-// ─── Detail panel (tasks of selected project) ───────────────
-function DetailPanel({ project }: { project?: ProjectData }) {
+// ─── Detail preview (Dashboard right panel) ──────────────────
+function DetailPreview({ project }: { project?: ProjectData }) {
   if (!project) {
     return (
       <Panel title="DETAIL" hotkey="2" flexGrow={1}>
@@ -214,44 +260,175 @@ function DetailPanel({ project }: { project?: ProjectData }) {
 
   return (
     <Panel title={project.projectName.toUpperCase()} hotkey="2" flexGrow={1}>
-      {/* Header: branch + agents + progress */}
       <Box>
         {branch && <Text color={C.accent}>{branch} </Text>}
         {agentLabel && <Text color={C.dim}>{agentLabel} </Text>}
         <Progress done={project.completedTasks} total={project.totalTasks} width={12} />
       </Box>
       <Text> </Text>
-
-      {/* Task list */}
-      {allItems.map((item, i) => {
-        const isTask = "subject" in item;
-        const label = isTask ? `#${item.id} ${item.subject}` : item.content;
-        const icon = item.status === "completed" ? I.done
-          : item.status === "in_progress" ? I.working
-          : I.idle;
-        const iconColor = item.status === "completed" ? C.success
-          : item.status === "in_progress" ? C.warning
-          : C.dim;
-        const owner = isTask && item.owner ? ` (${item.owner})` : "";
-
-        return (
-          <Box key={i}>
-            <Text color={iconColor}>{` ${icon} `.padEnd(4)}</Text>
-            <Text
-              color={item.status === "completed" ? C.dim : C.text}
-              strikethrough={item.status === "completed"}
-            >
-              {label}
-            </Text>
-            {owner && <Text color={C.accent}>{owner}</Text>}
-          </Box>
-        );
-      })}
+      {allItems.slice(0, 8).map((item, i) => (
+        <TaskRow key={i} item={item} />
+      ))}
+      {allItems.length > 8 && (
+        <Text color={C.dim}>  ... +{allItems.length - 8} more</Text>
+      )}
     </Panel>
   );
 }
 
-// ─── Activity panel (recent task events across all projects) ─
+// ─── Shared task row ─────────────────────────────────────────
+function TaskRow({ item, isCursor }: { item: TodoItem | TaskItem; isCursor?: boolean }) {
+  const isTask = "subject" in item;
+  const label = isTask ? `#${item.id} ${item.subject}` : item.content;
+  const icon = item.status === "completed" ? I.done
+    : item.status === "in_progress" ? I.working
+    : I.idle;
+  const iconColor = item.status === "completed" ? C.success
+    : item.status === "in_progress" ? C.warning
+    : C.dim;
+  const owner = isTask && item.owner ? ` (${item.owner})` : "";
+
+  return (
+    <Box>
+      <Text color={isCursor ? C.primary : C.dim}>
+        {isCursor ? I.cursor : " "}
+      </Text>
+      <Text color={iconColor}>{` ${icon} `.padEnd(4)}</Text>
+      <Text
+        color={item.status === "completed" ? C.dim : isCursor ? C.text : C.subtext}
+        bold={isCursor}
+        strikethrough={item.status === "completed"}
+      >
+        {label}
+      </Text>
+      {owner && <Text color={C.accent}>{owner}</Text>}
+    </Box>
+  );
+}
+
+// ─── Project Detail View (full screen) ───────────────────────
+function ProjectDetailView({
+  project,
+  items,
+  taskCursorIdx,
+}: {
+  project?: ProjectData;
+  items: (TodoItem | TaskItem)[];
+  taskCursorIdx: number;
+}) {
+  if (!project) {
+    return (
+      <Panel title="PROJECT" flexGrow={1}>
+        <Text color={C.dim}>Project not found (may have been removed)</Text>
+      </Panel>
+    );
+  }
+
+  const selectedItem = items[taskCursorIdx];
+  const branch = project.gitBranch ? `⎇ ${project.gitBranch}` : "";
+  const agentLabel = `${project.agents.length} agent${project.agents.length > 1 ? "s" : ""}`;
+
+  return (
+    <>
+      {/* Top row: Task list + Task detail */}
+      <Box>
+        <Panel title={`${project.projectName.toUpperCase()} — Tasks`} width={40}>
+          <Box>
+            {branch && <Text color={C.accent}>{branch} </Text>}
+            <Text color={C.dim}>{agentLabel} </Text>
+            <Progress done={project.completedTasks} total={project.totalTasks} width={10} />
+          </Box>
+          <Text> </Text>
+          {items.map((item, i) => (
+            <TaskRow key={i} item={item} isCursor={i === taskCursorIdx} />
+          ))}
+        </Panel>
+
+        <Panel title="TASK DETAIL" flexGrow={1}>
+          {selectedItem ? (
+            <TaskDetailContent item={selectedItem} />
+          ) : (
+            <Text color={C.dim}>No tasks</Text>
+          )}
+        </Panel>
+      </Box>
+    </>
+  );
+}
+
+// ─── Task detail content ─────────────────────────────────────
+function TaskDetailContent({ item }: { item: TodoItem | TaskItem }) {
+  const isTask = "subject" in item;
+
+  if (!isTask) {
+    // TodoItem — minimal info
+    return (
+      <Box flexDirection="column">
+        <Text color={C.text} bold>{item.content}</Text>
+        <Text> </Text>
+        <Box>
+          <Text color={C.subtext}>Status: </Text>
+          <Text color={item.status === "completed" ? C.success : item.status === "in_progress" ? C.warning : C.dim}>
+            {item.status}
+          </Text>
+        </Box>
+        {item.activeForm && (
+          <Box>
+            <Text color={C.subtext}>Active: </Text>
+            <Text color={C.text}>{item.activeForm}</Text>
+          </Box>
+        )}
+      </Box>
+    );
+  }
+
+  // TaskItem — full detail
+  return (
+    <Box flexDirection="column">
+      <Text color={C.text} bold>#{item.id} {item.subject}</Text>
+      <Text> </Text>
+
+      <Box>
+        <Text color={C.subtext}>Status: </Text>
+        <Text color={item.status === "completed" ? C.success : item.status === "in_progress" ? C.warning : C.dim}>
+          {item.status}
+        </Text>
+      </Box>
+      {item.owner && (
+        <Box>
+          <Text color={C.subtext}>Owner:  </Text>
+          <Text color={C.accent}>{item.owner}</Text>
+        </Box>
+      )}
+      {item.activeForm && (
+        <Box>
+          <Text color={C.subtext}>Active: </Text>
+          <Text color={C.warning}>{item.activeForm}</Text>
+        </Box>
+      )}
+      {item.blockedBy.length > 0 && (
+        <Box>
+          <Text color={C.subtext}>Blocked by: </Text>
+          <Text color={C.error}>{item.blockedBy.join(", ")}</Text>
+        </Box>
+      )}
+      {item.blocks.length > 0 && (
+        <Box>
+          <Text color={C.subtext}>Blocks: </Text>
+          <Text color={C.warning}>{item.blocks.join(", ")}</Text>
+        </Box>
+      )}
+      {item.description && (
+        <>
+          <Text> </Text>
+          <Text color={C.subtext}>{item.description.slice(0, 200)}</Text>
+        </>
+      )}
+    </Box>
+  );
+}
+
+// ─── Activity panel ──────────────────────────────────────────
 function ActivityPanel({ projects }: { projects: ProjectData[] }) {
   type ActivityEntry = {
     projectName: string;
@@ -275,7 +452,6 @@ function ActivityPanel({ projects }: { projects: ProjectData[] }) {
     }
   }
 
-  // Sort by time, show most recent 5
   entries.sort((a, b) => b.time.getTime() - a.time.getTime());
   const recent = entries.slice(0, 5);
 
@@ -312,8 +488,6 @@ function ActivityPanel({ projects }: { projects: ProjectData[] }) {
 }
 
 // ─── Status bar with metrics, mascot, spinner ───────────────
-import type { SystemMetrics } from "./hooks/use-metrics.js";
-
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const SPARK = "▁▂▃▄▅▆▇█";
 const MASCOT = {
@@ -332,37 +506,28 @@ function sparkline(values: number[], max = 100): string {
 }
 
 function StatusBar({
-  lastUpdate,
-  projectCount,
+  viewLabel,
+  isDashboard,
   metrics,
   hasActive,
   allDone,
   tick,
 }: {
-  lastUpdate: Date | null;
-  projectCount: number;
+  viewLabel: string;
+  isDashboard: boolean;
   metrics: SystemMetrics;
   hasActive: boolean;
   allDone: boolean;
   tick: number;
 }) {
-  // Mascot state
   const mascotState = allDone ? "done" : hasActive ? "working" : "idle";
   const mascotFrames = MASCOT[mascotState];
   const mascotFrame = mascotFrames[Math.floor(tick / 10) % mascotFrames.length];
-
-  // Spinner
   const spinnerChar = SPINNER[tick % SPINNER.length];
-
-  // CPU sparkline
   const cpuSpark = sparkline(metrics.cpuHistory);
-
-  // MEM bar (8 chars)
   const memBarLen = 8;
   const memFilled = Math.round((metrics.memPercent / 100) * memBarLen);
   const memBar = "█".repeat(memFilled) + "░".repeat(memBarLen - memFilled);
-
-  // Network
   const netUp = metrics.netUp > 1024
     ? `${(metrics.netUp / 1024).toFixed(1)}M`
     : `${metrics.netUp.toFixed(0)}K`;
@@ -392,20 +557,33 @@ function StatusBar({
         <Text color={C.primary}>{spinnerChar}</Text>
       </Box>
 
-      {/* Keyboard hints */}
+      {/* Keyboard hints (context-dependent) */}
       <Box>
-        <Text color={C.primary} bold> DASHBOARD </Text>
+        <Text color={C.primary} bold> {viewLabel} </Text>
         <Text color={C.dim}>│ </Text>
-        <Text color={C.success}>↑↓</Text>
-        <Text color={C.subtext}> nav  </Text>
-        <Text color={C.success}>Enter</Text>
-        <Text color={C.subtext}> detail  </Text>
-        <Text color={C.success}>Space</Text>
-        <Text color={C.subtext}> select  </Text>
-        <Text color={C.success}>Tab</Text>
-        <Text color={C.subtext}> kanban  </Text>
-        <Text color={C.success}>q</Text>
-        <Text color={C.subtext}> quit</Text>
+        {isDashboard ? (
+          <>
+            <Text color={C.success}>↑↓</Text>
+            <Text color={C.subtext}> nav  </Text>
+            <Text color={C.success}>Enter</Text>
+            <Text color={C.subtext}> detail  </Text>
+            <Text color={C.success}>Space</Text>
+            <Text color={C.subtext}> select  </Text>
+            <Text color={C.success}>Tab</Text>
+            <Text color={C.subtext}> kanban  </Text>
+            <Text color={C.success}>q</Text>
+            <Text color={C.subtext}> quit</Text>
+          </>
+        ) : (
+          <>
+            <Text color={C.success}>↑↓</Text>
+            <Text color={C.subtext}> nav tasks  </Text>
+            <Text color={C.success}>Esc</Text>
+            <Text color={C.subtext}> back  </Text>
+            <Text color={C.success}>q</Text>
+            <Text color={C.subtext}> quit</Text>
+          </>
+        )}
       </Box>
     </Box>
   );
