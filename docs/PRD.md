@@ -24,13 +24,15 @@
 
 ## 数据源
 
-| 来源 | 路径 | 格式 | 说明 |
+| 来源 | 路径 | 格式 | 状态 |
 |---|---|---|---|
-| TodoWrite（旧） | `~/.claude/todos/{session}-agent-{agent}.json` | JSON 数组 `[{content, status, activeForm}]` | 单 agent 场景，扁平列表 |
-| TaskCreate（新） | `~/.claude/tasks/{session}/{n}.json` | JSON 对象 `{id, subject, description, status, owner, blocks, blockedBy}` | 支持 team 模式，有依赖关系 |
-| Team Config | `~/.claude/teams/{team}/config.json` | JSON `{members: [{name, agentId, agentType}]}` | agent 成员信息 |
-| Hook Events | Claude Code hook 系统 | 事件触发 | SessionStart, Stop, Error 等 7 个生命周期事件 |
-| 进程状态 | `ps` 系统调用 | 进程信息 | agent 进程是否存活 |
+| TodoWrite（旧） | `~/.claude/todos/{session}-agent-{agent}.json` | JSON 数组 `[{content, status, activeForm}]` | ✅ 已接入 |
+| TaskCreate（新） | `~/.claude/tasks/{session}/{n}.json` | JSON 对象 `{id, subject, description, status, owner, blocks, blockedBy}` | ✅ 已接入 |
+| Session Index | `~/.claude/projects/*/sessions-index.json` | JSON `{entries: [{sessionId, projectPath, summary, gitBranch}]}` | ✅ 已接入 |
+| Session JSONL | `~/.claude/projects/*/{sessionId}.jsonl` | 会话记录 | ✅ 用于 fallback 匹配 |
+| Team Config | `~/.claude/teams/{team}/config.json` | JSON `{members: [{name, agentId, agentType}]}` | 🔜 v0.3 |
+| Hook Events | Claude Code hook 系统 | 事件触发 | 🔜 v0.4 |
+| 进程状态 | `ps` 系统调用 | 进程信息 | 🔜 v0.3 |
 
 ## 功能规划
 
@@ -38,17 +40,19 @@
 
 - [x] 扫描 `~/.claude/todos/` 和 `~/.claude/tasks/` 两套存储
 - [x] 统一数据模型展示（TodoItem + TaskItem → SessionData）
-- [x] Chokidar 文件监听，变更自动刷新
+- [x] Chokidar 文件监听，变更自动刷新（实时）
 - [x] 卡片式 session 展示（status icon + 进度统计 + 时间戳）
 - [x] Ink (React for CLI) 渲染引擎
+- [x] 项目名解析：sessions-index.json 反向索引 + jsonl fallback
+- [x] Session 摘要 / firstPrompt 显示
+- [x] Git 分支显示（非 main 分支时）
+- [x] 进度条（每个 session 的完成百分比）
 
 ### v0.2 — 实用增强
 
-- [ ] **当前 session 高亮**：自动检测最新活跃的 session，置顶并高亮显示
+- [ ] **当前 session 高亮**：自动检测最新活跃的 session，置顶并高亮边框
 - [ ] **过滤模式**：只看当前 session / 只看 in_progress / 只看最近 N 天
 - [ ] **看板视图切换**：列表视图 ↔ 三列看板视图（Pending | In Progress | Done）
-- [ ] **Session 标签**：从 task description 推断项目名，替代 UUID 显示
-- [ ] **进度条**：每个 session 显示完成百分比进度条
 
 ### v0.3 — 多 Agent 监控
 
@@ -93,8 +97,8 @@
 
 1. **无公开 Agent 状态 API** — 无法获知 agent 是在 "规划" 还是 "执行"，只能通过 task status 间接推断
 2. **Hook 事件粒度有限** — 只有 7 个生命周期事件，无法追踪每次工具调用
-3. **没有 session ID 到项目的映射** — session UUID 和具体项目没有直接关联
-4. **TodoWrite 和 TaskCreate 并存** — 两套存储格式不同，需要统一抽象
+3. ~~**没有 session ID 到项目的映射**~~ — ✅ 已解决：`sessions-index.json` + jsonl fallback
+4. **TodoWrite 和 TaskCreate 并存** — ✅ 已统一：两套格式通过 SessionData 抽象层合并展示
 
 ### 设计原则
 
