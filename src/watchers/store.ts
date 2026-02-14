@@ -28,6 +28,21 @@ export const EVENTS_PATH = join(STORE_DIR, "events.jsonl");
 
 const SCHEMA_VERSION = 1;
 
+// L2 planning tools — agent's own planning/delegation decisions
+// Separated from L3 execution activity (Read, Write, Bash, etc.)
+export const PLANNING_TOOLS = new Set([
+  "EnterPlanMode",
+  "ExitPlanMode",
+  "Task",              // subagent spawn
+  "TaskCreate",
+  "TaskList",
+  "TaskGet",
+  "TaskUpdate",
+  "TodoWrite",
+  "TeamCreate",
+  "SendMessage",
+]);
+
 // ─── Helpers ─────────────────────────────────────────────────
 
 function projectHash(projectPath: string): string {
@@ -351,6 +366,8 @@ export class Store {
     const completedTasks = allItems.filter((i) => i.status === "completed").length;
     const inProgressTasks = allItems.filter((i) => i.status === "in_progress").length;
 
+    const { planningLog, activityLog } = this.getActivitySplit(liveProject.projectPath);
+
     return {
       ...liveProject,
       sessions: [...enrichedSessions, ...goneSessions],
@@ -360,7 +377,8 @@ export class Store {
       hasHistory: goneSessions.length > 0 || goneItemCount > 0,
       goneSessionCount: goneSessions.length,
       hookSessions: this.getHookSessions(liveProject.projectPath),
-      activityLog: this.getActivityLog(liveProject.projectPath),
+      planningLog,
+      activityLog,
       activityAlerts: detectPatterns(this.getActivityLog(liveProject.projectPath)),
     };
   }
@@ -479,6 +497,21 @@ export class Store {
     return this._activityBuffers.get(projectPath) ?? [];
   }
 
+  // Split activity buffer into planning (L2) and execution (L3) streams
+  getActivitySplit(projectPath: string): { planningLog: ActivityEvent[]; activityLog: ActivityEvent[] } {
+    const all = this.getActivityLog(projectPath);
+    const planningLog: ActivityEvent[] = [];
+    const activityLog: ActivityEvent[] = [];
+    for (const event of all) {
+      if (PLANNING_TOOLS.has(event.toolName)) {
+        planningLog.push(event);
+      } else {
+        activityLog.push(event);
+      }
+    }
+    return { planningLog, activityLog };
+  }
+
   // Get all hook-tracked active sessions across all projects
   getAllHookSessions(): Map<string, HookSessionInfo[]> {
     const result = new Map<string, HookSessionInfo[]>();
@@ -491,6 +524,7 @@ export class Store {
   }
 
   private buildHookOnlyProject(projectPath: string, hookSessions: HookSessionInfo[]): MergedProjectData {
+    const { planningLog, activityLog } = this.getActivitySplit(projectPath);
     return {
       projectPath,
       projectName: basename(projectPath),
@@ -504,6 +538,7 @@ export class Store {
       totalSessions: 0,
       activeSessions: hookSessions.length,
       docs: [],
+      roadmap: [],
       gitLog: [],
       docContents: {},
       recentSessions: [],
@@ -511,7 +546,8 @@ export class Store {
       hasHistory: false,
       goneSessionCount: 0,
       hookSessions,
-      activityLog: this.getActivityLog(projectPath),
+      planningLog,
+      activityLog,
       activityAlerts: detectPatterns(this.getActivityLog(projectPath)),
     };
   }
@@ -519,6 +555,7 @@ export class Store {
   private buildHistoricalProject(store: ProjectStore): MergedProjectData {
     const sessions = Object.values(store.sessions).map(storedSessionToSessionData);
     const allItems = sessions.flatMap((s) => s.items);
+    const { planningLog, activityLog } = this.getActivitySplit(store.projectPath);
 
     return {
       projectPath: store.projectPath,
@@ -533,6 +570,7 @@ export class Store {
       totalSessions: 0,
       activeSessions: 0,
       docs: [],
+      roadmap: [],
       gitLog: [],
       docContents: {},
       recentSessions: [],
@@ -540,7 +578,8 @@ export class Store {
       hasHistory: true,
       goneSessionCount: sessions.length,
       hookSessions: this.getHookSessions(store.projectPath),
-      activityLog: this.getActivityLog(store.projectPath),
+      planningLog,
+      activityLog,
       activityAlerts: detectPatterns(this.getActivityLog(store.projectPath)),
     };
   }

@@ -68,8 +68,10 @@ function toViewProject(p: MergedProjectData): ViewProject {
     gitLog: p.gitLog,
     docContents: p.docContents,
     lastActivity: p.lastActivity,
+    planningLog: p.planningLog,
     activityLog: p.activityLog,
     activityAlerts: p.activityAlerts,
+    roadmap: p.roadmap,
   };
 }
 

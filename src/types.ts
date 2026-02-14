@@ -76,6 +76,7 @@ export interface ProjectData {
   docs: string[];          // detected doc files: "PRD.md", "CLAUDE.md", etc.
   gitLog: GitCommit[];     // recent git commits
   docContents: Record<string, string>; // filename → content
+  roadmap: RoadmapData[];  // parsed checkboxes from PRD.md etc.
   // Session history from sessions-index.json (for detail view)
   recentSessions: SessionHistoryEntry[];
   // v0.3: Team & agent enrichment
@@ -183,7 +184,8 @@ export interface MergedProjectData extends ProjectData {
   hasHistory: boolean;
   goneSessionCount: number;
   hookSessions: HookSessionInfo[]; // active sessions known from hooks (even without tasks)
-  activityLog: ActivityEvent[];     // recent tool-use activity for project detail panel
+  planningLog: ActivityEvent[];    // L2: agent planning events (EnterPlanMode, Task, TaskCreate, etc.)
+  activityLog: ActivityEvent[];     // L3: execution activity (Read, Write, Bash, etc.)
   activityAlerts: ActivityAlert[];  // pattern-detected alerts (repeated failures, etc.)
 }
 
@@ -244,9 +246,37 @@ export type ViewProject = {
   gitLog: GitCommit[];
   docContents: Record<string, string>;
   lastActivity: Date;
+  planningLog: ActivityEvent[];
   activityLog: ActivityEvent[];
   activityAlerts: ActivityAlert[];
+  roadmap: RoadmapData[];
 };
+
+// ─── Roadmap (parsed from PRD.md / doc checkboxes) ────────────
+
+// A single checkbox item from a markdown document
+export interface RoadmapItem {
+  text: string;          // raw checkbox text (after "- [x] " or "- [ ] ")
+  done: boolean;
+}
+
+// A group of checkboxes under a section heading
+export interface RoadmapSection {
+  title: string;         // heading text: "v0.4 — Activity Track"
+  level: number;         // heading depth (2 = ##, 3 = ###)
+  items: RoadmapItem[];
+  done: number;          // count of checked items
+  total: number;         // count of all items
+}
+
+// Full roadmap extracted from a document
+export interface RoadmapData {
+  source: string;        // filename: "PRD.md" or "docs/PRD.md"
+  sections: RoadmapSection[];
+  totalDone: number;
+  totalItems: number;
+  lastModified?: string; // ISO 8601 mtime of source file
+}
 
 // ─── Usage / cost tracking (parsed from session JSONL) ───────
 
