@@ -2,7 +2,8 @@ import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
-import type { TodoItem, TaskItem, SessionData, SessionMeta, ProjectData, SessionHistoryEntry, TeamConfig, TeamMember, AgentInfo, GitCommit } from "../types.js";
+import type { TodoItem, TaskItem, SessionData, SessionMeta, ProjectData, SessionHistoryEntry, TeamConfig, TeamMember, AgentInfo, GitCommit, RoadmapData } from "../types.js";
+import { parseRoadmapFile } from "./roadmap.js";
 
 const CLAUDE_DIR = join(homedir(), ".claude");
 const TODOS_DIR = join(CLAUDE_DIR, "todos");
@@ -269,7 +270,55 @@ function detectDocs(projectPath: string): string[] {
   return found;
 }
 
-// ─── Phase 3b: Read git log from project directory ───────────────
+// ─── Phase 3b: Discover all .md files + parse checkboxes ─────────
+// Recursively find .md files (depth-limited, skip junk dirs), then
+// parse each for `- [x]` / `- [ ]` checkboxes. Files without
+// checkboxes are automatically filtered out by parseRoadmapFile().
+
+const SKIP_DIRS = new Set([
+  "node_modules", ".git", "dist", "build", "out", ".next", ".nuxt",
+  "vendor", "coverage", "__pycache__", ".venv", "venv", "env",
+  ".turbo", ".cache", ".output", "target", "bin", "obj",
+]);
+const MAX_MD_DEPTH = 3;    // root=0, docs/=1, docs/api/=2, ...
+const MAX_MD_FILES = 30;   // cap to avoid scanning huge monorepos
+
+export function discoverMarkdownFiles(projectPath: string): string[] {
+  const files: string[] = [];
+
+  function walk(dir: string, depth: number, prefix: string) {
+    if (depth > MAX_MD_DEPTH || files.length >= MAX_MD_FILES) return;
+    try {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (files.length >= MAX_MD_FILES) return;
+        if (entry.isDirectory()) {
+          if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
+            walk(join(dir, entry.name), depth + 1, prefix ? `${prefix}/${entry.name}` : entry.name);
+          }
+        } else if (entry.isFile() && entry.name.endsWith(".md")) {
+          files.push(prefix ? `${prefix}/${entry.name}` : entry.name);
+        }
+      }
+    } catch {
+      // permission error or symlink loop — skip
+    }
+  }
+
+  walk(projectPath, 0, "");
+  return files;
+}
+
+function detectRoadmap(projectPath: string): RoadmapData[] {
+  const mdFiles = discoverMarkdownFiles(projectPath);
+  const results: RoadmapData[] = [];
+  for (const relPath of mdFiles) {
+    const data = parseRoadmapFile(join(projectPath, relPath), relPath);
+    if (data) results.push(data);
+  }
+  return results;
+}
+
+// ─── Phase 3c: Read git log from project directory ───────────────
 function readGitLog(projectPath: string): GitCommit[] {
   try {
     if (!existsSync(join(projectPath, ".git"))) return [];
@@ -588,6 +637,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
     // Read git info from actual project directory
     const git = readGitInfo(disc.projectPath);
     const docs = detectDocs(disc.projectPath);
+    const roadmap = detectRoadmap(disc.projectPath);
     const gitLog = readGitLog(disc.projectPath);
     const docContents = readDocContents(disc.projectPath, docs);
 
@@ -626,6 +676,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       docs,
       gitLog,
       docContents,
+      roadmap,
       recentSessions: disc.recentSessions.slice(-8),
       team: matchedTeam,
       agentDetails,
@@ -652,6 +703,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       totalSessions: 0,
       activeSessions: 0,
       docs: [],
+      roadmap: [],
       gitLog: [],
       docContents: {},
       recentSessions: [],
