@@ -24,8 +24,8 @@ type KanbanColumn = "todo" | "needs_input" | "doing" | "done";
 const ALL_COLUMNS: KanbanColumn[] = ["todo", "needs_input", "doing", "done"];
 
 const COLUMN_CONFIG: Record<KanbanColumn, { label: string; color: string; bold: boolean }> = {
-  todo: { label: "TODO", color: C.subtext, bold: false },
-  needs_input: { label: "NEEDS INPUT", color: C.error, bold: true },
+  todo: { label: "TODO", color: C.text, bold: false },
+  needs_input: { label: "Your attention!", color: C.error, bold: true },
   doing: { label: "DOING", color: C.warning, bold: true },
   done: { label: "DONE", color: C.success, bold: false },
 };
@@ -352,7 +352,7 @@ export function KanbanView({
         {layout === "swimlane" && (
           <>
             <Box width={labelW}>
-              <Text color={C.subtext} bold>PROJECTS</Text>
+              <Text color={C.primary} bold>PROJECTS</Text>
             </Box>
             <Sep />
           </>
