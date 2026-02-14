@@ -66,6 +66,9 @@ export interface ProjectData {
   docs: string[];          // detected doc files: "PRD.md", "CLAUDE.md", etc.
   // Session history from sessions-index.json (for detail view)
   recentSessions: SessionHistoryEntry[];
+  // v0.3: Team & agent enrichment
+  team?: TeamConfig;       // team config if this project has team tasks
+  agentDetails: AgentInfo[]; // enriched agent info (process state, current task)
 }
 
 // Lightweight session info from sessions-index.json
@@ -74,6 +77,33 @@ export interface SessionHistoryEntry {
   summary?: string;
   firstPrompt?: string;
   gitBranch?: string;
+}
+
+// ─── Team types (~/.claude/teams/) ───────────────────────────
+
+// Team member from config.json
+export interface TeamMember {
+  name: string;
+  agentId: string;
+  agentType: string;
+}
+
+// Team config from ~/.claude/teams/{team-name}/config.json
+export interface TeamConfig {
+  teamName: string;        // directory name
+  members: TeamMember[];
+}
+
+// Agent process state (from ps detection)
+export type AgentProcessState = "running" | "idle" | "dead";
+
+// Enriched agent info combining task owner + team member + process state
+export interface AgentInfo {
+  name: string;
+  agentType?: string;
+  processState: AgentProcessState;
+  currentTaskId?: string;  // id of in_progress task owned by this agent
+  teamName?: string;       // team this agent belongs to
 }
 
 // ─── Persistence layer types (store.ts) ──────────────────────
@@ -132,4 +162,28 @@ export interface StoreMeta {
 export interface MergedProjectData extends ProjectData {
   hasHistory: boolean;
   goneSessionCount: number;
+}
+
+// ─── Hook event types (capture.sh → events.jsonl) ───────────
+
+// Raw event line from events.jsonl
+export interface HookEvent {
+  event: "task" | "stop" | "start";
+  ts: string; // ISO 8601
+  data: HookEventData;
+}
+
+// Common fields in all hook stdin JSON
+export interface HookEventData {
+  session_id: string;
+  transcript_path?: string;
+  cwd?: string;
+  permission_mode?: string;
+  hook_event_name?: string;
+  // PostToolUse fields
+  tool_name?: string;
+  tool_input?: Record<string, unknown>;
+  tool_result?: unknown;
+  // Stop fields
+  reason?: string;
 }

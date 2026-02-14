@@ -1,12 +1,13 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { watch } from "chokidar";
 import { scanAll } from "./scanner.js";
-import { initStore, mergeAndPersist } from "./store.js";
+import { initStore, mergeAndPersist, EVENTS_PATH } from "./store.js";
 import type { SessionData, MergedProjectData } from "../types.js";
 
 const POLL_INTERVAL_MS = 3000;
 
 // React hook: poll ~/.claude/ for project and session data
-// Integrates persistence layer — merges live data with stored history
+// Dual-layer capture: Chokidar watches events.jsonl (Layer 1) + setInterval polling (Layer 2)
 export function useWatchSessions(): {
   sessions: SessionData[];
   projects: MergedProjectData[];
@@ -18,30 +19,50 @@ export function useWatchSessions(): {
   const prevSnapshotRef = useRef<string>("");
   const storeRef = useRef(initStore());
 
+  // Shared refresh logic — scan + merge + diff + setState
+  const refresh = useCallback(() => {
+    const current = scanAll();
+    const currentMerged = mergeAndPersist(current.projects, storeRef.current);
+    const key = snapshotKey(currentMerged);
+    if (key !== prevSnapshotRef.current) {
+      prevSnapshotRef.current = key;
+      setSessions(current.sessions);
+      setProjects(currentMerged);
+      setLastUpdate(new Date());
+    }
+  }, []);
+
   useEffect(() => {
     // Initial scan + merge with stored history
-    const initial = scanAll();
-    const merged = mergeAndPersist(initial.projects, storeRef.current);
-    setSessions(initial.sessions);
-    setProjects(merged);
-    setLastUpdate(new Date());
-    prevSnapshotRef.current = snapshotKey(merged);
+    refresh();
 
-    // Poll: re-scan periodically, only re-render if data actually changed
-    const timer = setInterval(() => {
-      const current = scanAll();
-      const currentMerged = mergeAndPersist(current.projects, storeRef.current);
-      const key = snapshotKey(currentMerged);
-      if (key !== prevSnapshotRef.current) {
-        prevSnapshotRef.current = key;
-        setSessions(current.sessions);
-        setProjects(currentMerged);
-        setLastUpdate(new Date());
-      }
-    }, POLL_INTERVAL_MS);
+    // Layer 1: Chokidar watches events.jsonl for hook-driven updates
+    // Triggers immediate refresh when capture.sh appends new events
+    const watcher = watch(EVENTS_PATH, {
+      persistent: true,
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 50, pollInterval: 20 },
+    });
 
-    return () => clearInterval(timer);
-  }, []);
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const onEventsChange = () => {
+      // Debounce: multiple rapid hook events → single refresh
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(refresh, 100);
+    };
+
+    watcher.on("change", onEventsChange);
+    watcher.on("add", onEventsChange);
+
+    // Layer 2: Periodic polling as fallback (filesystem scan)
+    const timer = setInterval(refresh, POLL_INTERVAL_MS);
+
+    return () => {
+      clearInterval(timer);
+      if (debounceTimer) clearTimeout(debounceTimer);
+      watcher.close();
+    };
+  }, [refresh]);
 
   return { sessions, projects, lastUpdate };
 }

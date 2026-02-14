@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, renameSync, unlinkSync, statSync, openSync, readSync, closeSync } from "node:fs";
+import { join, basename } from "node:path";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import type {
@@ -14,11 +14,14 @@ import type {
   SessionStore,
   StoredItem,
   StoreMeta,
+  HookEvent,
+  HookEventData,
 } from "../types.js";
 
 const STORE_DIR = join(homedir(), ".claude-monitor");
 const PROJECTS_DIR = join(STORE_DIR, "projects");
 const META_PATH = join(STORE_DIR, "meta.json");
+export const EVENTS_PATH = join(STORE_DIR, "events.jsonl");
 
 const SCHEMA_VERSION = 1;
 
@@ -336,6 +339,78 @@ export class Store {
     };
   }
 
+  // ─── Public helpers for hook event ingestion ───────────────
+
+  ensureProject(projectPath: string, projectName: string): void {
+    if (this.projects.has(projectPath)) return;
+    this.projects.set(projectPath, {
+      projectPath,
+      projectName,
+      updatedAt: nowISO(),
+      sessions: {},
+    });
+    this.dirty.add(projectPath);
+  }
+
+  ensureSession(projectPath: string, sessionId: string, source: "todos" | "tasks", meta?: SessionMeta): void {
+    const store = this.projects.get(projectPath);
+    if (!store) return;
+    if (store.sessions[sessionId]) return;
+
+    store.sessions[sessionId] = {
+      id: sessionId,
+      source,
+      firstSeenAt: nowISO(),
+      lastSeenAt: nowISO(),
+      gone: false,
+      meta,
+      items: [],
+    };
+    this.dirty.add(projectPath);
+  }
+
+  mergeHookItem(projectPath: string, sessionId: string, item: StoredItem): void {
+    const store = this.projects.get(projectPath);
+    if (!store) return;
+    const session = store.sessions[sessionId];
+    if (!session) return;
+
+    const key = item.id ? `task:${item.id}` : item.content ? `todo:${item.content}` : null;
+    if (!key) return;
+
+    // Find existing item by key
+    const existingIdx = session.items.findIndex((i) => storedItemKey(i) === key);
+    if (existingIdx >= 0) {
+      // Update existing — preserve _firstSeenAt, update other fields
+      const existing = session.items[existingIdx];
+      const updated = { ...existing, ...item };
+      updated._firstSeenAt = existing._firstSeenAt;
+      updated._gone = false;
+      updated._goneAt = undefined;
+      session.items[existingIdx] = updated;
+    } else {
+      // New item
+      session.items.push(item);
+    }
+
+    session.lastSeenAt = item._lastSeenAt;
+    session.gone = false;
+    session.goneAt = undefined;
+    this.dirty.add(projectPath);
+  }
+
+  markSessionStopped(sessionId: string, timestamp: string): void {
+    for (const [projectPath, store] of this.projects) {
+      const session = store.sessions[sessionId];
+      if (!session) continue;
+      // Don't mark as gone — just update lastSeenAt
+      // The polling layer will handle gone detection on the next cycle
+      session.lastSeenAt = timestamp;
+      this.dirty.add(projectPath);
+      return;
+    }
+  }
+
   private buildHistoricalProject(store: ProjectStore): MergedProjectData {
     const sessions = Object.values(store.sessions).map(storedSessionToSessionData);
     const allItems = sessions.flatMap((s) => s.items);
@@ -354,9 +429,174 @@ export class Store {
       activeSessions: 0,
       docs: [],
       recentSessions: [],
+      agentDetails: [],
       hasHistory: true,
       goneSessionCount: sessions.length,
     };
+  }
+}
+
+// ─── Event consumption (Layer 1: Hook events) ───────────────
+
+// Byte offset tracker for incremental reads
+let eventsOffset = 0;
+
+// Read new lines from events.jsonl since last offset
+export function consumeEvents(): HookEvent[] {
+  if (!existsSync(EVENTS_PATH)) return [];
+
+  try {
+    const stat = statSync(EVENTS_PATH);
+    if (stat.size <= eventsOffset) {
+      // File was truncated or no new data
+      if (stat.size < eventsOffset) eventsOffset = 0;
+      return [];
+    }
+
+    const bytesToRead = stat.size - eventsOffset;
+    const buf = Buffer.alloc(bytesToRead);
+    const fd = openSync(EVENTS_PATH, "r");
+    readSync(fd, buf, 0, bytesToRead, eventsOffset);
+    closeSync(fd);
+
+    eventsOffset = stat.size;
+
+    const lines = buf.toString("utf-8").split("\n").filter((l) => l.trim());
+    const events: HookEvent[] = [];
+    for (const line of lines) {
+      try {
+        events.push(JSON.parse(line));
+      } catch {
+        // Skip malformed lines
+      }
+    }
+    return events;
+  } catch {
+    return [];
+  }
+}
+
+// Truncate events.jsonl after successful consumption
+export function truncateEvents(): void {
+  if (!existsSync(EVENTS_PATH)) return;
+
+  try {
+    const consumed = EVENTS_PATH + ".consumed";
+    renameSync(EVENTS_PATH, consumed);
+    writeFileSync(EVENTS_PATH, "", "utf-8");
+    unlinkSync(consumed);
+    eventsOffset = 0;
+  } catch {
+    // Race condition with capture.sh — safe to ignore
+  }
+}
+
+// Reset offset (for testing)
+export function resetEventsOffset(): void {
+  eventsOffset = 0;
+}
+
+// Derive projectPath from cwd (hook events carry cwd, not projectPath)
+function cwdToProjectPath(cwd: string): string {
+  return cwd;
+}
+
+// Convert a hook event into a StoredItem to merge into the store
+function hookEventToStoredItem(data: HookEventData, now: string): StoredItem | null {
+  const input = data.tool_input;
+  if (!input) return null;
+
+  const toolName = data.tool_name;
+
+  if (toolName === "TaskCreate") {
+    return {
+      id: (input.id as string) ?? String(Date.now()),
+      subject: (input.subject as string) ?? "",
+      description: (input.description as string) ?? "",
+      activeForm: input.activeForm as string | undefined,
+      status: (input.status as StoredItem["status"]) ?? "pending",
+      owner: input.owner as string | undefined,
+      blocks: (input.blocks as string[]) ?? [],
+      blockedBy: (input.blockedBy as string[]) ?? [],
+      _firstSeenAt: now,
+      _lastSeenAt: now,
+      _gone: false,
+    };
+  }
+
+  if (toolName === "TaskUpdate") {
+    // TaskUpdate only carries changed fields — create a partial item
+    // The merge algorithm will match by id and update
+    const taskId = input.taskId as string;
+    if (!taskId) return null;
+    return {
+      id: taskId,
+      subject: input.subject as string | undefined,
+      description: input.description as string | undefined,
+      activeForm: input.activeForm as string | undefined,
+      status: (input.status as StoredItem["status"]) ?? "pending",
+      owner: input.owner as string | undefined,
+      _firstSeenAt: now,
+      _lastSeenAt: now,
+      _gone: false,
+    };
+  }
+
+  if (toolName === "TodoWrite") {
+    // TodoWrite typically writes the full todo list, extract items
+    // The tool_input might contain content and status
+    return {
+      content: (input.content as string) ?? (input.subject as string) ?? "",
+      status: (input.status as StoredItem["status"]) ?? "pending",
+      activeForm: input.activeForm as string | undefined,
+      _firstSeenAt: now,
+      _lastSeenAt: now,
+      _gone: false,
+    };
+  }
+
+  return null;
+}
+
+// Ingest hook events into the Store
+// Called by merge() — hook events are folded into stored sessions
+export function ingestHookEvents(store: Store, events: HookEvent[]): void {
+  const now = nowISO();
+
+  for (const event of events) {
+    const data = event.data;
+    if (!data?.session_id) continue;
+
+    const sessionId = data.session_id;
+    const cwd = data.cwd;
+
+    if (event.event === "task" && data.tool_name) {
+      // Derive project path from cwd
+      const projectPath = cwd ? cwdToProjectPath(cwd) : undefined;
+      if (!projectPath) continue;
+
+      const item = hookEventToStoredItem(data, event.ts || now);
+      if (!item) continue;
+
+      // Ensure project exists in store
+      store.ensureProject(projectPath, basename(projectPath));
+
+      // Ensure session exists
+      const source = data.tool_name === "TodoWrite" ? "todos" as const : "tasks" as const;
+      store.ensureSession(projectPath, sessionId, source, {
+        projectPath,
+        projectName: basename(projectPath),
+      });
+
+      // Merge item into session
+      store.mergeHookItem(projectPath, sessionId, item);
+    }
+
+    if (event.event === "stop") {
+      // Session stopped — mark session as gone if we have it
+      // Don't create new entries for unknown sessions
+      store.markSessionStopped(sessionId, event.ts || now);
+    }
   }
 }
 
@@ -427,7 +667,20 @@ export function mergeAndPersist(
   liveProjects: ProjectData[],
   store: Store
 ): MergedProjectData[] {
+  // Layer 1: Ingest any pending hook events first
+  const events = consumeEvents();
+  if (events.length > 0) {
+    ingestHookEvents(store, events);
+  }
+
+  // Layer 2: Merge live scanner data with stored history
   const merged = store.merge(liveProjects);
   store.save();
+
+  // Truncate events.jsonl periodically (when TUI has consumed all events)
+  if (events.length > 0) {
+    truncateEvents();
+  }
+
   return merged;
 }

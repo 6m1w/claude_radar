@@ -1,12 +1,13 @@
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
-import type { TodoItem, TaskItem, SessionData, SessionMeta, ProjectData, SessionHistoryEntry } from "../types.js";
+import type { TodoItem, TaskItem, SessionData, SessionMeta, ProjectData, SessionHistoryEntry, TeamConfig, TeamMember, AgentInfo } from "../types.js";
 
 const CLAUDE_DIR = join(homedir(), ".claude");
 const TODOS_DIR = join(CLAUDE_DIR, "todos");
 const TASKS_DIR = join(CLAUDE_DIR, "tasks");
 const PROJECTS_DIR = join(CLAUDE_DIR, "projects");
+const TEAMS_DIR = join(CLAUDE_DIR, "teams");
 
 // Sessions modified within this window are considered "active"
 const ACTIVE_THRESHOLD_MS = 5 * 60 * 1000;
@@ -336,10 +337,136 @@ function scanTasks(sessionIndex: Map<string, SessionMeta>): SessionData[] {
   return results;
 }
 
+// ─── Phase 6: Scan teams ─────────────────────────────────────────
+function scanTeams(): Map<string, TeamConfig> {
+  const teams = new Map<string, TeamConfig>();
+  try {
+    const dirs = readdirSync(TEAMS_DIR);
+    for (const dir of dirs) {
+      const configPath = join(TEAMS_DIR, dir, "config.json");
+      const config = readJson<{ members?: TeamMember[] }>(configPath);
+      if (config?.members && config.members.length > 0) {
+        teams.set(dir, {
+          teamName: dir,
+          members: config.members,
+        });
+      }
+    }
+  } catch {
+    // teams dir may not exist
+  }
+  return teams;
+}
+
+// Check if a tasks directory name is a team (exists in ~/.claude/teams/)
+function isTeamTaskDir(dirName: string, teams: Map<string, TeamConfig>): boolean {
+  return teams.has(dirName);
+}
+
+// ─── Phase 7: Process detection ──────────────────────────────────
+
+// Cached process list — refreshed once per scan cycle
+let cachedProcessList: string | null = null;
+let cachedProcessTime = 0;
+const PROCESS_CACHE_MS = 5000;
+
+function getProcessList(): string {
+  const now = Date.now();
+  if (cachedProcessList && now - cachedProcessTime < PROCESS_CACHE_MS) {
+    return cachedProcessList;
+  }
+  try {
+    const { execSync } = require("node:child_process");
+    cachedProcessList = execSync("ps aux", { encoding: "utf-8", timeout: 2000 }) as string;
+    cachedProcessTime = now;
+    return cachedProcessList;
+  } catch {
+    cachedProcessList = "";
+    cachedProcessTime = now;
+    return "";
+  }
+}
+
+// Detect if a Claude Code agent process is alive
+// Claude Code runs as node processes with claude-related arguments
+function detectAgentProcess(agentName: string): "running" | "dead" {
+  const ps = getProcessList();
+  // Claude Code agent processes typically appear as node with claude args
+  // Team members show up with their agent name in the process args
+  if (ps.includes(agentName) || ps.includes("claude")) {
+    return "running";
+  }
+  return "dead";
+}
+
+// Build enriched agent info for a project
+function buildAgentDetails(
+  sessions: SessionData[],
+  team?: TeamConfig,
+): AgentInfo[] {
+  // Collect unique agent names from task owners
+  const agentMap = new Map<string, AgentInfo>();
+
+  for (const session of sessions) {
+    for (const item of session.items) {
+      if ("owner" in item && item.owner) {
+        const name = item.owner;
+        if (!agentMap.has(name)) {
+          // Find team member info if available
+          const member = team?.members.find((m) => m.name === name);
+          agentMap.set(name, {
+            name,
+            agentType: member?.agentType,
+            processState: "dead",
+            teamName: team?.teamName,
+          });
+        }
+        // Track current task (latest in_progress task for this agent)
+        if (item.status === "in_progress" && "id" in item) {
+          agentMap.get(name)!.currentTaskId = item.id;
+          agentMap.get(name)!.processState = "running";
+        }
+      }
+    }
+  }
+
+  // Add team members who don't have tasks yet
+  if (team) {
+    for (const member of team.members) {
+      if (!agentMap.has(member.name)) {
+        agentMap.set(member.name, {
+          name: member.name,
+          agentType: member.agentType,
+          processState: "idle",
+          teamName: team.teamName,
+        });
+      }
+    }
+  }
+
+  return [...agentMap.values()];
+}
+
+// Match a team to a project by checking if any task session ID is a team name
+function findTeamForProject(
+  sessions: SessionData[],
+  teams: Map<string, TeamConfig>,
+): TeamConfig | undefined {
+  for (const session of sessions) {
+    if (session.source === "tasks" && teams.has(session.id)) {
+      return teams.get(session.id);
+    }
+  }
+  return undefined;
+}
+
 // ─── Main: project-centric scan ─────────────────────────────────
 export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } {
   // Phase 1: Discover all projects
   const discovered = discoverProjects();
+
+  // Phase 6: Scan teams
+  const teams = scanTeams();
 
   // Phase 2-4: Build session index, scan tasks/todos
   const sessionIndex = buildSessionIndex(discovered);
@@ -409,6 +536,11 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
     // isActive: has active sessions OR in-progress tasks
     const isActive = disc.activeSessions > 0 || inProgress > 0;
 
+    // Phase 6+7: Match team data and build agent details
+    // Team tasks use the team name as task dir name, which maps to sessions
+    const matchedTeam = findTeamForProject(sessions, teams);
+    const agentDetails = buildAgentDetails(sessions, matchedTeam);
+
     projects.push({
       projectPath: disc.projectPath,
       projectName: disc.projectName,
@@ -425,6 +557,8 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       git,
       docs,
       recentSessions: disc.recentSessions.slice(-8),
+      team: matchedTeam,
+      agentDetails,
     });
   }
 
@@ -446,6 +580,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       activeSessions: 0,
       docs: [],
       recentSessions: [],
+      agentDetails: [],
     });
   }
 
