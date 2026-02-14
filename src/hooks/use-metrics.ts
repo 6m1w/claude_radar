@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { cpus, freemem, totalmem } from "node:os";
 import { exec } from "node:child_process";
 
@@ -10,6 +10,7 @@ export interface SystemMetrics {
   memPercent: number;
   netUp: number;  // KB/s
   netDown: number;
+  tick: number;    // monotonic counter, increments each sample (for spinner/mascot)
 }
 
 const HISTORY_LEN = 8;
@@ -49,11 +50,13 @@ export function useMetrics(): SystemMetrics {
     memPercent: 0,
     netUp: 0,
     netDown: 0,
+    tick: 0,
   });
 
   const prevCpuRef = useRef<{ idle: number; total: number } | null>(null);
   const prevNetRef = useRef<{ rx: number; tx: number; time: number } | null>(null);
   const historyRef = useRef<number[]>(new Array(HISTORY_LEN).fill(0));
+  const tickRef = useRef(0);
 
   useEffect(() => {
     async function sample() {
@@ -99,6 +102,7 @@ export function useMetrics(): SystemMetrics {
       }
       prevNetRef.current = { ...net, time: Date.now() };
 
+      tickRef.current += 1;
       setMetrics({
         cpuPercent,
         cpuHistory: [...historyRef.current],
@@ -107,6 +111,7 @@ export function useMetrics(): SystemMetrics {
         memPercent,
         netUp: Math.max(0, netUp),
         netDown: Math.max(0, netDown),
+        tick: tickRef.current,
       });
     }
 

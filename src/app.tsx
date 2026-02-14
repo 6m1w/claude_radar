@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { Box, Text, useInput, useApp } from "ink";
 import { useWatchSessions } from "./watchers/use-watch.js";
-import { useMetrics, type SystemMetrics } from "./hooks/use-metrics.js";
 import { Panel } from "./components/panel.js";
 import { Progress } from "./components/progress.js";
 import { C, I } from "./theme.js";
@@ -16,7 +15,6 @@ type ViewState =
 
 export function App() {
   const { projects, lastUpdate } = useWatchSessions();
-  const metrics = useMetrics();
   const { exit } = useApp();
   const [viewState, setViewState] = useState<ViewState>({ view: "dashboard" });
   const [cursorIdx, setCursorIdx] = useState(0);
@@ -157,11 +155,10 @@ export function App() {
         <KanbanView projects={kanbanProjects} />
       )}
 
-      {/* Status bar (own tick — only this component re-renders at animation fps) */}
+      {/* Status bar — owns its own metrics + tick, never causes parent re-render */}
       <StatusBar
         viewLabel={viewLabel}
         viewState={viewState.view}
-        metrics={metrics}
         hasActive={activePairs.length > 0}
         allDone={totalTasks > 0 && totalCompleted === totalTasks}
       />
@@ -642,7 +639,9 @@ function ActivityPanel({ projects }: { projects: ProjectData[] }) {
   );
 }
 
-// ─── Status bar with metrics, mascot, spinner ───────────────
+// ─── Status bar — fully self-contained, single 1fps timer ───
+import { useMetrics } from "./hooks/use-metrics.js";
+
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const SPARK = "▁▂▃▄▅▆▇█";
 const MASCOT = {
@@ -653,35 +652,29 @@ const MASCOT = {
 
 function sparkline(values: number[], max = 100): string {
   return values
-    .map((v) => {
-      const idx = Math.min(7, Math.floor((v / max) * 8));
-      return SPARK[Math.max(0, idx)];
-    })
+    .map((v) => SPARK[Math.max(0, Math.min(7, Math.floor((v / max) * 8)))])
     .join("");
 }
 
 function StatusBar({
   viewLabel,
   viewState,
-  metrics,
   hasActive,
   allDone,
 }: {
   viewLabel: string;
   viewState: "dashboard" | "detail" | "kanban";
-  metrics: SystemMetrics;
   hasActive: boolean;
   allDone: boolean;
 }) {
-  // Tick lives here — only StatusBar re-renders at animation fps
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setTick((n) => n + 1), 200);
-    return () => clearInterval(t);
-  }, []);
+  // Single data source: useMetrics fires 1/s, includes tick counter.
+  // No separate tick timer — exactly 1 re-render per second.
+  const metrics = useMetrics();
+  const tick = metrics.tick;
+
   const mascotState = allDone ? "done" : hasActive ? "working" : "idle";
   const mascotFrames = MASCOT[mascotState];
-  const mascotFrame = mascotFrames[Math.floor(tick / 10) % mascotFrames.length];
+  const mascotFrame = mascotFrames[tick % mascotFrames.length];
   const spinnerChar = SPINNER[tick % SPINNER.length];
   const cpuSpark = sparkline(metrics.cpuHistory);
   const memBarLen = 8;
