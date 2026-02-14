@@ -645,9 +645,9 @@ import { useMetrics } from "./hooks/use-metrics.js";
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const SPARK = "▁▂▃▄▅▆▇█";
 const MASCOT = {
-  idle: ["☻ zzZ", "☻ zZ "],
-  working: ["☻⌨ ·", "☻⌨··", "☻⌨···"],
-  done: ["☻♪"],
+  idle: "☻ zzZ",
+  working: "☻⌨",
+  done: "☻♪",
 };
 
 function sparkline(values: number[], max = 100): string {
@@ -672,9 +672,7 @@ function StatusBar({
   const metrics = useMetrics();
   const tick = metrics.tick;
 
-  const mascotState = allDone ? "done" : hasActive ? "working" : "idle";
-  const mascotFrames = MASCOT[mascotState];
-  const mascotFrame = mascotFrames[tick % mascotFrames.length];
+  const mascotFrame = allDone ? MASCOT.done : hasActive ? MASCOT.working : MASCOT.idle;
   const spinnerChar = SPINNER[tick % SPINNER.length];
   const cpuSpark = sparkline(metrics.cpuHistory);
   const memBarLen = 8;
