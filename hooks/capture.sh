@@ -4,7 +4,9 @@
 # Called by Claude Code plugin system; stdin is JSON with session_id, cwd, etc.
 #
 # Usage: capture.sh <event_type>
-#   event_type: "task" (PostToolUse), "stop" (Stop), "start" (SessionStart)
+#   event_type: "tool" (PostToolUse), "tool_failure" (PostToolUseFailure),
+#               "stop" (Stop), "start" (SessionStart),
+#               "subagent_stop" (SubagentStop), "notification" (Notification)
 #
 # Output: one JSON line appended to ~/.claude-radar/events.jsonl
 # Performance budget: <10ms total (bash startup + cat + printf + append)

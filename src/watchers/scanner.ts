@@ -13,6 +13,10 @@ const TEAMS_DIR = join(CLAUDE_DIR, "teams");
 // Sessions modified within this window are considered "active"
 const ACTIVE_THRESHOLD_MS = 5 * 60 * 1000;
 
+// Projects with in_progress tasks but no activity within this window
+// are NOT considered active (prevents stale tasks from pinning projects to top)
+const STALE_TASK_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
+
 // Doc files to detect in project directories
 const DOC_CANDIDATES = ["CLAUDE.md", "PRD.md", "docs/PRD.md", "TDD.md", "docs/TDD.md", "README.md"];
 
@@ -595,8 +599,10 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       Math.max(disc.lastSessionActivity.getTime(), taskActivity)
     );
 
-    // isActive: has active sessions OR in-progress tasks
-    const isActive = disc.activeSessions > 0 || inProgress > 0;
+    // isActive: has active sessions, OR has in-progress tasks WITH recent activity.
+    // Without the recency check, abandoned in_progress tasks would pin old projects to the top forever.
+    const hasRecentActivity = (Date.now() - lastActivity.getTime()) < STALE_TASK_THRESHOLD_MS;
+    const isActive = disc.activeSessions > 0 || (inProgress > 0 && hasRecentActivity);
 
     // Phase 6+7: Match team data and build agent details
     // Team tasks use the team name as task dir name, which maps to sessions
@@ -630,16 +636,19 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
   for (const [path, sessions] of sessionsByProject) {
     if (seenPaths.has(path) || path.startsWith("unknown-")) continue;
     const allItems = sessions.flatMap((s) => s.items);
+    const orphanLastActivity = new Date(Math.max(...sessions.map((s) => s.lastModified.getTime())));
+    const orphanInProgress = allItems.filter((i) => i.status === "in_progress").length;
+    const orphanRecent = (Date.now() - orphanLastActivity.getTime()) < STALE_TASK_THRESHOLD_MS;
     projects.push({
       projectPath: path,
       projectName: basename(path),
       sessions,
       totalTasks: allItems.length,
       completedTasks: allItems.filter((i) => i.status === "completed").length,
-      inProgressTasks: allItems.filter((i) => i.status === "in_progress").length,
+      inProgressTasks: orphanInProgress,
       agents: [],
-      lastActivity: new Date(Math.max(...sessions.map((s) => s.lastModified.getTime()))),
-      isActive: allItems.some((i) => i.status === "in_progress"),
+      lastActivity: orphanLastActivity,
+      isActive: orphanInProgress > 0 && orphanRecent,
       totalSessions: 0,
       activeSessions: 0,
       docs: [],

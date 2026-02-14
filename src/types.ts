@@ -234,13 +234,40 @@ export type ViewProject = {
   activityLog: ActivityEvent[];
 };
 
+// ─── Usage / cost tracking (parsed from session JSONL) ───────
+
+// Token breakdown for a single session
+export interface SessionUsageStats {
+  sessionId: string;
+  model: string;               // primary model (most frequent)
+  messageCount: number;        // assistant messages with usage data
+  inputTokens: number;
+  outputTokens: number;
+  cacheWrite5mTokens: number;
+  cacheWrite1hTokens: number;
+  cacheReadTokens: number;
+  costUSD: number;             // estimated cost based on model pricing
+}
+
+// Aggregated usage across all sessions in a project
+export interface ProjectUsageStats {
+  sessions: SessionUsageStats[];
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheWriteTokens: number;
+  totalCacheReadTokens: number;
+  totalCostUSD: number;
+  totalMessages: number;
+}
+
 // ─── Hook event types (capture.sh → events.jsonl) ───────────
 
 // Raw event line from events.jsonl
-// event types: "tool" (PostToolUse, all tools), "stop", "start",
-//   "task" (legacy — old PostToolUse with matcher), "subagent_stop", "notification"
+// event types: "tool" (PostToolUse, all tools), "tool_failure" (PostToolUseFailure),
+//   "stop", "start", "task" (legacy — old PostToolUse with matcher),
+//   "subagent_stop", "notification"
 export interface HookEvent {
-  event: "tool" | "task" | "stop" | "start" | "subagent_stop" | "notification";
+  event: "tool" | "tool_failure" | "task" | "stop" | "start" | "subagent_stop" | "notification";
   ts: string; // ISO 8601
   data: HookEventData;
 }

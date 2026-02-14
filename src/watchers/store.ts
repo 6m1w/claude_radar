@@ -728,22 +728,28 @@ export function ingestHookEvents(store: Store, events: HookEvent[]): void {
     const sessionId = data.session_id;
     const cwd = data.cwd;
 
-    // "tool" = new format (all PostToolUse), "task" = legacy format (matched PostToolUse)
-    if ((event.event === "tool" || event.event === "task") && data.tool_name) {
+    // "tool" = new format (all PostToolUse), "tool_failure" = PostToolUseFailure,
+    // "task" = legacy format (matched PostToolUse)
+    if ((event.event === "tool" || event.event === "tool_failure" || event.event === "task") && data.tool_name) {
+      const isFailure = event.event === "tool_failure";
       const projectPath = cwd ? cwdToProjectPath(cwd) : undefined;
       if (!projectPath) continue;
 
       // Activity log: ALL tool calls get recorded
+      const summary = isFailure
+        ? `❌ ${buildActivitySummary(data)}`
+        : buildActivitySummary(data);
       store.addActivity(projectPath, {
         ts: event.ts || now,
         sessionId,
         toolName: data.tool_name,
-        summary: buildActivitySummary(data),
+        summary,
         projectPath,
+        ...(isFailure && { isError: true }),
       });
 
-      // Task ingestion: only task-related tools get merged into store
-      if (TASK_TOOLS.has(data.tool_name)) {
+      // Task ingestion: only task-related tools get merged into store (skip failures)
+      if (!isFailure && TASK_TOOLS.has(data.tool_name)) {
         const item = hookEventToStoredItem(data, event.ts || now);
         if (!item) continue;
 

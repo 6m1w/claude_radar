@@ -974,3 +974,53 @@ describe("deduplication — hook events + polling merge", () => {
     expect(goneItems).toHaveLength(1);
   });
 });
+
+// ─── PostToolUseFailure (tool_failure) events ────────────────
+
+describe("tool_failure events", () => {
+  it("should record tool_failure as activity with isError flag", () => {
+    const store = new Store();
+
+    ingestHookEvents(store, [
+      makeHookEvent({
+        event: "tool_failure",
+        data: {
+          session_id: "sess-1",
+          cwd: "/test/project",
+          tool_name: "Bash",
+          tool_input: { command: "npm test" },
+        },
+      }),
+    ]);
+
+    const activity = store.getActivityLog("/test/project");
+    expect(activity).toHaveLength(1);
+    expect(activity[0].isError).toBe(true);
+    expect(activity[0].toolName).toBe("Bash");
+    expect(activity[0].summary).toMatch(/^❌/);
+  });
+
+  it("should not ingest tool_failure into task store", () => {
+    const store = new Store();
+
+    ingestHookEvents(store, [
+      makeHookEvent({
+        event: "tool_failure",
+        data: {
+          session_id: "sess-1",
+          cwd: "/test/project",
+          tool_name: "TaskCreate",
+          tool_input: { subject: "Should not be stored", description: "fail", status: "pending" },
+        },
+      }),
+    ]);
+
+    // Activity is recorded
+    expect(store.getActivityLog("/test/project")).toHaveLength(1);
+
+    // But no project/session/task is created in the store
+    const merged = store.merge([]);
+    const project = merged.find((p) => p.projectPath === "/test/project");
+    expect(project).toBeUndefined();
+  });
+});
