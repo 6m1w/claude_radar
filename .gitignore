@@ -11,3 +11,4 @@ docs/
 # Prototypes
 design-playground/
 src/playground*.tsx
+worktrees/
