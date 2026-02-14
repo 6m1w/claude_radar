@@ -1,0 +1,9 @@
+{
+  "name": "radar",
+  "description": "Real-time task monitoring with event capture hooks — tracks TaskCreate, TaskUpdate, TodoWrite, session lifecycle events.",
+  "author": {
+    "name": "6m1w"
+  },
+  "version": "0.2.0",
+  "license": "MIT"
+}

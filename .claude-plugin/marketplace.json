@@ -1,0 +1,24 @@
+{
+  "name": "claude-radar",
+  "owner": {
+    "name": "6m1w"
+  },
+  "metadata": {
+    "description": "TUI dashboard for monitoring Claude Code agent tasks and sessions"
+  },
+  "plugins": [
+    {
+      "name": "radar",
+      "source": "./",
+      "description": "Real-time task monitoring with event capture hooks — tracks TaskCreate, TaskUpdate, TodoWrite, session lifecycle events.",
+      "version": "0.2.0",
+      "author": {
+        "name": "6m1w"
+      },
+      "license": "MIT",
+      "homepage": "https://github.com/6m1w/claude_radar",
+      "repository": "https://github.com/6m1w/claude_radar",
+      "keywords": ["radar", "monitor", "dashboard", "tasks", "sessions", "hooks", "tui"]
+    }
+  ]
+}
