@@ -777,8 +777,21 @@ function buildActivitySummary(data: HookEventData): string {
       return `TaskUpdate #${input.taskId ?? "?"} → ${input.status ?? ""}`;
     case "TodoWrite":
       return "TodoWrite";
-    case "Task":
-      return `Task: ${truncate((input.description as string | undefined) ?? (input.prompt as string | undefined), 50)}`;
+    case "Task": {
+      const agentType = input.subagent_type as string | undefined;
+      const desc = (input.description as string | undefined) ?? (input.prompt as string | undefined);
+      return agentType
+        ? `Task[${agentType}]: ${truncate(desc, 40)}`
+        : `Task: ${truncate(desc, 50)}`;
+    }
+    case "EnterPlanMode":
+      return "[PLAN] Entered plan mode";
+    case "ExitPlanMode":
+      return "[PLAN] Plan ready for approval";
+    case "TaskList":
+      return "TaskList";
+    case "TaskGet":
+      return `TaskGet #${input.taskId ?? "?"}`;
     default:
       return tool;
   }
@@ -924,7 +937,7 @@ export function ingestHookEvents(store: Store, events: HookEvent[]): void {
     if ((event.event === "subagent_stop" || event.event === "notification") && cwd) {
       const projectPath = cwdToProjectPath(cwd);
       const summary = event.event === "subagent_stop"
-        ? `SubagentStop: ${data.reason ?? "completed"}`
+        ? `SubagentStop: ${data.tool_name ? `${data.tool_name} ` : ""}${data.reason ?? "completed"}`
         : `Notification: ${truncate(data.reason, 50)}`;
       store.addActivity(projectPath, {
         ts: event.ts || now,
