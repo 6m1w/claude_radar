@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
-import type { TodoItem, TaskItem, SessionData, SessionMeta } from "../types.js";
+import type { TodoItem, TaskItem, SessionData, SessionMeta, ProjectData } from "../types.js";
 
 const CLAUDE_DIR = join(homedir(), ".claude");
 const TODOS_DIR = join(CLAUDE_DIR, "todos");
@@ -172,5 +172,59 @@ export function scanAll(): SessionData[] {
   const tasks = scanTasks(sessionIndex);
   return [...todos, ...tasks].sort(
     (a, b) => b.lastModified.getTime() - a.lastModified.getTime()
+  );
+}
+
+// Aggregate sessions into projects grouped by projectPath
+export function groupByProject(sessions: SessionData[]): ProjectData[] {
+  const groups = new Map<string, SessionData[]>();
+
+  for (const session of sessions) {
+    const key = session.meta?.projectPath ?? `unknown-${session.id}`;
+    const list = groups.get(key) ?? [];
+    list.push(session);
+    groups.set(key, list);
+  }
+
+  const projects: ProjectData[] = [];
+  for (const [projectPath, groupSessions] of groups) {
+    const allItems = groupSessions.flatMap((s) => s.items);
+    const total = allItems.length;
+    const completed = allItems.filter((i) => i.status === "completed").length;
+    const inProgress = allItems.filter((i) => i.status === "in_progress").length;
+
+    // Collect unique agent/owner names
+    const agentSet = new Set<string>();
+    for (const item of allItems) {
+      if ("owner" in item && item.owner) agentSet.add(item.owner);
+    }
+    // Each session's agent from filename is also implicit
+    for (const s of groupSessions) {
+      if (s.source === "todos") {
+        agentSet.add("main"); // TodoWrite sessions are typically main agent
+      }
+    }
+
+    const firstMeta = groupSessions.find((s) => s.meta)?.meta;
+    const lastActivity = new Date(
+      Math.max(...groupSessions.map((s) => s.lastModified.getTime()))
+    );
+
+    projects.push({
+      projectPath,
+      projectName: firstMeta?.projectName ?? basename(projectPath),
+      gitBranch: firstMeta?.gitBranch,
+      sessions: groupSessions,
+      totalTasks: total,
+      completedTasks: completed,
+      inProgressTasks: inProgress,
+      agents: [...agentSet],
+      lastActivity,
+      isActive: inProgress > 0,
+    });
+  }
+
+  return projects.sort(
+    (a, b) => b.lastActivity.getTime() - a.lastActivity.getTime()
   );
 }

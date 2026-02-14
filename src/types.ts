@@ -34,3 +34,17 @@ export interface SessionData {
   items: (TodoItem | TaskItem)[];
   meta?: SessionMeta;
 }
+
+// Aggregated project view — groups sessions by projectPath
+export interface ProjectData {
+  projectPath: string;
+  projectName: string;
+  gitBranch?: string;
+  sessions: SessionData[];
+  totalTasks: number;
+  completedTasks: number;
+  inProgressTasks: number;
+  agents: string[];       // unique owner/agent names
+  lastActivity: Date;
+  isActive: boolean;      // has any in_progress task
+}

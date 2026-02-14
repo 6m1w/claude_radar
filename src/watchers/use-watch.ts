@@ -1,15 +1,17 @@
 import { useState, useEffect, useRef } from "react";
-import { scanAll } from "./scanner.js";
-import type { SessionData } from "../types.js";
+import { scanAll, groupByProject } from "./scanner.js";
+import type { SessionData, ProjectData } from "../types.js";
 
 const POLL_INTERVAL_MS = 1000;
 
 // React hook: poll ~/.claude/todos/ and ~/.claude/tasks/ for changes
 export function useWatchSessions(): {
   sessions: SessionData[];
+  projects: ProjectData[];
   lastUpdate: Date | null;
 } {
   const [sessions, setSessions] = useState<SessionData[]>([]);
+  const [projects, setProjects] = useState<ProjectData[]>([]);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const prevSnapshotRef = useRef<string>("");
 
@@ -17,6 +19,7 @@ export function useWatchSessions(): {
     // Initial scan
     const initial = scanAll();
     setSessions(initial);
+    setProjects(groupByProject(initial));
     setLastUpdate(new Date());
     prevSnapshotRef.current = snapshotKey(initial);
 
@@ -27,6 +30,7 @@ export function useWatchSessions(): {
       if (key !== prevSnapshotRef.current) {
         prevSnapshotRef.current = key;
         setSessions(current);
+        setProjects(groupByProject(current));
         setLastUpdate(new Date());
       }
     }, POLL_INTERVAL_MS);
@@ -34,7 +38,7 @@ export function useWatchSessions(): {
     return () => clearInterval(timer);
   }, []);
 
-  return { sessions, lastUpdate };
+  return { sessions, projects, lastUpdate };
 }
 
 // Lightweight fingerprint to detect actual data changes
