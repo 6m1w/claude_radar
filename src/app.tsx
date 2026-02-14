@@ -311,7 +311,7 @@ export function App() {
           layout={kanbanLayout}
           hideDone={kanbanHideDone}
         />
-        <StatusBar view="kanban" label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} bottomFocused={false} />
+        <StatusBar view="kanban" label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} bottomFocused={false} hideDone={kanbanHideDone} />
       </Box>
     );
   }
@@ -974,8 +974,8 @@ function sparkline(values: number[], max = 100): string {
     .join("");
 }
 
-function StatusBar({ view, label, hasActive, allDone, bottomFocused }: {
-  view: string; label: string; hasActive: boolean; allDone: boolean; bottomFocused: boolean;
+function StatusBar({ view, label, hasActive, allDone, bottomFocused, hideDone }: {
+  view: string; label: string; hasActive: boolean; allDone: boolean; bottomFocused: boolean; hideDone?: boolean;
 }) {
   const metrics = useMetrics();
   const tick = metrics.tick;
@@ -1047,7 +1047,7 @@ function StatusBar({ view, label, hasActive, allDone, bottomFocused }: {
           <>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
             <Text color={C.success}>s</Text><Text color={C.subtext}> toggle  </Text>
-            <Text color={C.success}>h</Text><Text color={C.subtext}> hide done  </Text>
+            <Text color={C.success}>h</Text><Text color={C.subtext}> {hideDone ? "show done" : "hide done"}  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
         )}
