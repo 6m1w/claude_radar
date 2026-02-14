@@ -13,6 +13,7 @@ import { C, I, theme } from "./theme.js";
 import { Panel } from "./components/panel.js";
 import { Progress } from "./components/progress.js";
 import { useWatchSessions } from "./watchers/use-watch.js";
+import { useMetrics } from "./hooks/use-metrics.js";
 import { formatTimeAgo } from "./utils.js";
 import type { MergedProjectData, TaskItem, TodoItem, SessionHistoryEntry } from "./types.js";
 
@@ -32,6 +33,7 @@ type ViewProject = {
   branch: string;
   agents: string[];
   activeSessions: number;
+  hookSessionCount: number; // active sessions from hook events
   docs: string[];
   tasks: DisplayTask[];
   recentSessions: SessionHistoryEntry[];
@@ -39,16 +41,23 @@ type ViewProject = {
 
 // ─── Adapter: MergedProjectData → ViewProject ───────────────
 function toViewProject(p: MergedProjectData): ViewProject {
-  const tasks = p.sessions.flatMap((s) => s.items).map((item, i): DisplayTask => {
+  const allItems = p.sessions.flatMap((s) => s.items);
+
+  const tasks = allItems.map((item, i): DisplayTask => {
     if ("subject" in item) {
       // TaskItem — has id, subject, owner, blockedBy
       const t = item as TaskItem;
+      // Dynamic dependency resolution: only show blockers that aren't completed
+      const unresolved = t.blockedBy?.filter((id) => {
+        const blocker = allItems.find((it) => "id" in it && (it as TaskItem).id === id);
+        return !blocker || blocker.status !== "completed";
+      });
       return {
         id: t.id,
         subject: t.subject,
         status: t.status,
         owner: t.owner,
-        blockedBy: t.blockedBy?.[0],
+        blockedBy: unresolved?.length ? unresolved[0] : undefined,
         description: t.description,
       };
     }
@@ -66,6 +75,7 @@ function toViewProject(p: MergedProjectData): ViewProject {
     branch: p.git?.branch ?? p.gitBranch ?? "main",
     agents: p.agents,
     activeSessions: p.activeSessions,
+    hookSessionCount: p.hookSessions.length,
     docs: p.docs,
     tasks,
     recentSessions: p.recentSessions,
@@ -136,11 +146,11 @@ function PlaygroundApp() {
   // Activity entries from real data
   const activityEntries = buildActivity(rawProjects);
 
-  // Layout calculations (default to 40 rows if terminal size unavailable)
+  // Layout: full terminal height. Row B fills remaining space via flexGrow.
+  // Row A (overview+active): ~4 rows, Row C (activity): ~8 rows, StatusBar: 2 rows, borders: ~4
   const termRows = rows;
-  const maxMiddleHeight = Math.floor(termRows * 0.5);
-  const fixedRows = 3 + 2 + 4; // overview + statusbar + borders
-  const middleAvailable = Math.max(8, Math.min(maxMiddleHeight, termRows - fixedRows - 8));
+  const fixedRows = 4 + 8 + 2 + 4; // Row A + Row C + StatusBar + borders
+  const middleAvailable = Math.max(8, termRows - fixedRows);
   const visibleProjects = Math.max(3, middleAvailable - 2); // -2 for panel border
 
   // Viewport scrolling
@@ -227,7 +237,7 @@ function PlaygroundApp() {
   const totalProjects = sorted.length;
   const totalTasks = sorted.reduce((s, p) => s + p.tasks.length, 0);
   const totalDone = sorted.reduce((s, p) => s + taskStats(p).done, 0);
-  const totalActive = sorted.filter((p) => p.activeSessions > 0).length;
+  const totalActive = sorted.filter((p) => p.activeSessions > 0 || p.hookSessionCount > 0).length;
 
   const viewLabel = focus === "kanban" ? "KANBAN" : focus === "inner" ? "DETAIL" : "DASHBOARD";
 
@@ -237,9 +247,9 @@ function PlaygroundApp() {
       ? sorted.filter((p) => selectedNames.has(p.name) && p.tasks.length > 0)
       : sorted.filter((p) => p.tasks.length > 0);
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" height={termRows} paddingBottom={1}>
         <KanbanView projects={kanbanProjects} selectedCount={selectedNames.size} />
-        <StatusHints view="kanban" label={viewLabel} />
+        <StatusBar view="kanban" label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} />
       </Box>
     );
   }
@@ -250,7 +260,7 @@ function PlaygroundApp() {
   const belowCount = Math.max(0, sorted.length - scrollOffset - visibleProjects);
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={termRows} paddingBottom={1}>
       {/* Row A: Overview + Active Now */}
       <Box>
         <Panel title="OVERVIEW" flexGrow={1}>
@@ -265,25 +275,26 @@ function PlaygroundApp() {
           {totalTasks > 0 && <Progress done={totalDone} total={totalTasks} width={20} />}
         </Panel>
         <Panel title="ACTIVE NOW" flexGrow={1}>
-          {sorted.filter((p) => p.activeSessions > 0).slice(0, 4).map((p, i) => {
+          {sorted.filter((p) => p.activeSessions > 0 || p.hookSessionCount > 0).slice(0, 4).map((p, i) => {
             const doing = p.tasks.find((t) => t.status === "in_progress");
+            const agentCount = Math.max(p.activeSessions, p.hookSessionCount);
             return (
               <Box key={i}>
                 <Text color={C.warning}>{I.working} </Text>
                 <Text color={C.subtext}>{p.name.slice(0, 10)}/{doing?.owner ?? "session"}</Text>
                 <Text color={C.dim}>  </Text>
-                <Text color={C.text}>{doing ? `#${doing.id} ${doing.subject}` : `${p.activeSessions} active`}</Text>
+                <Text color={C.text}>{doing ? `#${doing.id} ${doing.subject}` : `${agentCount} active`}</Text>
               </Box>
             );
           })}
-          {sorted.filter((p) => p.activeSessions > 0).length === 0 && (
+          {sorted.filter((p) => p.activeSessions > 0 || p.hookSessionCount > 0).length === 0 && (
             <Text color={C.dim}>No active agents</Text>
           )}
         </Panel>
       </Box>
 
-      {/* Row B: Projects + Detail/Tasks */}
-      <Box height={middleAvailable}>
+      {/* Row B: Projects + Detail/Tasks — fills remaining space */}
+      <Box flexGrow={1}>
         {/* Left: Project list with viewport scrolling */}
         <Panel title={`PROJECTS (${sorted.length})`} hotkey="1" focused={panelFocus === 1} width={34}>
           {aboveCount > 0 && (
@@ -293,8 +304,9 @@ function PlaygroundApp() {
             const realIdx = scrollOffset + vi;
             const isCursor = realIdx === safeProjectIdx;
             const stats = taskStats(p);
-            const icon = p.activeSessions > 0 ? I.working : stats.total > 0 && stats.done === stats.total ? I.done : I.idle;
-            const iconColor = p.activeSessions > 0 ? C.warning : stats.done === stats.total && stats.total > 0 ? C.success : C.dim;
+            const isActive = p.activeSessions > 0 || p.hookSessionCount > 0;
+            const icon = isActive ? I.working : stats.total > 0 && stats.done === stats.total ? I.done : I.idle;
+            const iconColor = isActive ? C.warning : stats.done === stats.total && stats.total > 0 ? C.success : C.dim;
             const isSelected = selectedNames.has(p.name);
             return (
               <Box key={p.name}>
@@ -392,7 +404,7 @@ function PlaygroundApp() {
         </Box>
       )}
 
-      <StatusHints view={focus} label={viewLabel} />
+      <StatusBar view={focus} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} />
     </Box>
   );
 }
@@ -721,39 +733,102 @@ function KanbanCard({
   );
 }
 
-// ─── Status bar hints ───────────────────────────────────────
-function StatusHints({ view, label }: { view: string; label: string }) {
+// ─── Status bar: system metrics + keyboard hints ────────────
+const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+const SPARK = "▁▂▃▄▅▆▇█";
+const MASCOT = { idle: "☻ zzZ", working: "☻⌨", done: "☻♪" };
+
+function sparkline(values: number[], max = 100): string {
+  return values
+    .map((v) => SPARK[Math.max(0, Math.min(7, Math.floor((v / max) * 8)))])
+    .join("");
+}
+
+function StatusBar({ view, label, hasActive, allDone }: {
+  view: string; label: string; hasActive: boolean; allDone: boolean;
+}) {
+  const metrics = useMetrics();
+  const tick = metrics.tick;
+
+  const mascotFrame = allDone ? MASCOT.done : hasActive ? MASCOT.working : MASCOT.idle;
+  const spinnerChar = SPINNER[tick % SPINNER.length];
+  const cpuSpark = sparkline(metrics.cpuHistory);
+  const memBarLen = 8;
+  const memFilled = Math.round((metrics.memPercent / 100) * memBarLen);
+  const memBar = "█".repeat(memFilled) + "░".repeat(memBarLen - memFilled);
+  const netUp = metrics.netUp > 1024
+    ? `${(metrics.netUp / 1024).toFixed(1)}M`
+    : `${String(Math.round(metrics.netUp)).padStart(4)}K`;
+  const netDown = metrics.netDown > 1024
+    ? `${(metrics.netDown / 1024).toFixed(1)}M`
+    : `${String(Math.round(metrics.netDown)).padStart(4)}K`;
+
   return (
-    <Box>
-      <Text color={C.primary} bold> {label} </Text>
-      <Text color={C.dim}>│ </Text>
-      {view === "outer" ? (
-        <>
-          <Text color={C.success}>↑↓</Text><Text color={C.subtext}> nav  </Text>
-          <Text color={C.success}>1/2/3</Text><Text color={C.subtext}> panel  </Text>
-          <Text color={C.success}>Space</Text><Text color={C.subtext}> select  </Text>
-          <Text color={C.success}>Enter</Text><Text color={C.subtext}> focus  </Text>
-          <Text color={C.success}>Tab</Text><Text color={C.subtext}> kanban  </Text>
-          <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
-        </>
-      ) : view === "inner" ? (
-        <>
-          <Text color={C.success}>↑↓</Text><Text color={C.subtext}> nav tasks  </Text>
-          <Text color={C.success}>1/2/3</Text><Text color={C.subtext}> tab  </Text>
-          <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
-          <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
-        </>
-      ) : (
-        <>
-          <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
-          <Text color={C.success}>s</Text><Text color={C.subtext}> toggle  </Text>
-          <Text color={C.success}>h</Text><Text color={C.subtext}> hide done  </Text>
-          <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
-        </>
-      )}
+    <Box flexDirection="column">
+      {/* Metrics line */}
+      <Box>
+        <Text color={C.warning}> {mascotFrame} </Text>
+        <Text color={C.dim}>│ </Text>
+        <Text color={C.subtext}>CPU </Text>
+        <Text color={C.success}>{cpuSpark}</Text>
+        <Text color={C.text}> {String(metrics.cpuPercent).padStart(3)}%</Text>
+        <Text color={C.dim}> │ </Text>
+        <Text color={C.subtext}>MEM </Text>
+        <Text color={C.primary}>{memBar}</Text>
+        <Text color={C.text}> {metrics.memUsedGB}/{metrics.memTotalGB}G</Text>
+        <Text color={C.dim}> │ </Text>
+        <Text color={C.success}>↑</Text>
+        <Text color={C.subtext}>{netUp} </Text>
+        <Text color={C.primary}>↓</Text>
+        <Text color={C.subtext}>{netDown}</Text>
+        <Text color={C.dim}> │ </Text>
+        <Text color={C.primary}>{spinnerChar}</Text>
+      </Box>
+
+      {/* Keyboard hints */}
+      <Box>
+        <Text color={C.primary} bold> {label} </Text>
+        <Text color={C.dim}>│ </Text>
+        {view === "outer" ? (
+          <>
+            <Text color={C.success}>↑↓</Text><Text color={C.subtext}> nav  </Text>
+            <Text color={C.success}>1/2/3</Text><Text color={C.subtext}> panel  </Text>
+            <Text color={C.success}>Space</Text><Text color={C.subtext}> select  </Text>
+            <Text color={C.success}>Enter</Text><Text color={C.subtext}> focus  </Text>
+            <Text color={C.success}>Tab</Text><Text color={C.subtext}> kanban  </Text>
+            <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
+          </>
+        ) : view === "inner" ? (
+          <>
+            <Text color={C.success}>↑↓</Text><Text color={C.subtext}> nav tasks  </Text>
+            <Text color={C.success}>1/2/3</Text><Text color={C.subtext}> tab  </Text>
+            <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
+            <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
+          </>
+        ) : (
+          <>
+            <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
+            <Text color={C.success}>s</Text><Text color={C.subtext}> toggle  </Text>
+            <Text color={C.success}>h</Text><Text color={C.subtext}> hide done  </Text>
+            <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
+          </>
+        )}
+      </Box>
     </Box>
   );
 }
 
 // ─── Entry point ────────────────────────────────────────────
-render(<PlaygroundApp />);
+// Enter alternate screen buffer (fullscreen, like vim/htop)
+const ALT_SCREEN_ON = "\x1B[?1049h\x1B[H";
+const ALT_SCREEN_OFF = "\x1B[?1049l";
+
+process.stdout.write(ALT_SCREEN_ON);
+
+const app = render(<PlaygroundApp />);
+
+// Restore original screen on exit
+const restore = () => process.stdout.write(ALT_SCREEN_OFF);
+app.waitUntilExit().then(restore);
+process.on("SIGINT", restore);
+process.on("SIGTERM", restore);
