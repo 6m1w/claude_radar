@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Store, mergeAndPersist, consumeEvents, resetEventsOffset, EVENTS_PATH, truncateEvents } from "../store.js";
+import { Store, mergeAndPersist, consumeEvents, resetEventsOffset, EVENTS_PATH, truncateEvents, detectPatterns } from "../store.js";
 import { ingestHookEvents } from "../store.js";
-import type { ProjectData, SessionData, TodoItem, TaskItem, MergedProjectData, HookEvent, HookSessionInfo } from "../../types.js";
+import type { ProjectData, SessionData, TodoItem, TaskItem, MergedProjectData, HookEvent, HookSessionInfo, ActivityEvent } from "../../types.js";
 
 // ─── Test helpers ────────────────────────────────────────────
 
@@ -1022,5 +1022,221 @@ describe("tool_failure events", () => {
     const merged = store.merge([]);
     const project = merged.find((p) => p.projectPath === "/test/project");
     expect(project).toBeUndefined();
+  });
+});
+
+// ─── Pattern detection (detectPatterns) ───────────────────────
+
+function makeActivityEvent(overrides: Partial<ActivityEvent> = {}): ActivityEvent {
+  return {
+    ts: new Date().toISOString(),
+    sessionId: "sess-1",
+    toolName: "Bash",
+    summary: "Bash: npm test",
+    projectPath: "/test/project",
+    ...overrides,
+  };
+}
+
+describe("detectPatterns", () => {
+  it("should return empty for no events", () => {
+    expect(detectPatterns([])).toEqual([]);
+  });
+
+  it("should return empty for events with no patterns", () => {
+    const events: ActivityEvent[] = [
+      makeActivityEvent({ toolName: "Read", summary: "Read app.tsx" }),
+      makeActivityEvent({ toolName: "Edit", summary: "Edit app.tsx" }),
+      makeActivityEvent({ toolName: "Bash", summary: "Bash: npm test" }),
+    ];
+    expect(detectPatterns(events)).toEqual([]);
+  });
+
+  describe("repeated_failure", () => {
+    it("should detect 3+ consecutive failures of the same tool", () => {
+      const events: ActivityEvent[] = [
+        makeActivityEvent({ toolName: "Bash", isError: true, summary: "❌ Bash: npm test" }),
+        makeActivityEvent({ toolName: "Bash", isError: true, summary: "❌ Bash: npm test" }),
+        makeActivityEvent({ toolName: "Bash", isError: true, summary: "❌ Bash: npm test" }),
+      ];
+
+      const alerts = detectPatterns(events);
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0].type).toBe("repeated_failure");
+      expect(alerts[0].count).toBe(3);
+      expect(alerts[0].severity).toBe("warning");
+      expect(alerts[0].message).toContain("Bash");
+      expect(alerts[0].message).toContain("3");
+    });
+
+    it("should escalate to error severity at 5+ failures", () => {
+      const events: ActivityEvent[] = Array.from({ length: 6 }, () =>
+        makeActivityEvent({ toolName: "Bash", isError: true }),
+      );
+
+      const alerts = detectPatterns(events);
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0].severity).toBe("error");
+      expect(alerts[0].count).toBe(6);
+    });
+
+    it("should not trigger for 2 consecutive failures", () => {
+      const events: ActivityEvent[] = [
+        makeActivityEvent({ toolName: "Bash", isError: true }),
+        makeActivityEvent({ toolName: "Bash", isError: true }),
+      ];
+      expect(detectPatterns(events)).toEqual([]);
+    });
+
+    it("should reset count when a success intervenes", () => {
+      const events: ActivityEvent[] = [
+        makeActivityEvent({ toolName: "Bash", isError: true }),
+        makeActivityEvent({ toolName: "Bash", isError: true }),
+        makeActivityEvent({ toolName: "Bash", isError: false }), // success breaks the run
+        makeActivityEvent({ toolName: "Bash", isError: true }),
+        makeActivityEvent({ toolName: "Bash", isError: true }),
+      ];
+      expect(detectPatterns(events)).toEqual([]);
+    });
+
+    it("should detect separate failure runs per tool", () => {
+      const events: ActivityEvent[] = [
+        makeActivityEvent({ toolName: "Bash", isError: true }),
+        makeActivityEvent({ toolName: "Bash", isError: true }),
+        makeActivityEvent({ toolName: "Bash", isError: true }),
+        makeActivityEvent({ toolName: "Edit", isError: true }),
+        makeActivityEvent({ toolName: "Edit", isError: true }),
+        makeActivityEvent({ toolName: "Edit", isError: true }),
+      ];
+
+      const alerts = detectPatterns(events);
+      // Should detect both: Bash run ended when Edit started, then Edit trailing run
+      expect(alerts.length).toBeGreaterThanOrEqual(2);
+      const types = alerts.map((a) => a.type);
+      expect(types.every((t) => t === "repeated_failure")).toBe(true);
+    });
+
+    it("should scope pattern detection to each session independently", () => {
+      const events: ActivityEvent[] = [
+        makeActivityEvent({ sessionId: "sess-1", toolName: "Bash", isError: true }),
+        makeActivityEvent({ sessionId: "sess-1", toolName: "Bash", isError: true }),
+        makeActivityEvent({ sessionId: "sess-2", toolName: "Bash", isError: true }),
+        makeActivityEvent({ sessionId: "sess-2", toolName: "Bash", isError: true }),
+      ];
+      // Neither session reaches 3
+      expect(detectPatterns(events)).toEqual([]);
+    });
+  });
+
+  describe("repeated_retry", () => {
+    it("should detect 4+ consecutive Task tool calls", () => {
+      const events: ActivityEvent[] = [
+        makeActivityEvent({ toolName: "Task", summary: "Task: explore codebase" }),
+        makeActivityEvent({ toolName: "Task", summary: "Task: explore codebase" }),
+        makeActivityEvent({ toolName: "Task", summary: "Task: explore codebase" }),
+        makeActivityEvent({ toolName: "Task", summary: "Task: explore codebase" }),
+      ];
+
+      const alerts = detectPatterns(events);
+      const retryAlerts = alerts.filter((a) => a.type === "repeated_retry");
+      expect(retryAlerts).toHaveLength(1);
+      expect(retryAlerts[0].count).toBe(4);
+      expect(retryAlerts[0].severity).toBe("warning");
+    });
+
+    it("should escalate retry severity at 6+", () => {
+      const events: ActivityEvent[] = Array.from({ length: 7 }, () =>
+        makeActivityEvent({ toolName: "Task", summary: "Task: retry" }),
+      );
+
+      const alerts = detectPatterns(events);
+      const retryAlerts = alerts.filter((a) => a.type === "repeated_retry");
+      expect(retryAlerts).toHaveLength(1);
+      expect(retryAlerts[0].severity).toBe("error");
+    });
+
+    it("should not trigger when a different tool interrupts", () => {
+      const events: ActivityEvent[] = [
+        makeActivityEvent({ toolName: "Task" }),
+        makeActivityEvent({ toolName: "Task" }),
+        makeActivityEvent({ toolName: "Read" }), // breaks the run
+        makeActivityEvent({ toolName: "Task" }),
+        makeActivityEvent({ toolName: "Task" }),
+      ];
+
+      const alerts = detectPatterns(events);
+      const retryAlerts = alerts.filter((a) => a.type === "repeated_retry");
+      expect(retryAlerts).toEqual([]);
+    });
+  });
+
+  describe("long_turn", () => {
+    it("should detect turns exceeding 5 minutes", () => {
+      const events: ActivityEvent[] = [
+        makeActivityEvent({
+          toolName: "_turn_complete",
+          summary: "Turn completed in 8m 30s",
+          durationMs: 8 * 60 * 1000 + 30000,
+        }),
+      ];
+
+      const alerts = detectPatterns(events);
+      const longAlerts = alerts.filter((a) => a.type === "long_turn");
+      expect(longAlerts).toHaveLength(1);
+      expect(longAlerts[0].severity).toBe("warning");
+      expect(longAlerts[0].message).toContain("8");
+    });
+
+    it("should escalate to error for 10+ minute turns", () => {
+      const events: ActivityEvent[] = [
+        makeActivityEvent({
+          toolName: "_turn_complete",
+          durationMs: 15 * 60 * 1000,
+          summary: "Turn completed in 15m 0s",
+        }),
+      ];
+
+      const alerts = detectPatterns(events);
+      const longAlerts = alerts.filter((a) => a.type === "long_turn");
+      expect(longAlerts).toHaveLength(1);
+      expect(longAlerts[0].severity).toBe("error");
+    });
+
+    it("should not trigger for turns under 5 minutes", () => {
+      const events: ActivityEvent[] = [
+        makeActivityEvent({
+          toolName: "_turn_complete",
+          durationMs: 4 * 60 * 1000,
+          summary: "Turn completed in 4m 0s",
+        }),
+      ];
+
+      const alerts = detectPatterns(events);
+      expect(alerts.filter((a) => a.type === "long_turn")).toEqual([]);
+    });
+  });
+
+  describe("integration — via store.merge", () => {
+    it("should populate activityAlerts from store activity buffer", () => {
+      const store = new Store();
+
+      // Inject repeated failures via hook events
+      const failureEvents: HookEvent[] = Array.from({ length: 4 }, (_, i) => ({
+        event: "tool_failure" as const,
+        ts: new Date(Date.now() + i * 1000).toISOString(),
+        data: {
+          session_id: "sess-1",
+          cwd: "/test/project",
+          tool_name: "Bash",
+          tool_input: { command: "npm test" },
+        },
+      }));
+
+      ingestHookEvents(store, failureEvents);
+
+      const merged = store.merge([makeProject({ projectPath: "/test/project" })]);
+      expect(merged[0].activityAlerts.length).toBeGreaterThan(0);
+      expect(merged[0].activityAlerts[0].type).toBe("repeated_failure");
+    });
   });
 });

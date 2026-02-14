@@ -6,7 +6,10 @@ import {
   calculateCostUSD,
   parseSessionUsage,
   getProjectUsage,
+  parseTurnDurations,
+  getProjectTurnDurations,
   FALLBACK_PRICING,
+  LONG_TURN_THRESHOLD_MS,
 } from "../usage.js";
 import type { TokenAccumulator } from "../usage.js";
 
@@ -230,5 +233,116 @@ describe("getProjectUsage", () => {
 
   it("should return null for non-existent directory", () => {
     expect(getProjectUsage("/nonexistent/dir")).toBeNull();
+  });
+});
+
+// ─── Turn duration parsing ──────────────────────────────────
+
+function makeTurnDurationLine(
+  sessionId: string,
+  durationMs: number,
+  timestamp = "2025-06-01T12:00:00Z",
+): string {
+  return JSON.stringify({
+    type: "system",
+    subtype: "turn_duration",
+    sessionId,
+    durationMs,
+    timestamp,
+  });
+}
+
+describe("parseTurnDurations", () => {
+  it("should extract turn_duration events from JSONL", () => {
+    const jsonlPath = join(TMP_DIR, "turns.jsonl");
+    const lines = [
+      JSON.stringify({ type: "user", content: "hello" }),
+      makeAssistantLine("claude-opus-4-6", 100, 500, 0, 0),
+      makeTurnDurationLine("sess-1", 45000, "2025-06-01T12:00:00Z"),
+      makeTurnDurationLine("sess-1", 120000, "2025-06-01T12:05:00Z"),
+    ].join("\n");
+    writeFileSync(jsonlPath, lines);
+
+    const events = parseTurnDurations(jsonlPath, "/test/project");
+    expect(events).toHaveLength(2);
+    expect(events[0].toolName).toBe("_turn_complete");
+    expect(events[0].durationMs).toBe(45000);
+    expect(events[0].summary).toContain("45s");
+    expect(events[1].durationMs).toBe(120000);
+    expect(events[1].summary).toContain("2m");
+  });
+
+  it("should format minutes and seconds correctly", () => {
+    const jsonlPath = join(TMP_DIR, "format.jsonl");
+    writeFileSync(jsonlPath, makeTurnDurationLine("sess-1", 95000)); // 1m 35s
+    const events = parseTurnDurations(jsonlPath, "/test");
+    expect(events[0].summary).toContain("1m 35s");
+  });
+
+  it("should flag long turns with isError", () => {
+    const jsonlPath = join(TMP_DIR, "long-turn.jsonl");
+    const longMs = LONG_TURN_THRESHOLD_MS + 1000; // just over 5 min
+    writeFileSync(jsonlPath, makeTurnDurationLine("sess-1", longMs));
+
+    const events = parseTurnDurations(jsonlPath, "/test");
+    expect(events).toHaveLength(1);
+    expect(events[0].isError).toBe(true);
+  });
+
+  it("should not flag turns under the threshold", () => {
+    const jsonlPath = join(TMP_DIR, "short-turn.jsonl");
+    writeFileSync(jsonlPath, makeTurnDurationLine("sess-1", 60000)); // 1 minute
+    const events = parseTurnDurations(jsonlPath, "/test");
+    expect(events).toHaveLength(1);
+    expect(events[0].isError).toBeUndefined();
+  });
+
+  it("should return empty for non-existent file", () => {
+    expect(parseTurnDurations("/nonexistent.jsonl", "/test")).toEqual([]);
+  });
+
+  it("should skip non-turn-duration lines", () => {
+    const jsonlPath = join(TMP_DIR, "mixed.jsonl");
+    const lines = [
+      makeAssistantLine("claude-opus-4-6", 100, 500, 0, 0),
+      JSON.stringify({ type: "system", subtype: "other_thing", data: {} }),
+      makeTurnDurationLine("sess-1", 30000),
+    ].join("\n");
+    writeFileSync(jsonlPath, lines);
+
+    const events = parseTurnDurations(jsonlPath, "/test");
+    expect(events).toHaveLength(1);
+  });
+});
+
+describe("getProjectTurnDurations", () => {
+  it("should aggregate turn durations across multiple JSONL files", () => {
+    const projectDir = join(TMP_DIR, "turns-project");
+    mkdirSync(projectDir, { recursive: true });
+
+    writeFileSync(
+      join(projectDir, "sess-1.jsonl"),
+      makeTurnDurationLine("sess-1", 30000, "2025-06-01T12:00:00Z"),
+    );
+    writeFileSync(
+      join(projectDir, "sess-2.jsonl"),
+      [
+        makeTurnDurationLine("sess-2", 45000, "2025-06-01T11:00:00Z"),
+        makeTurnDurationLine("sess-2", 60000, "2025-06-01T13:00:00Z"),
+      ].join("\n"),
+    );
+    // Non-JSONL files should be ignored
+    writeFileSync(join(projectDir, "sessions-index.json"), "{}");
+
+    const events = getProjectTurnDurations(projectDir, "/test");
+    expect(events).toHaveLength(3);
+    // Should be sorted by timestamp
+    expect(events[0].ts).toBe("2025-06-01T11:00:00Z");
+    expect(events[1].ts).toBe("2025-06-01T12:00:00Z");
+    expect(events[2].ts).toBe("2025-06-01T13:00:00Z");
+  });
+
+  it("should return empty for non-existent directory", () => {
+    expect(getProjectTurnDurations("/nonexistent/dir", "/test")).toEqual([]);
   });
 });

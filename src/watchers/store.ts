@@ -18,6 +18,7 @@ import type {
   HookEventData,
   HookSessionInfo,
   ActivityEvent,
+  ActivityAlert,
 } from "../types.js";
 
 const STORE_DIR = join(homedir(), ".claude-radar");
@@ -360,6 +361,7 @@ export class Store {
       goneSessionCount: goneSessions.length,
       hookSessions: this.getHookSessions(liveProject.projectPath),
       activityLog: this.getActivityLog(liveProject.projectPath),
+      activityAlerts: detectPatterns(this.getActivityLog(liveProject.projectPath)),
     };
   }
 
@@ -510,6 +512,7 @@ export class Store {
       goneSessionCount: 0,
       hookSessions,
       activityLog: this.getActivityLog(projectPath),
+      activityAlerts: detectPatterns(this.getActivityLog(projectPath)),
     };
   }
 
@@ -538,8 +541,149 @@ export class Store {
       goneSessionCount: sessions.length,
       hookSessions: this.getHookSessions(store.projectPath),
       activityLog: this.getActivityLog(store.projectPath),
+      activityAlerts: detectPatterns(this.getActivityLog(store.projectPath)),
     };
   }
+}
+
+// ─── Pattern detection on activity log ───────────────────────
+
+// Thresholds for pattern detection
+const CONSECUTIVE_FAILURE_THRESHOLD = 3;
+const CONSECUTIVE_RETRY_THRESHOLD = 4;
+const LONG_TURN_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Scan activity events for anomalous patterns.
+ * Returns alerts for: repeated tool failures, repeated Task retries, long turns.
+ */
+function detectPatterns(events: ActivityEvent[]): ActivityAlert[] {
+  if (events.length === 0) return [];
+
+  const alerts: ActivityAlert[] = [];
+
+  // Group events by session for per-session pattern detection
+  const bySession = new Map<string, ActivityEvent[]>();
+  for (const ev of events) {
+    let arr = bySession.get(ev.sessionId);
+    if (!arr) {
+      arr = [];
+      bySession.set(ev.sessionId, arr);
+    }
+    arr.push(ev);
+  }
+
+  for (const [sessionId, sessionEvents] of bySession) {
+    // 1. Repeated failures: same tool fails N+ times in a row
+    let failRun = 0;
+    let failTool = "";
+    let failLast: ActivityEvent | null = null;
+
+    for (const ev of sessionEvents) {
+      if (ev.isError && ev.toolName === failTool && failTool !== "") {
+        failRun++;
+        failLast = ev;
+      } else if (ev.isError) {
+        // New failing tool — flush previous run if it hit threshold
+        if (failRun >= CONSECUTIVE_FAILURE_THRESHOLD && failLast) {
+          alerts.push({
+            type: "repeated_failure",
+            severity: failRun >= 5 ? "error" : "warning",
+            message: `${failTool} failed ${failRun} times in a row`,
+            count: failRun,
+            sessionId,
+            projectPath: failLast.projectPath,
+            ts: failLast.ts,
+          });
+        }
+        failTool = ev.toolName;
+        failRun = 1;
+        failLast = ev;
+      } else {
+        // Success breaks the run — flush if threshold met
+        if (failRun >= CONSECUTIVE_FAILURE_THRESHOLD && failLast) {
+          alerts.push({
+            type: "repeated_failure",
+            severity: failRun >= 5 ? "error" : "warning",
+            message: `${failTool} failed ${failRun} times in a row`,
+            count: failRun,
+            sessionId,
+            projectPath: failLast.projectPath,
+            ts: failLast.ts,
+          });
+        }
+        failRun = 0;
+        failTool = "";
+        failLast = null;
+      }
+    }
+    // Flush trailing run
+    if (failRun >= CONSECUTIVE_FAILURE_THRESHOLD && failLast) {
+      alerts.push({
+        type: "repeated_failure",
+        severity: failRun >= 5 ? "error" : "warning",
+        message: `${failTool} failed ${failRun} times in a row`,
+        count: failRun,
+        sessionId,
+        projectPath: failLast.projectPath,
+        ts: failLast.ts,
+      });
+    }
+
+    // 2. Repeated Task retries: Task tool called N+ times in a row (agent stuck in spawn loop)
+    let taskRun = 0;
+    let taskLast: ActivityEvent | null = null;
+
+    for (const ev of sessionEvents) {
+      if (ev.toolName === "Task") {
+        taskRun++;
+        taskLast = ev;
+      } else {
+        if (taskRun >= CONSECUTIVE_RETRY_THRESHOLD && taskLast) {
+          alerts.push({
+            type: "repeated_retry",
+            severity: taskRun >= 6 ? "error" : "warning",
+            message: `Task tool called ${taskRun} times in a row (possible retry loop)`,
+            count: taskRun,
+            sessionId,
+            projectPath: taskLast.projectPath,
+            ts: taskLast.ts,
+          });
+        }
+        taskRun = 0;
+        taskLast = null;
+      }
+    }
+    if (taskRun >= CONSECUTIVE_RETRY_THRESHOLD && taskLast) {
+      alerts.push({
+        type: "repeated_retry",
+        severity: taskRun >= 6 ? "error" : "warning",
+        message: `Task tool called ${taskRun} times in a row (possible retry loop)`,
+        count: taskRun,
+        sessionId,
+        projectPath: taskLast.projectPath,
+        ts: taskLast.ts,
+      });
+    }
+
+    // 3. Long turns: _turn_complete events with durationMs > threshold
+    for (const ev of sessionEvents) {
+      if (ev.toolName === "_turn_complete" && ev.durationMs && ev.durationMs > LONG_TURN_THRESHOLD_MS) {
+        const mins = Math.floor(ev.durationMs / 60000);
+        alerts.push({
+          type: "long_turn",
+          severity: ev.durationMs > 10 * 60 * 1000 ? "error" : "warning",
+          message: `Turn took ${mins}+ minutes`,
+          count: 1,
+          sessionId,
+          projectPath: ev.projectPath,
+          ts: ev.ts,
+        });
+      }
+    }
+  }
+
+  return alerts;
 }
 
 // ─── Event consumption (Layer 1: Hook events) ───────────────
@@ -880,3 +1024,6 @@ export function mergeAndPersist(
 
   return merged;
 }
+
+// Exported for testing
+export { detectPatterns };
