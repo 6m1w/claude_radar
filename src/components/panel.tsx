@@ -27,7 +27,9 @@ export function Panel({
       width={width}
       height={height}
       flexGrow={flexGrow}
+      flexShrink={width ? 0 : undefined}
       paddingX={1}
+      overflowX="hidden"
     >
       <Text>
         {hotkey && (
