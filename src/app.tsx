@@ -417,7 +417,7 @@ export function App() {
             const maxName = p.branch !== "main" ? 14 : 20;
             const displayName = p.name.length > maxName ? p.name.slice(0, maxName - 1) + "…" : p.name;
             return (
-              <Box key={p.projectPath} overflow="hidden">
+              <Text key={p.projectPath} wrap="truncate">
                 <Text color={isCursor ? C.primary : C.dim}>
                   {isCursor ? I.cursor : " "}
                 </Text>
@@ -442,7 +442,7 @@ export function App() {
                     ).join("")}
                   </Text>
                 )}
-              </Box>
+              </Text>
             );
           })}
           {belowCount > 0 && (
@@ -568,7 +568,7 @@ function RightPanel({
           // Truncate long IDs (e.g., timestamp-based) and pad for alignment
           const displayId = t.id.length > 6 ? t.id.slice(0, 5) + "…" : t.id.padStart(maxIdLen);
           return (
-            <Box key={`${t.id}-${isGone ? "g" : "l"}`}>
+            <Text key={`${t.id}-${isGone ? "g" : "l"}`} wrap="truncate">
               <Text color={isCursor ? C.primary : C.dim}>
                 {isCursor ? I.cursor : " "}{" "}
               </Text>
@@ -587,7 +587,7 @@ function RightPanel({
               {!isGone && t.status !== "completed" && t.statusChangedAt && (
                 <Text color={C.dim}> ↑{formatDwell(t.statusChangedAt)}</Text>
               )}
-            </Box>
+            </Text>
           );
         };
 
