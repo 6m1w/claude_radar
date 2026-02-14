@@ -68,6 +68,7 @@ function toViewProject(p: MergedProjectData): ViewProject {
     gitLog: p.gitLog,
     docContents: p.docContents,
     lastActivity: p.lastActivity,
+    isActive: p.isActive,
     planningLog: p.planningLog,
     activityLog: p.activityLog,
     activityAlerts: p.activityAlerts,
@@ -154,11 +155,25 @@ export function App() {
       });
     }
 
-    // Phase 3: Sort groups — active groups first, then by most recent activity
+    // Phase 3: Sort groups with tiered decay
+    // Tier 0: live sessions / recent in_progress (isActive from scanner)
+    // Tier 1: activity within 1 hour
+    // Tier 2: activity within 24 hours
+    // Tier 3: stale (>24h) — sort by lastActivity desc
+    // Within tier 3, no pending-task boost: stale in_progress tasks are effectively dead
+    const now = Date.now();
+    const HOUR = 3_600_000;
+    const DAY = 86_400_000;
+    const groupTier = (group: ViewProject[]): number => {
+      if (group.some((p) => p.isActive)) return 0;
+      const maxAge = Math.min(...group.map((p) => now - p.lastActivity.getTime()));
+      if (maxAge < HOUR) return 1;
+      if (maxAge < DAY) return 2;
+      return 3;
+    };
     const groupEntries = [...groupMap.entries()].sort(([, a], [, b]) => {
-      const aActive = a.some((p) => p.activeSessions > 0 || p.hookSessionCount > 0);
-      const bActive = b.some((p) => p.activeSessions > 0 || p.hookSessionCount > 0);
-      if (aActive !== bActive) return aActive ? -1 : 1;
+      const tierDiff = groupTier(a) - groupTier(b);
+      if (tierDiff !== 0) return tierDiff;
       const aMax = Math.max(...a.map((p) => p.lastActivity.getTime()));
       const bMax = Math.max(...b.map((p) => p.lastActivity.getTime()));
       return bMax - aMax;
@@ -297,7 +312,7 @@ export function App() {
   const totalProjects = sorted.length;
   const totalTasks = sorted.reduce((s, p) => s + p.tasks.length, 0);
   const totalDone = sorted.reduce((s, p) => s + taskStats(p).done, 0);
-  const totalActive = sorted.filter((p) => p.activeSessions > 0 || p.hookSessionCount > 0).length;
+  const totalActive = sorted.filter((p) => p.isActive).length;
 
   const viewLabel = view === "agent" ? "AGENT"
     : view === "swimlane" ? "SWIMLANE"
@@ -329,7 +344,7 @@ export function App() {
   const belowCount = Math.max(0, sorted.length - scrollOffset - visibleProjects);
 
   // Active agents summary for Row A
-  const activeProjects = sorted.filter((p) => p.activeSessions > 0 || p.hookSessionCount > 0);
+  const activeProjects = sorted.filter((p) => p.isActive);
 
   return (
     <Box flexDirection="column" height={termRows} paddingBottom={1}>
@@ -381,7 +396,7 @@ export function App() {
             const realIdx = scrollOffset + vi;
             const isCursor = realIdx === safeProjectIdx;
             const stats = taskStats(p);
-            const isActive = p.activeSessions > 0 || p.hookSessionCount > 0;
+            const isActive = p.isActive;
             const icon = isActive ? I.working : stats.total > 0 && stats.done === stats.total ? I.done : I.idle;
             const iconColor = isActive ? C.warning : stats.done === stats.total && stats.total > 0 ? C.success : C.dim;
             const isSelected = selectedNames.has(p.projectPath);
