@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Store, mergeAndPersist, consumeEvents, resetEventsOffset, EVENTS_PATH, truncateEvents, detectPatterns } from "../store.js";
+import { Store, mergeAndPersist, consumeEvents, resetEventsOffset, EVENTS_PATH, truncateEvents, detectPatterns, PLANNING_TOOLS } from "../store.js";
 import { ingestHookEvents } from "../store.js";
 import type { ProjectData, SessionData, TodoItem, TaskItem, MergedProjectData, HookEvent, HookSessionInfo, ActivityEvent } from "../../types.js";
 
@@ -68,6 +68,7 @@ function makeProject(overrides: Partial<ProjectData> = {}): ProjectData {
     totalSessions: 1,
     activeSessions: 0,
     docs: [],
+    roadmap: [],
     gitLog: [],
     docContents: {},
     recentSessions: [],
@@ -1340,5 +1341,82 @@ describe("detectPatterns", () => {
       expect(merged[0].activityAlerts.length).toBeGreaterThan(0);
       expect(merged[0].activityAlerts[0].type).toBe("repeated_failure");
     });
+  });
+});
+
+// ─── L2/L3 activity split (planningLog vs activityLog) ────────
+
+describe("activity split — planningLog vs activityLog", () => {
+  it("should classify planning tools into planningLog", () => {
+    const store = new Store();
+
+    // Inject a mix of planning and execution events
+    ingestHookEvents(store, [
+      makeHookEvent({ data: { session_id: "s1", cwd: "/test/project", tool_name: "EnterPlanMode", tool_input: {} } }),
+      makeHookEvent({ data: { session_id: "s1", cwd: "/test/project", tool_name: "Read", tool_input: { file_path: "src/app.ts" } } }),
+      makeHookEvent({ data: { session_id: "s1", cwd: "/test/project", tool_name: "TaskCreate", tool_input: { subject: "Do X", description: "desc" } } }),
+      makeHookEvent({ data: { session_id: "s1", cwd: "/test/project", tool_name: "Write", tool_input: { file_path: "src/app.ts", content: "..." } } }),
+      makeHookEvent({ data: { session_id: "s1", cwd: "/test/project", tool_name: "ExitPlanMode", tool_input: {} } }),
+      makeHookEvent({ data: { session_id: "s1", cwd: "/test/project", tool_name: "Bash", tool_input: { command: "npm test" } } }),
+    ]);
+
+    const { planningLog, activityLog } = store.getActivitySplit("/test/project");
+
+    // Planning: EnterPlanMode, TaskCreate, ExitPlanMode
+    expect(planningLog).toHaveLength(3);
+    expect(planningLog.map((e) => e.toolName)).toEqual(["EnterPlanMode", "TaskCreate", "ExitPlanMode"]);
+
+    // Activity: Read, Write, Bash
+    expect(activityLog).toHaveLength(3);
+    expect(activityLog.map((e) => e.toolName)).toEqual(["Read", "Write", "Bash"]);
+  });
+
+  it("should include Task tool in planningLog", () => {
+    const store = new Store();
+
+    ingestHookEvents(store, [
+      makeHookEvent({ data: { session_id: "s1", cwd: "/test/project", tool_name: "Task", tool_input: { subagent_type: "Explore", description: "Find files" } } }),
+      makeHookEvent({ data: { session_id: "s1", cwd: "/test/project", tool_name: "Grep", tool_input: { pattern: "TODO" } } }),
+    ]);
+
+    const { planningLog, activityLog } = store.getActivitySplit("/test/project");
+    expect(planningLog).toHaveLength(1);
+    expect(planningLog[0].toolName).toBe("Task");
+    expect(activityLog).toHaveLength(1);
+    expect(activityLog[0].toolName).toBe("Grep");
+  });
+
+  it("should return empty arrays for unknown project", () => {
+    const store = new Store();
+    const { planningLog, activityLog } = store.getActivitySplit("/nonexistent");
+    expect(planningLog).toEqual([]);
+    expect(activityLog).toEqual([]);
+  });
+
+  it("should propagate planningLog through merge", () => {
+    const store = new Store();
+
+    ingestHookEvents(store, [
+      makeHookEvent({ data: { session_id: "s1", cwd: "/test/project", tool_name: "EnterPlanMode", tool_input: {} } }),
+      makeHookEvent({ data: { session_id: "s1", cwd: "/test/project", tool_name: "Read", tool_input: { file_path: "x.ts" } } }),
+      makeHookEvent({ data: { session_id: "s1", cwd: "/test/project", tool_name: "Task", tool_input: { subagent_type: "Plan", description: "Design API" } } }),
+    ]);
+
+    const merged = store.merge([makeProject({ projectPath: "/test/project" })]);
+    expect(merged[0].planningLog).toHaveLength(2); // EnterPlanMode + Task
+    expect(merged[0].activityLog).toHaveLength(1); // Read
+  });
+
+  it("should classify all PLANNING_TOOLS correctly", () => {
+    // Verify every tool in the set is actually classified as planning
+    for (const tool of PLANNING_TOOLS) {
+      const store = new Store();
+      ingestHookEvents(store, [
+        makeHookEvent({ data: { session_id: "s1", cwd: "/test/p", tool_name: tool, tool_input: {} } }),
+      ]);
+      const { planningLog } = store.getActivitySplit("/test/p");
+      expect(planningLog).toHaveLength(1);
+      expect(planningLog[0].toolName).toBe(tool);
+    }
   });
 });
