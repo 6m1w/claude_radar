@@ -112,29 +112,42 @@ Multi-project kanban for parallel development monitoring. Two layout modes toggl
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
-**Layout B: Swimlane** — columns are TODO / DOING / DONE. All tasks from all agents in the selected project(s), sorted into status columns.
+**Layout B: Swimlane Table** — shared header row, projects as row groups. Like an Excel pivot table.
 
 ```
-╭─ FOCUS: outclaws ⎇ main ────────────────────────────────────────────────────╮
+╭─ FOCUS ──────────────────────────────────────────────────────────────────────╮
 │                                                                              │
-│  ┌─ TODO ───────────┐┌─ DOING ──────────┐┌─ DONE ───────────┐              │
-│  │                   ││                   ││                   │              │
-│  │ ○ API endpoints   ││ ▶ User dashboard  ││ ✓ Auth module     │              │
-│  │   └ stream-a      ││   └ stream-a      ││   └ stream-a      │              │
-│  │ ○ E2E tests       ││ ▶ Migrations      ││ ✓ DB schema       │              │
-│  │   └ stream-c      ││   └ stream-b      ││   └ stream-b      │              │
-│  │ ⊘ Unit tests      ││                   ││                   │              │
-│  │   └ stream-c      ││                   ││                   │              │
-│  │                   ││                   ││                   │              │
-│  └───────────────────┘└───────────────────┘└───────────────────┘              │
+│              │ TODO             │ DOING            │ DONE                    │
+│  ────────────┼──────────────────┼──────────────────┼──────────────────────── │
+│              │                  │                  │                         │
+│  monitor     │ ○ Keyboard nav   │ ▶ Design UI      │ ✓ Setup Ink            │
+│  ⎇ main      │                  │                  │ ✓ Session idx          │
+│              │                  │                  │ ✓ Polling              │
+│  ────────────┼──────────────────┼──────────────────┼──────────────────────── │
+│              │                  │                  │                         │
+│  outclaws    │ ○ API endpoints  │ ▶ Dashboard      │ ✓ Auth module          │
+│  ⎇ main      │ ○ E2E tests     │   └ stream-a     │   └ stream-a           │
+│  3 agents    │   └ stream-c    │ ▶ Migrations     │ ✓ DB schema            │
+│              │ ⊘ Unit tests    │   └ stream-b     │   └ stream-b           │
+│              │   └ stream-c    │                  │                         │
+│  ────────────┼──────────────────┼──────────────────┼──────────────────────── │
+│              │                  │                  │                         │
+│  sound_fx    │                  │                  │ ✓ Cross-platform       │
+│  ⎇ main      │                  │                  │ ✓ 12 theme packs      │
+│              │                  │                  │ ✓ Opencode plugin     │
+│                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
 Key features:
-- `s` toggles between agent layout and swimlane layout
-- Projects stacked vertically
+- `s` toggles between agent layout and swimlane table
+- Single shared header row — TODO / DOING / DONE columns span all projects
+- Projects as row groups separated by horizontal dividers
+- Left column shows project name, branch, agent count
+- Multi-agent tasks show `└ agent-name` below the task
+- Single-agent projects omit agent label (no noise)
+- DONE column requires local persistence (tasks vanish from Claude Code after completion)
 - Only shows projects with `status != "done"` by default (toggle with `h`)
-- Swimlane DONE column requires local persistence (tasks disappear from Claude Code after completion)
 
 Access: `Tab` from Dashboard, or `f` to filter which projects appear.
 
