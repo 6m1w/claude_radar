@@ -270,13 +270,6 @@ function ProjectDetail({ project, panelFocused }: { project: MockProject; panelF
 
 // ─── Global View: Activity Log ───────────────────────────────
 function ActivityLog({ panelFocused }: { panelFocused: boolean }) {
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setTick((v) => v + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][tick % 10];
-
   const logs = [
     { time: "10:08", project: "monitor", action: "▶", task: "#4 Design hacker UI", color: C.yellow },
     { time: "10:05", project: "outclaws", action: "▶", task: "#2 User dashboard", color: C.yellow },
@@ -297,11 +290,89 @@ function ActivityLog({ panelFocused }: { panelFocused: boolean }) {
           </Box>
         ))}
       </Box>
-      <Box marginTop={1}>
-        <Text color={C.green}>{spinner} </Text>
-        <Text color={C.dim}>polling ~/.claude/tasks/ </Text>
-      </Box>
     </Panel>
+  );
+}
+
+// ─── ASCII Mascot ────────────────────────────────────────────
+const MASCOT_FRAMES = {
+  idle: [
+    ["   ○   ", "  /|\\  ", "  / \\  ", " zzZ.. "],
+    ["   ○   ", "  /|\\  ", "  / \\  ", " zZ... "],
+  ],
+  working: [
+    ["   ○    ", "  /|\\  ⌨", "  / \\   ", "        "],
+    ["   ○    ", "  <|\\  ⌨", "  / \\   ", "        "],
+  ],
+  done: [
+    ["  \\○/  ", "   |   ", "  / \\  ", " done! "],
+  ],
+};
+
+function Mascot({ status }: { status: "idle" | "working" | "done" }) {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    const frames = MASCOT_FRAMES[status];
+    if (frames.length <= 1) return;
+    const t = setInterval(() => setFrame((v) => (v + 1) % frames.length), 500);
+    return () => clearInterval(t);
+  }, [status]);
+
+  const lines = MASCOT_FRAMES[status][frame % MASCOT_FRAMES[status].length];
+  const color = status === "working" ? C.yellow : status === "done" ? C.green : C.dim;
+
+  return (
+    <Box flexDirection="column" alignItems="center">
+      {lines.map((line, i) => (
+        <Text key={i} color={color}>{line}</Text>
+      ))}
+    </Box>
+  );
+}
+
+// ─── System Metrics Bar ──────────────────────────────────────
+function SystemMetrics({ tick }: { tick: number }) {
+  // Simulated fluctuating data for demo
+  const cpuBase = [12, 18, 35, 62, 45, 28, 15, 22];
+  const cpuHistory = cpuBase.map((v, i) => v + ((tick + i) * 7 % 15) - 7);
+  const cpuNow = Math.abs(cpuHistory[cpuHistory.length - 1]);
+
+  const sparkChars = "▁▂▃▄▅▆▇█";
+  const maxCpu = Math.max(...cpuHistory.map(Math.abs), 1);
+  const spark = cpuHistory
+    .map((v) => sparkChars[Math.min(Math.floor((Math.abs(v) / maxCpu) * 7), 7)])
+    .join("");
+
+  const memUsed = 4.1 + (tick % 5) * 0.2;
+  const memTotal = 8;
+  const memFilled = Math.round((memUsed / memTotal) * 8);
+
+  const netUp = (0.8 + (tick * 3 % 20) / 10).toFixed(1);
+  const netDown = (12.5 + (tick * 7 % 80) / 10).toFixed(1);
+
+  const spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][tick % 10];
+
+  return (
+    <Box>
+      <Text>
+        <Text color={C.subtext}>CPU </Text>
+        <Text color={C.green}>{spark}</Text>
+        <Text color={C.text}> {cpuNow}%</Text>
+        <Text color={C.dim}> │ </Text>
+        <Text color={C.subtext}>MEM </Text>
+        <Text color={C.blue}>{"█".repeat(memFilled)}</Text>
+        <Text color={C.dim}>{"░".repeat(8 - memFilled)}</Text>
+        <Text color={C.text}> {memUsed.toFixed(1)}/{memTotal}G</Text>
+        <Text color={C.dim}> │ </Text>
+        <Text color={C.green}>↑</Text><Text color={C.text}> {netUp}</Text>
+        <Text color={C.subtext}> KB/s </Text>
+        <Text color={C.cyan}>↓</Text><Text color={C.text}> {netDown}</Text>
+        <Text color={C.subtext}> KB/s</Text>
+        <Text color={C.dim}> │ </Text>
+        <Text color={C.green}>{spinner}</Text>
+        <Text color={C.dim}> polling</Text>
+      </Text>
+    </Box>
   );
 }
 
@@ -380,15 +451,16 @@ function FocusView() {
 // ─── Bottom Bar ──────────────────────────────────────────────
 function BottomBar({ page }: { page: string }) {
   return (
-    <Box marginTop={1}>
+    <Box>
       <Text>
         <Text color={C.cyan} bold> {page === "global" ? "GLOBAL" : "FOCUS"} </Text>
         <Text color={C.dim}> │ </Text>
         <Text color={C.green}>↑↓</Text><Text color={C.subtext}> nav </Text>
         <Text color={C.green}>Enter</Text><Text color={C.subtext}> select </Text>
-        <Text color={C.green}>Tab</Text><Text color={C.subtext}> switch view </Text>
+        <Text color={C.green}>Tab</Text><Text color={C.subtext}> view </Text>
         <Text color={C.green}>1-3</Text><Text color={C.subtext}> panel </Text>
-        <Text color={C.green}>h</Text><Text color={C.subtext}> hide done </Text>
+        <Text color={C.green}>h</Text><Text color={C.subtext}> hide </Text>
+        <Text color={C.green}>t</Text><Text color={C.subtext}> theme </Text>
         <Text color={C.green}>q</Text><Text color={C.subtext}> quit</Text>
       </Text>
     </Box>
@@ -403,7 +475,19 @@ function App() {
   const [activePanel, setActivePanel] = useState(1);
   const [hideDone, setHideDone] = useState(false);
 
+  // Shared tick for all animations (1s interval)
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((v) => v + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+
   const visibleProjects = hideDone ? PROJECTS.filter((p) => p.status !== "done") : PROJECTS;
+
+  // Derive mascot state from project data
+  const hasWorking = PROJECTS.some((p) => p.agents.some((a) => a.status === "working"));
+  const allDone = PROJECTS.every((p) => p.status === "done");
+  const mascotState = allDone ? "done" as const : hasWorking ? "working" as const : "idle" as const;
 
   useInput((input, key) => {
     if (input === "q") exit();
@@ -422,17 +506,26 @@ function App() {
     <Box flexDirection="column">
       {page === "global" ? (
         <>
-          {/* Top: Projects + Detail side by side */}
+          {/* Top: Projects + Detail (with mascot) side by side */}
           <Box>
-            <ProjectList focusIdx={focusIdx} panelFocused={activePanel === 1} />
+            <Box flexDirection="column" width={34}>
+              <ProjectList focusIdx={focusIdx} panelFocused={activePanel === 1} />
+              <Box justifyContent="center" marginTop={1}>
+                <Mascot status={mascotState} />
+              </Box>
+            </Box>
             <ProjectDetail project={currentProject} panelFocused={activePanel === 2} />
           </Box>
-          {/* Bottom: Activity log */}
+          {/* Activity log */}
           <ActivityLog panelFocused={activePanel === 3} />
         </>
       ) : (
         <FocusView />
       )}
+      {/* System metrics + keyboard hints */}
+      <Box marginTop={1}>
+        <SystemMetrics tick={tick} />
+      </Box>
       <BottomBar page={page} />
     </Box>
   );

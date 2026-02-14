@@ -25,7 +25,9 @@ All-projects-at-a-glance. The "home screen".
 │                                      ││                                      │
 │  4 projects  7 agents  23 tasks      ││  ◍ monitor/main    #4 Design UI      │
 │  [===============>........] 65%      ││  ◍ outclaws/str-a  #2 Dashboard      │
-│                                      ││  ◍ outclaws/str-b  #2 Migrations     │
+│                       ○              ││  ◍ outclaws/str-b  #2 Migrations     │
+│                      /|＼    ⌨       ││                                      │
+│                      / ＼            ││                                      │
 ╰──────────────────────────────────────╯╰──────────────────────────────────────╯
 ╭─ PROJECTS ───────────────────────────────────────────────────────────────────╮
 │                                                                              │
@@ -40,6 +42,8 @@ All-projects-at-a-glance. The "home screen".
 │  10:05  outclaws  ▶ #2 User dashboard                                        │
 │  10:03  monitor   ✓ #3 Polling watcher                                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
+ CPU ▁▃▅▇▅▃▁▃ 23% │ MEM ██████░░ 4.2/8G │ ↑ 1.2 KB/s ↓ 45.3 KB/s │ ⠋ polling
+ ↑↓ nav  Enter select  Tab switch  1-3 panel  h hide done  t theme  q quit
 ```
 
 Key features:
@@ -244,6 +248,81 @@ Shows what each agent is currently doing:
 ◍ outclaws/str-a  ▶ #2 User dashboard      5m
 ```
 
+### System Metrics Bar
+
+Persistent status bar showing live system metrics. The constantly fluctuating numbers create a strong "alive" signal.
+
+```
+╭─ SYSTEM ─────────────────────────────────────────────────────────────────────╮
+│  CPU ▁▃▅▇▅▃▁▃ 23%  │  MEM ██████░░ 4.2/8 GB  │  ↑ 1.2 KB/s  ↓ 45.3 KB/s │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+- **CPU**: Sparkline mini-graph (last 8 samples) + current percentage
+- **MEM**: Bar + used/total
+- **Network**: Upload/download rate with `↑` `↓` arrows
+- Position: Bottom of screen, above the keyboard hint bar
+- Data source: `os.cpus()`, `os.freemem()/totalmem()`, network via `process.cpuUsage()` or `/proc/net/dev` (macOS: `netstat`)
+- Refresh: 1s (same interval as data polling — reuse the timer)
+
+### ASCII Character (Mascot)
+
+Animated character that reflects system state. Placed in the Dashboard OVERVIEW panel or bottom-right corner.
+
+**Idle** (no active agents):
+```
+    ○
+   /|＼
+   / ＼
+  zzZ...
+```
+
+**Working** (agents running — 2 frame loop):
+```
+ Frame 1:        Frame 2:
+    ○                ○
+   /|＼    ⌨       ＜|＼    ⌨
+   / ＼             / ＼
+```
+
+**All done** (everything completed):
+```
+   ＼○／
+    |
+   / ＼
+  done!
+```
+
+- Frames cycle at 500ms (2 fps)
+- State auto-detects from agent status: any `working` → working animation, all `done` → celebration, else idle
+- Disable with `animations: false` in config
+
+### Animations
+
+All animations are optional — toggled via config `{ "animations": true }` or `--no-animations` flag.
+
+| Animation | Where | FPS | Description |
+|-----------|-------|-----|-------------|
+| Spinner | Activity panel, status bar | 10 | `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` braille rotation |
+| Active task pulse | Task list | 2 | `▶` blinks yellow/dim |
+| New task flash | Task list | — | 1.5s yellow highlight on new items |
+| ASCII mascot | Dashboard corner | 2 | State-dependent character animation |
+| Sparkline | System metrics | 1 | CPU history graph updates each second |
+| Number roll | Progress bars | — | Counter animates from old to new value on change |
+
+```typescript
+// Animation config in Theme
+interface Theme {
+  // ... existing fields
+  animations: {
+    enabled: boolean;
+    spinnerFps: number;     // default 10
+    pulseFps: number;       // default 2
+    typewriterCps: number;  // chars per second, default 30
+  };
+}
+```
+
 ## Theme System
 
 ### Architecture
@@ -371,6 +450,9 @@ git log (per project dir)  ──────────┘                    
 | P2 | Theme system + 3 themes | All | Medium |
 | P2 | Search/filter | All | Low |
 | P2 | Task detail expansion | Detail | Low |
+| P2 | System metrics bar (CPU/MEM/NET) | All (bottom) | Low |
+| P2 | ASCII mascot animation | Dashboard | Low |
+| P2 | Animation system (pulse, flash, sparkline) | All | Medium |
 | P3 | Local snapshot persistence | All | Medium |
 | P3 | Status badges (build/deploy) | Dashboard | Low (needs hooks) |
 
