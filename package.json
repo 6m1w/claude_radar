@@ -8,7 +8,6 @@
   },
   "scripts": {
     "dev": "NODE_ENV=production tsx src/index.tsx",
-    "dev:v2": "NODE_ENV=production tsx src/playground-v2.tsx",
     "build": "tsup src/index.tsx --format esm --dts --env.NODE_ENV production",
     "start": "NODE_ENV=production node dist/index.js",
     "typecheck": "tsc --noEmit",
