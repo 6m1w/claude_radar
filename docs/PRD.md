@@ -30,7 +30,9 @@
 | TodoWrite（旧） | `~/.claude/todos/{session}-agent-{agent}.json` | JSON 数组 `[{content, status, activeForm}]` | ✅ 已接入 |
 | TaskCreate（新） | `~/.claude/tasks/{session}/{n}.json` | JSON 对象 `{id, subject, description, status, owner, blocks, blockedBy}` | ✅ 已接入 |
 | Session Index | `~/.claude/projects/*/sessions-index.json` | JSON `{entries: [{sessionId, projectPath, summary, gitBranch}]}` | ✅ 已接入 |
-| Session JSONL | `~/.claude/projects/*/{sessionId}.jsonl` | 会话记录 | ✅ 用于 fallback 匹配 |
+| Session JSONL | `~/.claude/projects/*/{sessionId}.jsonl` | 会话记录 | ✅ 用于 fallback 匹配 + mtime 活跃检测 |
+| Git HEAD | `{projectPath}/.git/HEAD` | 当前分支 | ✅ 已接入 |
+| 项目文档 | `{projectPath}/CLAUDE.md`, `PRD.md`, `TDD.md`, `README.md` | 存在性检测 | ✅ 已接入 |
 | 本地快照 | `~/.claude-monitor/snapshots/{sessionId}.json` | TUI 自己的持久化副本 | 🔜 v0.2 |
 | Team Config | `~/.claude/teams/{team}/config.json` | JSON `{members: [{name, agentId, agentType}]}` | 🔜 v0.3 |
 | Hook Events | Claude Code hook 系统 | 事件触发 | 🔜 v0.4 |
@@ -58,12 +60,14 @@
 - [ ] 已完成/已删除的 session 默认折叠为一行，可展开查看
 
 #### 键盘交互
-- [ ] `↑` `↓` / `j` `k`：切换 session 焦点
-- [ ] `Enter`：展开/折叠 session 详情
-- [ ] `Tab`：切换视图（列表 ↔ 看板）
+- [x] `↑` `↓` / `j` `k`：切换 project/task 焦点
+- [x] `Enter`：进入项目详情（Project Detail 视图）
+- [x] `Esc`：返回上级视图
+- [x] `Tab`：切换到 Kanban 视图
+- [x] `Space`：标记项目（☑/☐）用于 Kanban 多选
 - [ ] `/`：搜索过滤
 - [ ] `f`：过滤模式（active / all / project）
-- [ ] `q`：退出
+- [x] `q`：退出
 
 #### 设计风格
 - [x] 黑客美学 / cyberpunk 终端风格
@@ -71,14 +75,33 @@
 - [ ] ASCII art header
 - [x] Design Playground 原型验证
 - [x] 系统指标状态栏（CPU sparkline + MEM + 网络 + spinner）
-- [x] Mini mascot（☻ 状态指示，内嵌 status bar）
+- [x] Mini mascot（☻ 状态指示，内嵌 status bar，静态无动画避免闪烁）
+
+#### 数据源重构
+- [x] **项目中心化发现**：扫描 `~/.claude/projects/` 全部目录（不依赖 tasks/todos）
+- [x] **Git 信息**：直接读 `.git/HEAD` 获取分支（非仅 sessions-index 元数据）
+- [x] **文档检测**：检测 CLAUDE.md, PRD.md, TDD.md, README.md 存在性
+- [x] **Session 活跃检测**：通过 `.jsonl` 文件 mtime 判断（5 分钟阈值）
+- [x] **路径反推**：`resolveSegments()` 从 Claude 编码目录名重建实际路径
+- [x] **项目去重**：多个 Claude 目录解析到同一路径时合并数据
+- [x] **Session 历史**：从 sessions-index.json 提取 summary/firstPrompt 展示
 
 #### 视图
-- [ ] **Dashboard 视图**（默认）：全项目一览，OVERVIEW + ACTIVE NOW + PROJECTS + ACTIVITY
-- [ ] **Project Detail 视图**：Tasks + Git History + PRD/Docs 三栏
-- [ ] **Focus/Kanban 视图**：By Agent 布局 + Swimlane 表格布局（共享表头 TODO/DOING/DONE）
-- [ ] **当前 session 高亮**：最新活跃 session 置顶 + 高亮边框
+- [x] **Dashboard 视图**（默认）：OVERVIEW + ACTIVE NOW + PROJECTS(42) + ACTIVITY
+- [x] **Project Detail 视图**：项目信息（git/path/sessions/docs）+ Tasks 或 Session 历史
+- [x] **Focus/Kanban 视图**：Swimlane 表格布局（共享表头 TODO/DOING/DONE）
+- [x] **活跃项目置顶**：有 active session 的项目排在最前
+- [ ] **Project Detail 三栏**：Tasks + Git History + PRD/Docs 并排显示（设计已有，待实现）
+- [ ] **By Agent 布局**：Kanban 按 agent 分列（设计已有，待实现）
 - [ ] **折叠/展开**：旧 session 折叠成单行摘要
+
+#### 性能优化
+- [x] **渲染频率降低**：metrics 3s/次（网络 6s），数据轮询 3s
+- [x] **顺序异步循环**：while + await 替代 setInterval，防止 netstat 进程累积
+- [x] **StatusBar 渲染隔离**：useMetrics() 在 StatusBar 内部，不传播到 App
+- [x] **固定宽度格式化**：数值 padStart 防止 layout shift
+- [x] **snapshotKey 差异检测**：仅数据变化时触发 React re-render
+- [x] **Production 构建**：NODE_ENV=production 抑制 React dev 警告
 
 ### v0.3 — 多 Agent 监控
 
@@ -114,7 +137,7 @@
 |---|---|---|
 | 语言 | TypeScript | 项目规范 + 类型安全 |
 | TUI 引擎 | Ink (React for CLI) | 响应式渲染，组件化开发 |
-| 数据刷新 | 1s setInterval 轮询 | 比 Chokidar FSEvents 更可靠，开销极低 |
+| 数据刷新 | 3s setInterval 轮询 + snapshotKey diff | 比 Chokidar FSEvents 更可靠，仅变化时 re-render |
 | 持久化 | JSON 文件 (`~/.claude-monitor/`) | 本地快照，无需数据库 |
 | 构建 | tsup | 零配置 TS 打包 |
 | 开发 | tsx | TS 直接运行，无需编译 |
