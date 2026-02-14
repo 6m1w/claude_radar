@@ -130,8 +130,8 @@ export function App() {
   const [bottomFocused, setBottomFocused] = useState(false);
 
   // Kanban state
-  const [kanbanLayout, setKanbanLayout] = useState<"swimlane" | "by_agent">("swimlane");
-  const [kanbanHideDone, setKanbanHideDone] = useState(false);
+  const [kanbanLayout, setKanbanLayout] = useState<"swimlane" | "by_agent">("by_agent");
+  const [kanbanHideDone, setKanbanHideDone] = useState(true);
 
   // Convert real data → view model, group worktrees with their main repo
   const viewProjects = rawProjects.map(toViewProject);
