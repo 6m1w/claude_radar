@@ -130,7 +130,7 @@ export function App() {
   const [bottomFocused, setBottomFocused] = useState(false);
 
   // Kanban state
-  const [kanbanLayout, setKanbanLayout] = useState<"swimlane" | "column_first">("swimlane");
+  const [kanbanLayout, setKanbanLayout] = useState<"swimlane" | "by_agent">("swimlane");
   const [kanbanHideDone, setKanbanHideDone] = useState(false);
 
   // Convert real data → view model, group worktrees with their main repo
@@ -289,7 +289,7 @@ export function App() {
 
     if (focus === "kanban") {
       if (key.escape) setFocus("outer");
-      if (input === "s") setKanbanLayout((l) => l === "swimlane" ? "column_first" : "swimlane");
+      if (input === "s") setKanbanLayout((l) => l === "swimlane" ? "by_agent" : "swimlane");
       if (input === "h") setKanbanHideDone((h) => !h);
     }
   });

@@ -207,80 +207,153 @@ function SwimLaneLayout({
   );
 }
 
-// ─── ColumnFirstLayout (rich cards for active, compact for done) ─
+// ─── By Agent Layout (agents as columns, tasks show status) ──
 
-function ColumnFirstLayout({
+// Task card with status icon (used in By Agent where columns are agents, not statuses)
+function AgentTaskCard({ task, column }: {
+  task: DisplayTask;
+  column: KanbanColumn;
+}) {
+  const icon = column === "done" ? "✓" : column === "doing" ? "◍" : column === "needs_input" ? "⊘" : "○";
+  const iconColor = column === "done" ? C.success : column === "doing" ? C.warning : column === "needs_input" ? C.error : C.dim;
+  const idStr = `#${task.id.length > 5 ? task.id.slice(0, 4) + "…" : task.id}`;
+
+  return (
+    <Text wrap="truncate">
+      <Text color={iconColor}>{icon} </Text>
+      <Text
+        color={column === "done" || task.gone ? C.dim : C.text}
+        strikethrough={column === "done" || !!task.gone}
+      >
+        {idStr} {task.subject}
+      </Text>
+    </Text>
+  );
+}
+
+function ByAgentLayout({
   projects,
-  activeCols,
-  colWidths,
+  contentW,
+  hideDone,
 }: {
   projects: ViewProject[];
-  activeCols: KanbanColumn[];
-  colWidths: number[];
+  contentW: number;
+  hideDone: boolean;
 }) {
-  const multiProject = projects.length > 1;
-
-  // Collect classified tasks grouped by column → project
-  const columnGroups: Record<KanbanColumn, { project: ViewProject; tasks: DisplayTask[] }[]> = {
-    todo: [], needs_input: [], doing: [], done: [],
+  // Collect unique agents and their tasks across all projects
+  type AgentEntry = {
+    name: string;
+    processState?: "running" | "idle" | "dead";
+    tasks: { task: DisplayTask; project: ViewProject; column: KanbanColumn }[];
   };
 
+  const agentMap = new Map<string, AgentEntry>();
+
   for (const project of projects) {
-    const buckets = buildBuckets(project);
-    for (const col of ALL_COLUMNS) {
-      if (buckets[col].length > 0) {
-        columnGroups[col].push({ project, tasks: buckets[col] });
+    const seen = new Set<string>();
+    for (const task of project.tasks) {
+      const key = `${task.id}-${task.gone ? "g" : "l"}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const owner = task.owner ?? "unassigned";
+      if (!agentMap.has(owner)) {
+        const detail = project.agentDetails.find((a) => a.name === owner);
+        agentMap.set(owner, {
+          name: owner,
+          processState: detail?.processState,
+          tasks: [],
+        });
       }
+      const col = classifyTask(task, project);
+      if (hideDone && col === "done") continue;
+      agentMap.get(owner)!.tasks.push({ task, project, column: col });
     }
   }
 
-  // Build column content
-  const columnElements = activeCols.map((col, ci) => {
-    const w = colWidths[ci];
-    const isDone = col === "done";
-    const elements: React.ReactNode[] = [];
-
-    for (const group of columnGroups[col]) {
-      if (multiProject) {
-        elements.push(
-          <Text key={`hdr-${group.project.projectPath}-${col}`} wrap="truncate" color={C.dim}>
-            {"─── "}{group.project.name}{" ───"}
-          </Text>
-        );
-      }
-      for (const task of group.tasks) {
-        const key = `${group.project.projectPath}-${task.id}-${col}`;
-        if (isDone) {
-          elements.push(
-            <Box key={key} width={w}>
-              <CompactCard task={task} column={col} />
-            </Box>
-          );
-        } else {
-          elements.push(
-            <RichCard key={key} task={task} column={col} width={w} />
-          );
-        }
-      }
-    }
-
-    if (elements.length === 0) {
-      elements.push(<Text key="empty" color={C.dim}>{"  —"}</Text>);
-    }
-
-    return elements;
+  // Sort agents: running first, then idle, then dead/unassigned, then by task count
+  const agents = [...agentMap.values()].sort((a, b) => {
+    const stateOrder = (s?: string) => s === "running" ? 0 : s === "idle" ? 1 : 2;
+    const diff = stateOrder(a.processState) - stateOrder(b.processState);
+    if (diff !== 0) return diff;
+    return b.tasks.length - a.tasks.length;
   });
 
+  // Sort tasks within each agent: doing > needs_input > todo > done
+  const statusPriority: Record<KanbanColumn, number> = {
+    doing: 0, needs_input: 1, todo: 2, done: 3,
+  };
+  for (const agent of agents) {
+    agent.tasks.sort((a, b) => statusPriority[a.column] - statusPriority[b.column]);
+  }
+
+  if (agents.length === 0) {
+    return <Text color={C.dim}>No agents with tasks</Text>;
+  }
+
+  // Column widths
+  const numAgents = Math.min(agents.length, 8); // cap at 8 columns
+  const visibleAgents = agents.slice(0, numAgents);
+  const sepTotal = (numAgents - 1) * SEP_W;
+  const perCol = Math.max(14, Math.floor((contentW - sepTotal) / numAgents));
+
   return (
-    <Box>
-      {activeCols.map((col, ci) => (
-        <React.Fragment key={col}>
-          {ci > 0 && <Text color={C.dim}>│</Text>}
-          <Box flexDirection="column" width={colWidths[ci]}>
-            {columnElements[ci]}
-          </Box>
-        </React.Fragment>
-      ))}
+    <Box flexDirection="column">
+      {/* Header: agent names with process state */}
+      <Box>
+        {visibleAgents.map((agent, i) => {
+          const icon = agent.processState === "running" ? "●"
+            : agent.processState === "idle" ? "○" : "✕";
+          const color = agent.processState === "running" ? C.warning
+            : agent.processState === "idle" ? C.dim : C.error;
+          const countStr = String(agent.tasks.length);
+          const nameGap = Math.max(1, perCol - agent.name.length - countStr.length - 2);
+          return (
+            <React.Fragment key={agent.name}>
+              {i > 0 && <Sep />}
+              <Box width={perCol}>
+                <Text wrap="truncate">
+                  <Text color={color}>{icon} </Text>
+                  <Text color={C.text} bold>{agent.name}</Text>
+                  <Text color={C.dim}>{" ".repeat(nameGap)}{countStr}</Text>
+                </Text>
+              </Box>
+            </React.Fragment>
+          );
+        })}
+      </Box>
+
+      {/* Divider */}
+      <Text color={C.dim}>
+        {visibleAgents.map((_, i) =>
+          (i > 0 ? "┼" + "─".repeat(perCol + 1) : "─".repeat(perCol))
+        ).join("")}
+      </Text>
+
+      {/* Task columns */}
+      <Box>
+        {visibleAgents.map((agent, i) => (
+          <React.Fragment key={agent.name}>
+            {i > 0 && <Sep />}
+            <Box flexDirection="column" width={perCol}>
+              {agent.tasks.length > 0 ? (
+                agent.tasks.map((entry, ti) => (
+                  <Box key={`${entry.task.id}-${entry.project.projectPath}-${ti}`} width={perCol}>
+                    <AgentTaskCard task={entry.task} column={entry.column} />
+                  </Box>
+                ))
+              ) : (
+                <Text color={C.dim}>  —</Text>
+              )}
+            </Box>
+          </React.Fragment>
+        ))}
+      </Box>
+
+      {/* Overflow indicator */}
+      {agents.length > numAgents && (
+        <Text color={C.dim}>  +{agents.length - numAgents} more agents</Text>
+      )}
     </Box>
   );
 }
@@ -295,36 +368,38 @@ export function KanbanView({
 }: {
   projects: ViewProject[];
   selectedCount: number;
-  layout: "swimlane" | "column_first";
+  layout: "swimlane" | "by_agent";
   hideDone: boolean;
 }) {
   const stdout = useStdout();
   const cols = stdout.stdout?.columns ?? 120;
 
-  // Active columns: filter DONE when hidden
-  const activeCols = hideDone ? ALL_COLUMNS.filter((c) => c !== "done") : ALL_COLUMNS;
-  const numCols = activeCols.length;
-
   // Panel takes 4 chars (2 borders + 2 paddingX)
   const contentW = cols - 4;
 
-  // Column widths — every cell, header, and divider uses these exact values
-  let labelW = 0;
-  let colWidths: number[];
+  const filterLabel = selectedCount > 0 ? ` (${selectedCount} selected)` : "";
+  const layoutLabel = layout === "swimlane" ? "SWIM" : "AGENT";
+  const hideLabel = hideDone ? " ⊘DONE" : "";
 
-  if (layout === "swimlane") {
-    labelW = Math.min(18, Math.max(12, Math.floor(contentW * 0.15)));
-    // numCols separators of SEP_W each (label│col + col│col + ...)
-    const colAvail = contentW - labelW - numCols * SEP_W;
-    const perCol = Math.max(12, Math.floor(colAvail / numCols));
-    colWidths = activeCols.map(() => perCol);
-  } else {
-    // Column-first: "│" (1 char) between columns only
-    const sepTotal = numCols - 1;
-    const colAvail = contentW - sepTotal;
-    const perCol = Math.max(12, Math.floor(colAvail / numCols));
-    colWidths = activeCols.map(() => perCol);
+  if (layout === "by_agent") {
+    return (
+      <Panel
+        title={`KANBAN ${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
+        flexGrow={1}
+      >
+        <ByAgentLayout projects={projects} contentW={contentW} hideDone={hideDone} />
+      </Panel>
+    );
   }
+
+  // ─── Swimlane layout ────────────────────────────────────────
+  const activeCols = hideDone ? ALL_COLUMNS.filter((c) => c !== "done") : ALL_COLUMNS;
+  const numCols = activeCols.length;
+
+  const labelW = Math.min(18, Math.max(12, Math.floor(contentW * 0.15)));
+  const colAvail = contentW - labelW - numCols * SEP_W;
+  const perCol = Math.max(12, Math.floor(colAvail / numCols));
+  const colWidths = activeCols.map(() => perCol);
 
   // Count tasks per column
   const counts: Record<KanbanColumn, number> = { todo: 0, needs_input: 0, doing: 0, done: 0 };
@@ -338,10 +413,6 @@ export function KanbanView({
     }
   }
 
-  const filterLabel = selectedCount > 0 ? ` (${selectedCount} selected)` : "";
-  const layoutLabel = layout === "swimlane" ? "SWIM" : "COLS";
-  const hideLabel = hideDone ? " ⊘DONE" : "";
-
   return (
     <Panel
       title={`KANBAN ${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
@@ -349,14 +420,10 @@ export function KanbanView({
     >
       {/* Header row — uses identical Box widths as content cells */}
       <Box>
-        {layout === "swimlane" && (
-          <>
-            <Box width={labelW}>
-              <Text color={C.primary} bold>PROJECTS</Text>
-            </Box>
-            <Sep />
-          </>
-        )}
+        <Box width={labelW}>
+          <Text color={C.primary} bold>PROJECTS</Text>
+        </Box>
+        <Sep />
         {activeCols.map((col, ci) => {
           const cfg = COLUMN_CONFIG[col];
           const w = colWidths[ci];
@@ -376,20 +443,12 @@ export function KanbanView({
         })}
       </Box>
 
-      {layout === "swimlane" ? (
-        <SwimLaneLayout
-          projects={projects}
-          activeCols={activeCols}
-          colWidths={colWidths}
-          labelW={labelW}
-        />
-      ) : (
-        <ColumnFirstLayout
-          projects={projects}
-          activeCols={activeCols}
-          colWidths={colWidths}
-        />
-      )}
+      <SwimLaneLayout
+        projects={projects}
+        activeCols={activeCols}
+        colWidths={colWidths}
+        labelW={labelW}
+      />
     </Panel>
   );
 }
