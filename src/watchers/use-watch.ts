@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { scanAll, groupByProject } from "./scanner.js";
 import type { SessionData, ProjectData } from "../types.js";
 
-const POLL_INTERVAL_MS = 1000;
+const POLL_INTERVAL_MS = 3000;
 
 // React hook: poll ~/.claude/todos/ and ~/.claude/tasks/ for changes
 export function useWatchSessions(): {

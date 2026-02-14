@@ -678,12 +678,13 @@ function StatusBar({
   const memBarLen = 8;
   const memFilled = Math.round((metrics.memPercent / 100) * memBarLen);
   const memBar = "█".repeat(memFilled) + "░".repeat(memBarLen - memFilled);
+  // Fixed-width formatting prevents layout shifts between renders
   const netUp = metrics.netUp > 1024
     ? `${(metrics.netUp / 1024).toFixed(1)}M`
-    : `${metrics.netUp.toFixed(0)}K`;
+    : `${String(Math.round(metrics.netUp)).padStart(4)}K`;
   const netDown = metrics.netDown > 1024
     ? `${(metrics.netDown / 1024).toFixed(1)}M`
-    : `${metrics.netDown.toFixed(0)}K`;
+    : `${String(Math.round(metrics.netDown)).padStart(4)}K`;
 
   return (
     <Box flexDirection="column">
@@ -693,7 +694,7 @@ function StatusBar({
         <Text color={C.dim}>│ </Text>
         <Text color={C.subtext}>CPU </Text>
         <Text color={C.success}>{cpuSpark}</Text>
-        <Text color={C.text}> {String(metrics.cpuPercent).padStart(2)}%</Text>
+        <Text color={C.text}> {String(metrics.cpuPercent).padStart(3)}%</Text>
         <Text color={C.dim}> │ </Text>
         <Text color={C.subtext}>MEM </Text>
         <Text color={C.primary}>{memBar}</Text>
