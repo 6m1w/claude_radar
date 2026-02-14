@@ -975,6 +975,108 @@ describe("deduplication — hook events + polling merge", () => {
   });
 });
 
+// ─── Activity summary enrichment ─────────────────────────────
+
+describe("activity summary enrichment", () => {
+  it("should show subagent_type in Task tool summary", () => {
+    const store = new Store();
+
+    ingestHookEvents(store, [
+      makeHookEvent({
+        event: "tool",
+        data: {
+          session_id: "sess-1",
+          cwd: "/test/project",
+          tool_name: "Task",
+          tool_input: {
+            subagent_type: "Explore",
+            description: "find auth code",
+            prompt: "search for authentication",
+          },
+        },
+      }),
+    ]);
+
+    const activity = store.getActivityLog("/test/project");
+    expect(activity).toHaveLength(1);
+    expect(activity[0].summary).toContain("Task[Explore]");
+    expect(activity[0].summary).toContain("find auth code");
+  });
+
+  it("should fall back to prompt when Task has no description", () => {
+    const store = new Store();
+
+    ingestHookEvents(store, [
+      makeHookEvent({
+        event: "tool",
+        data: {
+          session_id: "sess-1",
+          cwd: "/test/project",
+          tool_name: "Task",
+          tool_input: {
+            prompt: "investigate the error above",
+          },
+        },
+      }),
+    ]);
+
+    const activity = store.getActivityLog("/test/project");
+    expect(activity[0].summary).toContain("investigate the error");
+  });
+
+  it("should show plan mode entry/exit in activity", () => {
+    const store = new Store();
+
+    ingestHookEvents(store, [
+      makeHookEvent({
+        event: "tool",
+        data: {
+          session_id: "sess-1",
+          cwd: "/test/project",
+          tool_name: "EnterPlanMode",
+          tool_input: {},
+        },
+      }),
+      makeHookEvent({
+        event: "tool",
+        data: {
+          session_id: "sess-1",
+          cwd: "/test/project",
+          tool_name: "ExitPlanMode",
+          tool_input: {},
+        },
+      }),
+    ]);
+
+    const activity = store.getActivityLog("/test/project");
+    expect(activity).toHaveLength(2);
+    expect(activity[0].summary).toContain("[PLAN]");
+    expect(activity[0].summary).toContain("plan mode");
+    expect(activity[1].summary).toContain("[PLAN]");
+    expect(activity[1].summary).toContain("approval");
+  });
+
+  it("should include tool_name in SubagentStop summary when available", () => {
+    const store = new Store();
+
+    ingestHookEvents(store, [{
+      event: "subagent_stop",
+      ts: new Date().toISOString(),
+      data: {
+        session_id: "sess-1",
+        cwd: "/test/project",
+        tool_name: "Explore",
+        reason: "completed",
+      },
+    }]);
+
+    const activity = store.getActivityLog("/test/project");
+    expect(activity).toHaveLength(1);
+    expect(activity[0].summary).toContain("Explore");
+    expect(activity[0].summary).toContain("completed");
+  });
+});
+
 // ─── PostToolUseFailure (tool_failure) events ────────────────
 
 describe("tool_failure events", () => {
