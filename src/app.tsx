@@ -526,7 +526,6 @@ function RightPanel({
           <Progress done={stats.done} total={stats.total} width={14} />
         </Box>
       )}
-      <Text> </Text>
 
       {/* Task list — grouped by agent for multi-agent projects, flat for single-agent */}
       {(() => {
@@ -534,19 +533,23 @@ function RightPanel({
         const goneTasks = project.tasks.filter((t) => t.gone);
         const isMultiAgent = project.agents.length > 1;
 
-        // Determine max task ID width for alignment
-        const allIds = project.tasks.map((t) => t.id);
-        const maxIdLen = Math.min(6, Math.max(...allIds.map((id) => id.length), 1));
+        // Compute max ID width from live tasks only (gone tasks have their own alignment)
+        const liveIdLen = liveTasks.length > 0
+          ? Math.min(4, Math.max(...liveTasks.map((t) => t.id.length), 1))
+          : 1;
+        const goneIdLen = goneTasks.length > 0
+          ? Math.min(4, Math.max(...goneTasks.map((t) => t.id.length), 1))
+          : 1;
 
-        const renderTask = (t: DisplayTask, idx: number) => {
+        const renderTask = (t: DisplayTask, idx: number, maxIdWidth: number) => {
           const isCursor = isInner && !bottomFocused && idx === taskIdx;
           const isGone = !!t.gone;
           const icon = t.status === "completed" ? I.done : t.status === "in_progress" ? I.working : I.idle;
           const iconColor = isGone ? C.dim
             : t.status === "completed" ? C.success
             : t.status === "in_progress" ? C.warning : C.dim;
-          // Truncate long IDs (e.g., timestamp-based) and pad for alignment
-          const displayId = t.id.length > 6 ? t.id.slice(0, 5) + "…" : t.id.padStart(maxIdLen);
+          // Truncate long IDs and pad for alignment within group
+          const displayId = t.id.length > maxIdWidth ? t.id.slice(0, maxIdWidth - 1) + "…" : t.id.padStart(maxIdWidth);
           return (
             <Text key={`${t.id}-${isGone ? "g" : "l"}`} wrap="truncate">
               <Text color={isCursor ? C.primary : C.dim}>
@@ -597,21 +600,21 @@ function RightPanel({
             elements.push(
               <Box key={agent} flexDirection="column">
                 <Text color={agentColor}>  ── {agentIcon} {agent} ({agentStatus}) ──────────</Text>
-                {agentTasks.map((t) => renderTask(t, flatIdx++))}
+                {agentTasks.map((t) => renderTask(t, flatIdx++, liveIdLen))}
               </Box>
             );
           }
         } else {
-          elements = liveTasks.map((t, i) => renderTask(t, i));
+          elements = liveTasks.map((t, i) => renderTask(t, i, liveIdLen));
         }
 
-        // Append gone tasks with separator
+        // Append gone tasks with separator (compact: no extra blank line)
         if (goneTasks.length > 0) {
           const goneStartIdx = liveTasks.length;
           elements.push(
             <Box key="gone-sep" flexDirection="column">
-              <Text color={C.dim}>  ─── archived ───</Text>
-              {goneTasks.slice(0, 4).map((t, i) => renderTask(t, goneStartIdx + i))}
+              <Text color={C.dim}> ── archived ──</Text>
+              {goneTasks.slice(0, 4).map((t, i) => renderTask(t, goneStartIdx + i, goneIdLen))}
               {goneTasks.length > 4 && (
                 <Text color={C.dim}>  ... +{goneTasks.length - 4} more</Text>
               )}
