@@ -25,13 +25,20 @@ function getModTime(path: string): Date {
 }
 
 // Build reverse index: sessionId → SessionMeta
-// Scans all ~/.claude/projects/*/sessions-index.json
+// Strategy 1: Read sessions-index.json for rich metadata (has projectPath, summary, etc.)
+// Strategy 2: Scan for {sessionId}.jsonl files — use projectPath from sibling entries in same dir
 function buildSessionIndex(): Map<string, SessionMeta> {
   const index = new Map<string, SessionMeta>();
+  // Track known projectPath per directory (from sessions-index entries)
+  const dirProjectPath = new Map<string, string>();
+
   try {
     const projectDirs = readdirSync(PROJECTS_DIR);
     for (const dir of projectDirs) {
-      const indexPath = join(PROJECTS_DIR, dir, "sessions-index.json");
+      const dirPath = join(PROJECTS_DIR, dir);
+
+      // Strategy 1: sessions-index.json (has summary, firstPrompt, etc.)
+      const indexPath = join(dirPath, "sessions-index.json");
       const data = readJson<{
         entries: Array<{
           sessionId: string;
@@ -42,18 +49,43 @@ function buildSessionIndex(): Map<string, SessionMeta> {
         }>;
       }>(indexPath);
 
-      if (!data?.entries) continue;
+      if (data?.entries) {
+        for (const entry of data.entries) {
+          if (!entry.sessionId) continue;
+          // Remember the projectPath for this directory
+          if (entry.projectPath) {
+            dirProjectPath.set(dir, entry.projectPath);
+          }
+          const projectPath = entry.projectPath ?? dirProjectPath.get(dir) ?? dir;
+          index.set(entry.sessionId, {
+            projectPath,
+            projectName: basename(projectPath),
+            summary: entry.summary,
+            firstPrompt: entry.firstPrompt?.slice(0, 80),
+            gitBranch: entry.gitBranch,
+          });
+        }
+      }
 
-      for (const entry of data.entries) {
-        if (!entry.sessionId) continue;
-        const projectPath = entry.projectPath ?? dir.replace(/-/g, "/");
-        index.set(entry.sessionId, {
-          projectPath,
-          projectName: basename(projectPath),
-          summary: entry.summary,
-          firstPrompt: entry.firstPrompt?.slice(0, 80),
-          gitBranch: entry.gitBranch,
-        });
+      // Strategy 2: scan for .jsonl files not yet in the index
+      // Use the projectPath we learned from sessions-index entries in the same dir
+      const knownPath = dirProjectPath.get(dir);
+      if (!knownPath) continue;
+
+      try {
+        const files = readdirSync(dirPath);
+        for (const file of files) {
+          if (!file.endsWith(".jsonl")) continue;
+          const sessionId = file.replace(".jsonl", "");
+          if (index.has(sessionId)) continue;
+
+          index.set(sessionId, {
+            projectPath: knownPath,
+            projectName: basename(knownPath),
+          });
+        }
+      } catch {
+        // skip
       }
     }
   } catch {
