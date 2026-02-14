@@ -12,7 +12,7 @@ import { Progress } from "./components/progress.js";
 import { useWatchSessions } from "./watchers/use-watch.js";
 import { useMetrics } from "./hooks/use-metrics.js";
 import { formatTimeAgo } from "./utils.js";
-import type { MergedProjectData, TaskItem, TodoItem, SessionHistoryEntry } from "./types.js";
+import type { MergedProjectData, TaskItem, TodoItem, SessionHistoryEntry, AgentInfo, TeamConfig } from "./types.js";
 
 // ─── Display types (normalized from real data) ──────────────
 type DisplayTask = {
@@ -23,6 +23,7 @@ type DisplayTask = {
   blockedBy?: string;
   description?: string;
   gone?: boolean; // historical item preserved by store after Claude Code deletion
+  statusChangedAt?: string; // ISO timestamp for dwell time calculation
 };
 
 // View model: mirrors old MockProject shape for minimal UI changes
@@ -36,6 +37,9 @@ type ViewProject = {
   tasks: DisplayTask[];
   recentSessions: SessionHistoryEntry[];
   goneSessionCount: number;
+  agentDetails: AgentInfo[];
+  worktreeOf?: string; // main repo path if this is a worktree
+  team?: TeamConfig;
 };
 
 // ─── Adapter: MergedProjectData → ViewProject ───────────────
@@ -60,6 +64,7 @@ function toViewProject(p: MergedProjectData): ViewProject {
         blockedBy: unresolved?.length ? unresolved[0] : undefined,
         description: t.description,
         gone,
+        statusChangedAt: item._statusChangedAt,
       };
     }
     // TodoItem — synthesize id from index, use content as subject
@@ -69,6 +74,7 @@ function toViewProject(p: MergedProjectData): ViewProject {
       subject: todo.content,
       status: todo.status,
       gone,
+      statusChangedAt: item._statusChangedAt,
     };
   });
 
@@ -82,10 +88,28 @@ function toViewProject(p: MergedProjectData): ViewProject {
     tasks,
     recentSessions: p.recentSessions,
     goneSessionCount: p.goneSessionCount,
+    agentDetails: p.agentDetails,
+    worktreeOf: p.git?.worktreeOf,
+    team: p.team,
   };
 }
 
 // ─── Helper functions ───────────────────────────────────────
+
+// Format dwell time: how long a task has been in current status
+function formatDwell(statusChangedAt?: string): string {
+  if (!statusChangedAt) return "";
+  const elapsed = Date.now() - new Date(statusChangedAt).getTime();
+  if (elapsed < 0) return "";
+  const mins = Math.floor(elapsed / 60_000);
+  if (mins < 1) return "<1m";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
+
 function taskStats(p: ViewProject) {
   const live = p.tasks.filter((t) => !t.gone);
   const total = live.length;
@@ -141,11 +165,31 @@ export function App() {
   const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set());
 
   // Convert real data → view model, sort: active first, then by task count
-  const sorted = rawProjects.map(toViewProject).sort((a, b) => {
-    if (a.activeSessions > 0 && b.activeSessions === 0) return -1;
-    if (b.activeSessions > 0 && a.activeSessions === 0) return 1;
-    return b.tasks.length - a.tasks.length;
-  });
+  // Group worktrees after their main repo
+  const viewProjects = rawProjects.map(toViewProject);
+  const sorted = (() => {
+    // First: normal sort (active first, then by task count)
+    const base = [...viewProjects].sort((a, b) => {
+      if (a.activeSessions > 0 && b.activeSessions === 0) return -1;
+      if (b.activeSessions > 0 && a.activeSessions === 0) return 1;
+      return b.tasks.length - a.tasks.length;
+    });
+    // Reorder: place worktrees right after their main repo
+    const result: ViewProject[] = [];
+    const placed = new Set<string>();
+    for (const p of base) {
+      if (placed.has(p.name)) continue;
+      result.push(p);
+      placed.add(p.name);
+      // Find worktrees that belong to this project's path
+      const worktrees = base.filter((w) => !placed.has(w.name) && w.worktreeOf === rawProjects.find((r) => r.projectName === p.name)?.projectPath);
+      for (const wt of worktrees) {
+        result.push(wt);
+        placed.add(wt.name);
+      }
+    }
+    return result;
+  })();
 
   const current = sorted[projectIdx];
   const currentTasks = current?.tasks ?? [];
@@ -315,11 +359,17 @@ export function App() {
             const icon = isActive ? I.working : stats.total > 0 && stats.done === stats.total ? I.done : I.idle;
             const iconColor = isActive ? C.warning : stats.done === stats.total && stats.total > 0 ? C.success : C.dim;
             const isSelected = selectedNames.has(p.name);
+            const isWorktree = !!p.worktreeOf;
+            // Check if this is the last worktree in a consecutive group
+            const nextP = visSlice[vi + 1];
+            const isLastWorktree = isWorktree && (!nextP || !nextP.worktreeOf || nextP.worktreeOf !== p.worktreeOf);
+            const treePrefix = isWorktree ? (isLastWorktree ? "└─" : "├─") : "  ";
             return (
               <Box key={p.name}>
                 <Text color={isCursor ? C.primary : C.dim}>
-                  {isCursor ? I.cursor : " "}{" "}
+                  {isCursor ? I.cursor : " "}
                 </Text>
+                <Text color={C.dim}>{treePrefix}</Text>
                 {/* Selection indicator (☑/☐) */}
                 {selectedNames.size > 0 && (
                   <Text color={isSelected ? C.success : C.dim}>
@@ -332,6 +382,13 @@ export function App() {
                 </Text>
                 {p.branch !== "main" && (
                   <Text color={C.accent}> ⎇{p.branch.slice(0, 5)}</Text>
+                )}
+                {p.agentDetails.length > 0 && (
+                  <Text color={C.dim}>{" "}
+                    {p.agentDetails.map((a) =>
+                      a.processState === "running" ? `●` : a.processState === "idle" ? `○` : `✕`
+                    ).join("")}
+                  </Text>
                 )}
               </Box>
             );
@@ -495,13 +552,38 @@ function RightPanel({
       {/* Project info header */}
       <Box>
         <Text color={C.accent}>⎇ {project.branch} </Text>
-        {project.agents.length > 0 && (
-          <Text color={C.dim}>{project.agents.length} agent{project.agents.length > 1 ? "s" : ""}  </Text>
+        {project.team && (
+          <Text color={C.warning}>⚑ {project.team.teamName} </Text>
         )}
+        {project.agentDetails.length > 0 ? (
+          <Text color={C.dim}>
+            {project.agentDetails.map((a) => {
+              const icon = a.processState === "running" ? I.active : a.processState === "idle" ? I.idle : "✕";
+              return `${icon}${a.name}`;
+            }).join(" ")}
+            {"  "}
+          </Text>
+        ) : project.agents.length > 0 ? (
+          <Text color={C.dim}>{project.agents.length} agent{project.agents.length > 1 ? "s" : ""}  </Text>
+        ) : null}
         {project.docs.length > 0 && (
           <Text color={C.subtext}>{project.docs.join("  ")}</Text>
         )}
       </Box>
+      {/* Team member list with process states */}
+      {project.team && project.agentDetails.length > 0 && (
+        <Box>
+          {project.agentDetails.map((a, i) => {
+            const icon = a.processState === "running" ? I.active : a.processState === "idle" ? I.idle : "✕";
+            const color = a.processState === "running" ? C.warning : a.processState === "idle" ? C.dim : C.error;
+            return (
+              <Text key={i} color={color}>
+                {i > 0 ? "  " : ""}{icon} {a.name}{a.currentTaskId ? ` #${a.currentTaskId}` : ""}
+              </Text>
+            );
+          })}
+        </Box>
+      )}
       {stats.total > 0 && (
         <Box>
           <Text color={C.subtext}>tasks: </Text>
@@ -539,6 +621,9 @@ function RightPanel({
               </Text>
               {!isGone && t.owner && <Text color={C.accent}> ({t.owner})</Text>}
               {!isGone && t.blockedBy && <Text color={C.error}> ⊘#{t.blockedBy}</Text>}
+              {!isGone && t.status !== "completed" && t.statusChangedAt && (
+                <Text color={C.dim}> ↑{formatDwell(t.statusChangedAt)}</Text>
+              )}
             </Box>
           );
         };
@@ -550,11 +635,22 @@ function RightPanel({
           let flatIdx = 0;
           for (const agent of agents) {
             const agentTasks = liveTasks.filter((t) => (t.owner ?? "unassigned") === agent);
+            // Use real process state from scanner when available, fall back to task inference
+            const detail = project.agentDetails.find((a) => a.name === agent);
+            const processState = detail?.processState;
             const hasActive = agentTasks.some((t) => t.status === "in_progress");
             const hasBlocked = agentTasks.some((t) => t.blockedBy);
-            const agentStatus = hasBlocked ? "blocked" : hasActive ? "active" : "idle";
-            const agentIcon = hasBlocked ? "○" : hasActive ? I.working : "○";
-            const agentColor = hasBlocked ? C.error : hasActive ? C.warning : C.dim;
+            const agentStatus = processState
+              ? processState
+              : hasBlocked ? "blocked" : hasActive ? "active" : "idle";
+            const agentIcon = processState === "running" ? I.active
+              : processState === "idle" ? I.idle
+              : processState === "dead" ? "✕"
+              : hasBlocked ? I.blocked : hasActive ? I.working : I.idle;
+            const agentColor = agentStatus === "running" || agentStatus === "active" ? C.warning
+              : agentStatus === "blocked" ? C.error
+              : agentStatus === "dead" ? C.error
+              : C.dim;
             elements.push(
               <Box key={agent} flexDirection="column">
                 <Text color={agentColor}>  ── {agentIcon} {agent} ({agentStatus}) ──────────</Text>
@@ -608,6 +704,12 @@ function RightPanel({
               <>
                 <Text color={C.subtext}> │ blocked by: </Text>
                 <Text color={C.error}>#{project.tasks[taskIdx].blockedBy}</Text>
+              </>
+            )}
+            {project.tasks[taskIdx].statusChangedAt && (
+              <>
+                <Text color={C.subtext}> │ in status: </Text>
+                <Text color={C.dim}>↑{formatDwell(project.tasks[taskIdx].statusChangedAt)}</Text>
               </>
             )}
           </Box>
@@ -724,10 +826,15 @@ function KanbanCard({
 
   const textColor = isGone || status === "completed" ? C.dim : C.text;
   const label = `#${task.id} ${task.subject}`.slice(0, width - 4);
-  const agentLine = !isGone && task.owner ? `└ ${task.owner}${task.blockedBy ? " ⊘" : ""}` : "";
 
-  if (agentLine) {
-    // Two-line card: task + agent
+  // Build metadata line: owner + dependency info
+  const metaParts: string[] = [];
+  if (!isGone && task.owner) metaParts.push(task.owner);
+  if (!isGone && task.blockedBy) metaParts.push(`⊘#${task.blockedBy}`);
+  const metaLine = metaParts.length > 0 ? `└ ${metaParts.join(" ")}` : "";
+
+  if (metaLine) {
+    // Two-line card: task + metadata
     return (
       <Box flexDirection="column" width={width}>
         <Box>
@@ -738,7 +845,7 @@ function KanbanCard({
         </Box>
         <Box>
           <Text color={accentColor}>┃ </Text>
-          <Text color={C.dim}>{agentLine.padEnd(width - 3).slice(0, width - 3)}</Text>
+          <Text color={task.blockedBy ? C.error : C.dim}>{metaLine.padEnd(width - 3).slice(0, width - 3)}</Text>
         </Box>
       </Box>
     );

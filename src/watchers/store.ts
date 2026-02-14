@@ -62,6 +62,7 @@ function toStoredItem(item: TodoItem | TaskItem, now: string): StoredItem {
     activeForm: item.activeForm,
     _firstSeenAt: now,
     _lastSeenAt: now,
+    _statusChangedAt: now,
     _gone: false,
   };
 
@@ -87,6 +88,8 @@ function updateStoredItem(stored: StoredItem, live: TodoItem | TaskItem, now: st
   const updated = toStoredItem(live, now);
   updated._firstSeenAt = stored._firstSeenAt;
   updated._lastSeenAt = now;
+  // Preserve statusChangedAt unless the status actually changed
+  updated._statusChangedAt = stored.status !== live.status ? now : (stored._statusChangedAt ?? now);
   updated._gone = false;
   updated._goneAt = undefined;
   return updated;
@@ -395,10 +398,13 @@ export class Store {
     // Find existing item by key
     const existingIdx = session.items.findIndex((i) => storedItemKey(i) === key);
     if (existingIdx >= 0) {
-      // Update existing — preserve _firstSeenAt, update other fields
+      // Update existing — preserve _firstSeenAt, detect status change for dwell time
       const existing = session.items[existingIdx];
       const updated = { ...existing, ...item };
       updated._firstSeenAt = existing._firstSeenAt;
+      updated._statusChangedAt = existing.status !== item.status
+        ? item._lastSeenAt
+        : (existing._statusChangedAt ?? item._lastSeenAt);
       updated._gone = false;
       updated._goneAt = undefined;
       session.items[existingIdx] = updated;
@@ -589,6 +595,7 @@ function hookEventToStoredItem(data: HookEventData, now: string): StoredItem | n
       blockedBy: (input.blockedBy as string[]) ?? [],
       _firstSeenAt: now,
       _lastSeenAt: now,
+      _statusChangedAt: now,
       _gone: false,
     };
   }
@@ -607,6 +614,7 @@ function hookEventToStoredItem(data: HookEventData, now: string): StoredItem | n
       owner: input.owner as string | undefined,
       _firstSeenAt: now,
       _lastSeenAt: now,
+      _statusChangedAt: now,
       _gone: false,
     };
   }
@@ -620,6 +628,7 @@ function hookEventToStoredItem(data: HookEventData, now: string): StoredItem | n
       activeForm: input.activeForm as string | undefined,
       _firstSeenAt: now,
       _lastSeenAt: now,
+      _statusChangedAt: now,
       _gone: false,
     };
   }
@@ -708,6 +717,9 @@ function storedItemToDisplayItem(item: StoredItem): DisplayItem {
   if (item._gone) {
     base._gone = true;
     base._goneAt = item._goneAt;
+  }
+  if (item._statusChangedAt) {
+    base._statusChangedAt = item._statusChangedAt;
   }
   return base;
 }

@@ -211,16 +211,43 @@ function resolveSegments(base: string, segments: string[]): string {
 }
 
 // ─── Phase 2: Read git info from actual project directory ───────
-function readGitInfo(projectPath: string): { branch: string } | undefined {
+function readGitInfo(projectPath: string): { branch: string; worktreeOf?: string } | undefined {
   try {
-    const headPath = join(projectPath, ".git", "HEAD");
+    const dotGit = join(projectPath, ".git");
+    if (!existsSync(dotGit)) return undefined;
+
+    let headContent: string;
+    const stat = statSync(dotGit);
+
+    if (stat.isFile()) {
+      // .git is a file → this is a worktree
+      // Content: "gitdir: /path/to/main-repo/.git/worktrees/<name>"
+      const gitdirLine = readFileSync(dotGit, "utf-8").trim();
+      const match = gitdirLine.match(/^gitdir:\s*(.+)$/);
+      if (!match) return undefined;
+      const gitdir = match[1];
+      // Derive main repo: strip /worktrees/<name> and /.git
+      const worktreesIdx = gitdir.lastIndexOf("/.git/worktrees/");
+      const mainRepo = worktreesIdx >= 0 ? gitdir.slice(0, worktreesIdx) : undefined;
+      // Read HEAD from the worktree's gitdir
+      const headPath = join(gitdir, "HEAD");
+      if (!existsSync(headPath)) return undefined;
+      headContent = readFileSync(headPath, "utf-8").trim();
+      const branch = headContent.startsWith("ref: refs/heads/")
+        ? headContent.replace("ref: refs/heads/", "")
+        : headContent.slice(0, 8);
+      return { branch, worktreeOf: mainRepo };
+    }
+
+    // Normal .git directory
+    const headPath = join(dotGit, "HEAD");
     if (!existsSync(headPath)) return undefined;
-    const head = readFileSync(headPath, "utf-8").trim();
-    if (head.startsWith("ref: refs/heads/")) {
-      return { branch: head.replace("ref: refs/heads/", "") };
+    headContent = readFileSync(headPath, "utf-8").trim();
+    if (headContent.startsWith("ref: refs/heads/")) {
+      return { branch: headContent.replace("ref: refs/heads/", "") };
     }
     // Detached HEAD — show short hash
-    return { branch: head.slice(0, 8) };
+    return { branch: headContent.slice(0, 8) };
   } catch {
     return undefined;
   }

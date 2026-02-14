@@ -31,6 +31,7 @@ export interface SessionMeta {
 export type DisplayItem = (TodoItem | TaskItem) & {
   _gone?: boolean;
   _goneAt?: string;
+  _statusChangedAt?: string;
 };
 
 // Unified view model
@@ -62,6 +63,7 @@ export interface ProjectData {
   git?: {
     branch: string;
     dirty?: boolean;
+    worktreeOf?: string; // if this is a worktree, the main repo path
   };
   docs: string[];          // detected doc files: "PRD.md", "CLAUDE.md", etc.
   // Session history from sessions-index.json (for detail view)
@@ -127,6 +129,7 @@ export interface StoredItem {
   // Tracking metadata
   _firstSeenAt: string;
   _lastSeenAt: string;
+  _statusChangedAt: string; // when status last changed (for dwell time)
   _gone: boolean;
   _goneAt?: string;
 }
