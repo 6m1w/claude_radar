@@ -11,7 +11,8 @@ import type { ProjectData, TodoItem, TaskItem } from "./types.js";
 // ─── View state machine ─────────────────────────────────────
 type ViewState =
   | { view: "dashboard" }
-  | { view: "detail"; projectPath: string };
+  | { view: "detail"; projectPath: string }
+  | { view: "kanban" };
 
 export function App() {
   const { projects, lastUpdate } = useWatchSessions();
@@ -20,6 +21,7 @@ export function App() {
   const [viewState, setViewState] = useState<ViewState>({ view: "dashboard" });
   const [cursorIdx, setCursorIdx] = useState(0);
   const [taskCursorIdx, setTaskCursorIdx] = useState(0);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [tick, setTick] = useState(0);
 
   // Tick for spinner animation
@@ -54,6 +56,22 @@ export function App() {
         setViewState({ view: "detail", projectPath: currentProject.projectPath });
         setTaskCursorIdx(0);
       }
+      // Space: toggle project selection for kanban
+      if (input === " " && currentProject) {
+        setSelectedPaths((prev) => {
+          const next = new Set(prev);
+          if (next.has(currentProject.projectPath)) {
+            next.delete(currentProject.projectPath);
+          } else {
+            next.add(currentProject.projectPath);
+          }
+          return next;
+        });
+      }
+      // Tab: open kanban view
+      if (key.tab) {
+        setViewState({ view: "kanban" });
+      }
     }
 
     if (viewState.view === "detail") {
@@ -65,6 +83,12 @@ export function App() {
       }
       if ((input === "j" || key.downArrow) && taskCursorIdx < detailItems.length - 1) {
         setTaskCursorIdx((i) => i + 1);
+      }
+    }
+
+    if (viewState.view === "kanban") {
+      if (key.escape) {
+        setViewState({ view: "dashboard" });
       }
     }
   });
@@ -93,7 +117,14 @@ export function App() {
     }
   }
 
-  const viewLabel = viewState.view === "dashboard" ? "DASHBOARD" : "DETAIL";
+  const viewLabel = viewState.view === "dashboard" ? "DASHBOARD"
+    : viewState.view === "detail" ? "DETAIL"
+    : "FOCUS";
+
+  // Kanban projects: selected ones, or all active if none selected
+  const kanbanProjects = selectedPaths.size > 0
+    ? projects.filter((p) => selectedPaths.has(p.projectPath))
+    : projects.filter((p) => p.isActive || p.totalTasks > p.completedTasks);
 
   return (
     <Box flexDirection="column">
@@ -112,26 +143,31 @@ export function App() {
 
           {/* Row 2: Projects list + Detail preview */}
           <Box>
-            <ProjectList projects={projects} cursorIdx={safeCursor} />
+            <ProjectList
+              projects={projects}
+              cursorIdx={safeCursor}
+              selectedPaths={selectedPaths}
+            />
             <DetailPreview project={currentProject} />
           </Box>
 
           {/* Row 3: Activity log */}
           <ActivityPanel projects={projects} />
         </>
-      ) : (
-        /* Project Detail view */
+      ) : viewState.view === "detail" ? (
         <ProjectDetailView
           project={detailProject}
           items={detailItems}
           taskCursorIdx={safeTaskCursor}
         />
+      ) : (
+        <KanbanView projects={kanbanProjects} />
       )}
 
       {/* Status bar (shared across views) */}
       <StatusBar
         viewLabel={viewLabel}
-        isDashboard={viewState.view === "dashboard"}
+        viewState={viewState.view}
         metrics={metrics}
         hasActive={activePairs.length > 0}
         allDone={totalTasks > 0 && totalCompleted === totalTasks}
@@ -199,17 +235,20 @@ function ActiveNowPanel({
 function ProjectList({
   projects,
   cursorIdx,
+  selectedPaths,
 }: {
   projects: ProjectData[];
   cursorIdx: number;
+  selectedPaths: Set<string>;
 }) {
   return (
-    <Panel title="PROJECTS" hotkey="1" width={36}>
+    <Panel title="PROJECTS" hotkey="1" width={38}>
       {projects.length === 0 ? (
         <Text color={C.dim}>No active projects</Text>
       ) : (
         projects.map((p, i) => {
           const isCursor = i === cursorIdx;
+          const isSelected = selectedPaths.has(p.projectPath);
           const icon = p.isActive
             ? I.working
             : p.completedTasks === p.totalTasks && p.totalTasks > 0
@@ -221,15 +260,17 @@ function ProjectList({
               ? C.success
               : C.dim;
           const timeAgo = formatTimeAgo(p.lastActivity);
+          const selectMark = isSelected ? I.selected : I.unselected;
 
           return (
             <Box key={p.projectPath}>
               <Text color={isCursor ? C.primary : C.dim}>
                 {isCursor ? I.cursor : " "}{" "}
               </Text>
+              <Text color={isSelected ? C.success : C.dim}>{selectMark} </Text>
               <Text color={iconColor}>{icon} </Text>
               <Text color={isCursor ? C.text : C.subtext} bold={isCursor}>
-                {p.projectName.padEnd(14).slice(0, 14)}
+                {p.projectName.padEnd(12).slice(0, 12)}
               </Text>
               <Text color={C.dim}> </Text>
               <Progress done={p.completedTasks} total={p.totalTasks} width={8} />
@@ -428,6 +469,128 @@ function TaskDetailContent({ item }: { item: TodoItem | TaskItem }) {
   );
 }
 
+// ─── Kanban / Focus view (swimlane table) ────────────────────
+function KanbanView({ projects }: { projects: ProjectData[] }) {
+  // Column widths
+  const labelW = 14;
+  const colW = 22;
+
+  // Categorize tasks per project into TODO / DOING / DONE
+  type Bucket = { label: string; agent?: string }[];
+
+  return (
+    <Panel title={`FOCUS — ${projects.length} project${projects.length !== 1 ? "s" : ""}`} flexGrow={1}>
+      {/* Shared header row */}
+      <Box>
+        <Text color={C.dim}>{" ".repeat(labelW)}</Text>
+        <Text color={C.dim}>│ </Text>
+        <Text color={C.subtext} bold>{"TODO".padEnd(colW)}</Text>
+        <Text color={C.dim}>│ </Text>
+        <Text color={C.warning} bold>{"DOING".padEnd(colW)}</Text>
+        <Text color={C.dim}>│ </Text>
+        <Text color={C.success} bold>{"DONE".padEnd(colW)}</Text>
+      </Box>
+
+      {projects.map((project, pi) => {
+        const allItems = project.sessions.flatMap((s) => s.items);
+        const todo: Bucket = [];
+        const doing: Bucket = [];
+        const done: Bucket = [];
+
+        for (const item of allItems) {
+          const label = "subject" in item
+            ? `${item.subject}`.slice(0, colW - 4)
+            : item.content.slice(0, colW - 4);
+          const agent = "owner" in item && item.owner ? item.owner : undefined;
+          if (item.status === "completed") {
+            done.push({ label, agent });
+          } else if (item.status === "in_progress") {
+            doing.push({ label, agent });
+          } else {
+            todo.push({ label, agent });
+          }
+        }
+
+        const maxRows = Math.max(1, todo.length, doing.length, done.length);
+        const branch = project.gitBranch ? `⎇ ${project.gitBranch}` : "";
+
+        return (
+          <Box key={project.projectPath} flexDirection="column">
+            {/* Separator */}
+            <Box>
+              <Text color={C.dim}>{"─".repeat(labelW)}┼{"─".repeat(colW + 1)}┼{"─".repeat(colW + 1)}┼{"─".repeat(colW)}</Text>
+            </Box>
+
+            {/* Project rows */}
+            {Array.from({ length: maxRows }, (_, ri) => {
+              const todoItem = todo[ri];
+              const doingItem = doing[ri];
+              const doneItem = done[ri];
+
+              // Left label: project name on first row, branch on second
+              let leftLabel = "";
+              if (ri === 0) leftLabel = project.projectName;
+              else if (ri === 1 && branch) leftLabel = branch;
+              else if (ri === 1 && project.agents.length > 1) {
+                leftLabel = `${project.agents.length} agents`;
+              }
+
+              return (
+                <Box key={ri}>
+                  <Text color={ri === 0 ? C.text : C.dim} bold={ri === 0}>
+                    {leftLabel.padEnd(labelW).slice(0, labelW)}
+                  </Text>
+                  <Text color={C.dim}>│ </Text>
+                  <KanbanCell item={todoItem} width={colW} status="pending" />
+                  <Text color={C.dim}>│ </Text>
+                  <KanbanCell item={doingItem} width={colW} status="in_progress" />
+                  <Text color={C.dim}>│ </Text>
+                  <KanbanCell item={doneItem} width={colW} status="completed" />
+                </Box>
+              );
+            })}
+          </Box>
+        );
+      })}
+
+      {projects.length === 0 && (
+        <Text color={C.dim}>No projects to display. Select projects with Space on Dashboard.</Text>
+      )}
+    </Panel>
+  );
+}
+
+function KanbanCell({
+  item,
+  width,
+  status,
+}: {
+  item?: { label: string; agent?: string };
+  width: number;
+  status: "pending" | "in_progress" | "completed";
+}) {
+  if (!item) {
+    return <Text color={C.dim}>{" ".repeat(width)}</Text>;
+  }
+
+  const icon = status === "completed" ? I.done
+    : status === "in_progress" ? I.working
+    : I.idle;
+  const iconColor = status === "completed" ? C.success
+    : status === "in_progress" ? C.warning
+    : C.dim;
+  const textColor = status === "completed" ? C.dim : C.text;
+  const agentSuffix = item.agent ? ` ${item.agent}` : "";
+  const content = `${icon} ${item.label}${agentSuffix}`;
+
+  return (
+    <Text color={textColor}>
+      <Text color={iconColor}>{icon}</Text>
+      <Text color={textColor}> {item.label.padEnd(width - 2).slice(0, width - 2)}</Text>
+    </Text>
+  );
+}
+
 // ─── Activity panel ──────────────────────────────────────────
 function ActivityPanel({ projects }: { projects: ProjectData[] }) {
   type ActivityEntry = {
@@ -507,14 +670,14 @@ function sparkline(values: number[], max = 100): string {
 
 function StatusBar({
   viewLabel,
-  isDashboard,
+  viewState,
   metrics,
   hasActive,
   allDone,
   tick,
 }: {
   viewLabel: string;
-  isDashboard: boolean;
+  viewState: "dashboard" | "detail" | "kanban";
   metrics: SystemMetrics;
   hasActive: boolean;
   allDone: boolean;
@@ -561,7 +724,7 @@ function StatusBar({
       <Box>
         <Text color={C.primary} bold> {viewLabel} </Text>
         <Text color={C.dim}>│ </Text>
-        {isDashboard ? (
+        {viewState === "dashboard" ? (
           <>
             <Text color={C.success}>↑↓</Text>
             <Text color={C.subtext}> nav  </Text>
@@ -574,10 +737,17 @@ function StatusBar({
             <Text color={C.success}>q</Text>
             <Text color={C.subtext}> quit</Text>
           </>
-        ) : (
+        ) : viewState === "detail" ? (
           <>
             <Text color={C.success}>↑↓</Text>
             <Text color={C.subtext}> nav tasks  </Text>
+            <Text color={C.success}>Esc</Text>
+            <Text color={C.subtext}> back  </Text>
+            <Text color={C.success}>q</Text>
+            <Text color={C.subtext}> quit</Text>
+          </>
+        ) : (
+          <>
             <Text color={C.success}>Esc</Text>
             <Text color={C.subtext}> back  </Text>
             <Text color={C.success}>q</Text>
