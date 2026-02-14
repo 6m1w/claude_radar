@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { cpus, freemem, totalmem } from "node:os";
+import { cpus, freemem, totalmem, platform } from "node:os";
+import { readFileSync, existsSync } from "node:fs";
 import { exec } from "node:child_process";
 
 export interface SystemMetrics {
@@ -17,8 +18,18 @@ const HISTORY_LEN = 8;
 const SAMPLE_MS = 3000;      // CPU/MEM sample every 3s
 const NET_EVERY_N = 2;       // Network only every 2nd sample (6s)
 
-// Read network bytes async (macOS only for now)
+const PLATFORM = platform();
+
+// Read network bytes — platform-aware
 function readNetBytesAsync(): Promise<{ rx: number; tx: number }> {
+  if (PLATFORM === "linux") return readNetBytesLinux();
+  if (PLATFORM === "darwin") return readNetBytesMacOS();
+  // Unsupported platform (Windows, etc.) — return zeros
+  return Promise.resolve({ rx: 0, tx: 0 });
+}
+
+// macOS: parse `netstat -ib` for en* interfaces
+function readNetBytesMacOS(): Promise<{ rx: number; tx: number }> {
   return new Promise((resolve) => {
     exec("netstat -ib", { timeout: 3000 }, (err, stdout) => {
       if (err || !stdout) {
@@ -40,6 +51,39 @@ function readNetBytesAsync(): Promise<{ rx: number; tx: number }> {
       resolve({ rx: totalRx, tx: totalTx });
     });
   });
+}
+
+// Linux: parse /proc/net/dev (sync read, no child process needed)
+// Format:
+//   Inter-|   Receive                                                |  Transmit
+//    face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets ...
+//     eth0: 12345678  1234    0    0    0     0          0         0  87654321  4321 ...
+function readNetBytesLinux(): Promise<{ rx: number; tx: number }> {
+  try {
+    if (!existsSync("/proc/net/dev")) return Promise.resolve({ rx: 0, tx: 0 });
+    const content = readFileSync("/proc/net/dev", "utf-8");
+    let totalRx = 0;
+    let totalTx = 0;
+    for (const line of content.split("\n")) {
+      // Skip header lines and loopback
+      const trimmed = line.trim();
+      if (!trimmed.includes(":") || trimmed.startsWith("lo:")) continue;
+      // Split on ":" first to separate interface name, then whitespace for fields
+      const parts = trimmed.split(":");
+      if (parts.length < 2) continue;
+      const fields = parts[1].trim().split(/\s+/);
+      // fields[0] = rx bytes, fields[8] = tx bytes
+      if (fields.length >= 9) {
+        const rx = Number(fields[0]);
+        const tx = Number(fields[8]);
+        if (!isNaN(rx)) totalRx += rx;
+        if (!isNaN(tx)) totalTx += tx;
+      }
+    }
+    return Promise.resolve({ rx: totalRx, tx: totalTx });
+  } catch {
+    return Promise.resolve({ rx: 0, tx: 0 });
+  }
 }
 
 export function useMetrics(): SystemMetrics {
