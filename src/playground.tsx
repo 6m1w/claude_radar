@@ -36,6 +36,7 @@ function Panel({
   children,
   width,
   height,
+  flexGrow,
 }: {
   title: string;
   hotkey?: string;
@@ -43,6 +44,7 @@ function Panel({
   children: React.ReactNode;
   width?: number | string;
   height?: number;
+  flexGrow?: number;
 }) {
   return (
     <Box
@@ -51,6 +53,7 @@ function Panel({
       borderColor={focused ? C.cyan : C.dim}
       width={width}
       height={height}
+      flexGrow={flexGrow}
       paddingX={1}
     >
       <Text>
@@ -221,7 +224,7 @@ function ProjectDetail({ project, panelFocused }: { project: MockProject; panelF
   const done = allTasks.filter((t) => t.status === "done").length;
 
   return (
-    <Panel title={project.name.replace("project_", "")} hotkey="2" focused={panelFocused}>
+    <Panel title={project.name.replace("project_", "")} hotkey="2" focused={panelFocused} flexGrow={1}>
       {/* Project info */}
       <Box flexDirection="column" marginTop={1}>
         <Box>
@@ -271,22 +274,22 @@ function ProjectDetail({ project, panelFocused }: { project: MockProject; panelF
 // ─── Global View: Activity Log ───────────────────────────────
 function ActivityLog({ panelFocused }: { panelFocused: boolean }) {
   const logs = [
-    { time: "10:08", project: "monitor", action: "›", task: "#4 Design hacker UI", color: C.yellow },
-    { time: "10:05", project: "outclaws", action: "›", task: "#2 User dashboard", color: C.yellow },
-    { time: "10:03", project: "monitor", action: "✓", task: "#3 Polling watcher", color: C.green },
-    { time: "09:58", project: "outclaws", action: "✓", task: "#1 Auth module", color: C.green },
-    { time: "09:45", project: "sound_fx", action: "✓", task: "#3 Opencode plugin", color: C.green },
+    { time: "10:08", project: "monitor", action: "›", task: "#4 Design UI", color: C.yellow },
+    { time: "10:05", project: "outclaws", action: "›", task: "#2 Dashboard", color: C.yellow },
+    { time: "10:03", project: "monitor", action: "✓", task: "#3 Polling", color: C.green },
+    { time: "09:58", project: "outclaws", action: "✓", task: "#1 Auth", color: C.green },
+    { time: "09:45", project: "sound_fx", action: "✓", task: "#3 Plugin", color: C.green },
   ];
 
   return (
-    <Panel title="Activity" hotkey="3" focused={panelFocused}>
+    <Panel title="Activity" hotkey="3" focused={panelFocused} flexGrow={1}>
       <Box flexDirection="column" marginTop={1}>
         {logs.map((log, i) => (
-          <Box key={i}>
-            <Text color={C.dim}>{log.time}  </Text>
-            <Text color={C.subtext}>{log.project.padEnd(10)}</Text>
-            <Text color={log.color}> {log.action} </Text>
-            <Text color={C.text}>{log.task}</Text>
+          <Box key={i} width="100%">
+            <Text color={C.dim}>{log.time} </Text>
+            <Text color={C.subtext}>{log.project.padEnd(9)}</Text>
+            <Text color={log.color}>{log.action} </Text>
+            <Text color={C.text} wrap="truncate">{log.task}</Text>
           </Box>
         ))}
       </Box>
@@ -352,6 +355,63 @@ function SystemMetrics({ tick, mascotStatus }: { tick: number; mascotStatus: "id
         <Text color={C.green}>{spinner}</Text>
       </Text>
     </Box>
+  );
+}
+
+// ─── Metrics Chart Panel (fills extra space on wide terminals) ─
+function MetricsChart({ tick }: { tick: number }) {
+  // Generate sparkline history for CPU (30 data points)
+  const cpuHistory: number[] = [];
+  for (let i = 0; i < 30; i++) {
+    cpuHistory.push(Math.abs(20 + Math.sin((tick - 30 + i) * 0.3) * 25 + ((tick + i) * 7 % 15) - 7));
+  }
+  const maxCpu = Math.max(...cpuHistory, 1);
+
+  // Braille chart: 2 rows, each braille char = 2x4 dots
+  const sparkChars = "▁▂▃▄▅▆▇█";
+  const cpuLine = cpuHistory
+    .map((v) => sparkChars[Math.min(Math.floor((v / maxCpu) * 7), 7)])
+    .join("");
+
+  // MEM history
+  const memHistory: number[] = [];
+  for (let i = 0; i < 30; i++) {
+    memHistory.push(40 + Math.sin((tick - 30 + i) * 0.2) * 10 + (i % 3) * 2);
+  }
+  const memLine = memHistory
+    .map((v) => sparkChars[Math.min(Math.floor((v / 100) * 7), 7)])
+    .join("");
+
+  // NET history
+  const netHistory: number[] = [];
+  for (let i = 0; i < 30; i++) {
+    netHistory.push(Math.abs(Math.sin((tick - 30 + i) * 0.5) * 50 + ((tick + i) * 3 % 20)));
+  }
+  const maxNet = Math.max(...netHistory, 1);
+  const netLine = netHistory
+    .map((v) => sparkChars[Math.min(Math.floor((v / maxNet) * 7), 7)])
+    .join("");
+
+  return (
+    <Panel title="Metrics" hotkey="4" flexGrow={1}>
+      <Box flexDirection="column" marginTop={1}>
+        <Box>
+          <Text color={C.subtext}>{"CPU ".padEnd(5)}</Text>
+          <Text color={C.green}>{cpuLine}</Text>
+          <Text color={C.text}> {Math.round(cpuHistory[cpuHistory.length - 1])}%</Text>
+        </Box>
+        <Box>
+          <Text color={C.subtext}>{"MEM ".padEnd(5)}</Text>
+          <Text color={C.blue}>{memLine}</Text>
+          <Text color={C.text}> {(memHistory[memHistory.length - 1] / 100 * 8).toFixed(1)}G</Text>
+        </Box>
+        <Box>
+          <Text color={C.subtext}>{"NET ".padEnd(5)}</Text>
+          <Text color={C.cyan}>{netLine}</Text>
+          <Text color={C.text}> {netHistory[netHistory.length - 1].toFixed(0)} KB/s</Text>
+        </Box>
+      </Box>
+    </Panel>
   );
 }
 
@@ -488,8 +548,11 @@ function App() {
             <ProjectList focusIdx={focusIdx} panelFocused={activePanel === 1} />
             <ProjectDetail project={currentProject} panelFocused={activePanel === 2} />
           </Box>
-          {/* Activity log */}
-          <ActivityLog panelFocused={activePanel === 3} />
+          {/* Bottom row: Activity + Metrics side by side */}
+          <Box>
+            <ActivityLog panelFocused={activePanel === 3} />
+            <MetricsChart tick={tick} />
+          </Box>
         </>
       ) : (
         <FocusView />
