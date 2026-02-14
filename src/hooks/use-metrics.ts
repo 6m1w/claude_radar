@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { cpus, freemem, totalmem } from "node:os";
-import { execSync } from "node:child_process";
+import { exec } from "node:child_process";
 
 export interface SystemMetrics {
   cpuPercent: number;
@@ -14,29 +14,30 @@ export interface SystemMetrics {
 
 const HISTORY_LEN = 8;
 
-// Read network bytes (macOS only for now)
-function readNetBytes(): { rx: number; tx: number } {
-  try {
-    const out = execSync("netstat -ib", { encoding: "utf-8", timeout: 500 });
-    const lines = out.split("\n");
-    let totalRx = 0;
-    let totalTx = 0;
-    for (const line of lines) {
-      // Match en0/en1 lines with numeric data
-      if (!/^en\d/.test(line)) continue;
-      const cols = line.split(/\s+/);
-      // Columns: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes
-      if (cols.length >= 10) {
-        const ibytes = Number(cols[6]);
-        const obytes = Number(cols[9]);
-        if (!isNaN(ibytes)) totalRx += ibytes;
-        if (!isNaN(obytes)) totalTx += obytes;
+// Read network bytes async (macOS only for now)
+function readNetBytesAsync(): Promise<{ rx: number; tx: number }> {
+  return new Promise((resolve) => {
+    exec("netstat -ib", { timeout: 800 }, (err, stdout) => {
+      if (err || !stdout) {
+        resolve({ rx: 0, tx: 0 });
+        return;
       }
-    }
-    return { rx: totalRx, tx: totalTx };
-  } catch {
-    return { rx: 0, tx: 0 };
-  }
+      let totalRx = 0;
+      let totalTx = 0;
+      for (const line of stdout.split("\n")) {
+        if (!/^en\d/.test(line)) continue;
+        const cols = line.split(/\s+/);
+        // Columns: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes
+        if (cols.length >= 10) {
+          const ibytes = Number(cols[6]);
+          const obytes = Number(cols[9]);
+          if (!isNaN(ibytes)) totalRx += ibytes;
+          if (!isNaN(obytes)) totalTx += obytes;
+        }
+      }
+      resolve({ rx: totalRx, tx: totalTx });
+    });
+  });
 }
 
 export function useMetrics(): SystemMetrics {
@@ -55,8 +56,8 @@ export function useMetrics(): SystemMetrics {
   const historyRef = useRef<number[]>(new Array(HISTORY_LEN).fill(0));
 
   useEffect(() => {
-    function sample() {
-      // CPU: average across all cores
+    async function sample() {
+      // CPU: average across all cores (sync, cheap)
       const cores = cpus();
       let idle = 0;
       let total = 0;
@@ -74,10 +75,9 @@ export function useMetrics(): SystemMetrics {
       }
       prevCpuRef.current = { idle, total };
 
-      // Update history ring
       historyRef.current = [...historyRef.current.slice(1), cpuPercent];
 
-      // Memory
+      // Memory (sync, cheap)
       const free = freemem();
       const tot = totalmem();
       const used = tot - free;
@@ -85,10 +85,10 @@ export function useMetrics(): SystemMetrics {
       const memTotalGB = Math.round((tot / 1073741824) * 10) / 10;
       const memPercent = Math.round((used / tot) * 100);
 
-      // Network
+      // Network (async — does not block event loop)
       let netUp = 0;
       let netDown = 0;
-      const net = readNetBytes();
+      const net = await readNetBytesAsync();
       const prevNet = prevNetRef.current;
       if (prevNet && prevNet.rx > 0) {
         const dt = (Date.now() - prevNet.time) / 1000;
@@ -110,7 +110,7 @@ export function useMetrics(): SystemMetrics {
       });
     }
 
-    sample(); // initial
+    sample();
     const timer = setInterval(sample, 1000);
     return () => clearInterval(timer);
   }, []);

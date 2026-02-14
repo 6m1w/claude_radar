@@ -22,13 +22,6 @@ export function App() {
   const [cursorIdx, setCursorIdx] = useState(0);
   const [taskCursorIdx, setTaskCursorIdx] = useState(0);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
-  const [tick, setTick] = useState(0);
-
-  // Tick for spinner animation
-  useEffect(() => {
-    const t = setInterval(() => setTick((n) => n + 1), 100);
-    return () => clearInterval(t);
-  }, []);
 
   // Find the detail project by path (stays current as data refreshes)
   const detailProject = viewState.view === "detail"
@@ -164,14 +157,13 @@ export function App() {
         <KanbanView projects={kanbanProjects} />
       )}
 
-      {/* Status bar (shared across views) */}
+      {/* Status bar (own tick — only this component re-renders at animation fps) */}
       <StatusBar
         viewLabel={viewLabel}
         viewState={viewState.view}
         metrics={metrics}
         hasActive={activePairs.length > 0}
         allDone={totalTasks > 0 && totalCompleted === totalTasks}
-        tick={tick}
       />
     </Box>
   );
@@ -674,15 +666,19 @@ function StatusBar({
   metrics,
   hasActive,
   allDone,
-  tick,
 }: {
   viewLabel: string;
   viewState: "dashboard" | "detail" | "kanban";
   metrics: SystemMetrics;
   hasActive: boolean;
   allDone: boolean;
-  tick: number;
 }) {
+  // Tick lives here — only StatusBar re-renders at animation fps
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 200);
+    return () => clearInterval(t);
+  }, []);
   const mascotState = allDone ? "done" : hasActive ? "working" : "idle";
   const mascotFrames = MASCOT[mascotState];
   const mascotFrame = mascotFrames[Math.floor(tick / 10) % mascotFrames.length];
