@@ -1,244 +1,439 @@
 #!/usr/bin/env node
 /**
- * Design Playground — TUI visual experiments
+ * Design Playground v2 — lazygit-inspired multi-panel TUI
  * Run: npx tsx src/playground.tsx
+ *
+ * Two pages:
+ *   [Tab] switches between Global and Focus view
+ *   [j/k] navigate, [Enter] expand, [1-3] jump to panel, [q] quit
  */
 import React, { useState, useEffect } from "react";
 import { render, Box, Text, useInput, useApp } from "ink";
 
-// ─── Color Palette ───────────────────────────────────────────
+// ─── Catppuccin Mocha-inspired palette (matches lazygit) ────
 const C = {
-  bg: "#0a0e14",
-  green: "#00ff41",
-  cyan: "#00d4ff",
-  yellow: "#ffb800",
-  red: "#ff3e3e",
-  dim: "#3b4261",
-  gray: "#555e70",
-  white: "#c0caf5",
+  green: "#a6e3a1",
+  cyan: "#89dceb",
+  teal: "#94e2d5",
+  yellow: "#f9e2af",
+  peach: "#fab387",
+  red: "#f38ba8",
+  mauve: "#cba6f7",
+  blue: "#89b4fa",
+  text: "#cdd6f4",
+  subtext: "#a6adc8",
+  overlay: "#6c7086",
+  surface: "#45475a",
+  base: "#313244",
+  dim: "#585b70",
 };
 
-// ─── ASCII Art Header ────────────────────────────────────────
-function Header() {
+// ─── Reusable: Panel with header ─────────────────────────────
+function Panel({
+  title,
+  hotkey,
+  focused,
+  children,
+  width,
+  height,
+}: {
+  title: string;
+  hotkey?: string;
+  focused?: boolean;
+  children: React.ReactNode;
+  width?: number | string;
+  height?: number;
+}) {
   return (
-    <Box flexDirection="column" marginBottom={1}>
-      <Text color={C.cyan}>
-        {"  ╔═══════════════════════════════════════════════════╗"}
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={focused ? C.cyan : C.dim}
+      width={width}
+      height={height}
+      paddingX={1}
+    >
+      <Text>
+        {hotkey && (
+          <Text color={focused ? C.cyan : C.dim}>[{hotkey}]</Text>
+        )}
+        <Text color={focused ? C.cyan : C.subtext} bold={focused}>
+          {hotkey ? " " : ""}{title}
+        </Text>
       </Text>
-      <Text color={C.cyan}>
-        {"  ║"}<Text color={C.green} bold>{" ▓▓▓ CLAUDE MONITOR "}</Text><Text color={C.dim}>{"v0.2.0"}</Text><Text color={C.cyan}>{"                    ║"}</Text>
-      </Text>
-      <Text color={C.cyan}>
-        {"  ║"}<Text color={C.dim}>{" ⣿ Agent Task Surveillance System"}</Text><Text color={C.cyan}>{"               ║"}</Text>
-      </Text>
-      <Text color={C.cyan}>
-        {"  ╚═══════════════════════════════════════════════════╝"}
-      </Text>
+      {children}
     </Box>
   );
 }
 
-// ─── Status Bar ──────────────────────────────────────────────
-function StatusBar() {
+// ─── Progress bar ────────────────────────────────────────────
+function Progress({ done, total, width = 16 }: { done: number; total: number; width?: number }) {
+  const pct = total > 0 ? done / total : 0;
+  const filled = Math.round(pct * width);
+  return (
+    <Text>
+      <Text color={C.green}>{"█".repeat(filled)}</Text>
+      <Text color={C.dim}>{"░".repeat(width - filled)}</Text>
+      <Text color={C.subtext}> {done}/{total}</Text>
+    </Text>
+  );
+}
+
+// ─── Status indicators ──────────────────────────────────────
+const STATUS = {
+  active: { icon: "●", color: C.green },
+  working: { icon: "◍", color: C.yellow },
+  idle: { icon: "○", color: C.dim },
+  done: { icon: "✓", color: C.green },
+  error: { icon: "✗", color: C.red },
+} as const;
+
+const TASK_STATUS = {
+  done: { icon: "✓", color: C.green },
+  active: { icon: "▶", color: C.yellow },
+  pending: { icon: "○", color: C.dim },
+  blocked: { icon: "⊘", color: C.red },
+} as const;
+
+// ─── Types ───────────────────────────────────────────────────
+type TaskStatus = "done" | "active" | "pending" | "blocked";
+type AgentStatus = "active" | "working" | "idle" | "done" | "error";
+interface MockTask { id: number; label: string; status: TaskStatus }
+interface MockAgent { name: string; status: AgentStatus; tasks: MockTask[] }
+interface MockProject { name: string; branch: string; status: AgentStatus; lastActive: string; agents: MockAgent[] }
+
+// ─── Mock data ───────────────────────────────────────────────
+const PROJECTS: MockProject[] = [
+  {
+    name: "project_claude_monitor",
+    branch: "main",
+    status: "active" as const,
+    lastActive: "2m ago",
+    agents: [
+      {
+        name: "main",
+        status: "working" as const,
+        tasks: [
+          { id: 1, label: "Setup Ink + TypeScript", status: "done" as const },
+          { id: 2, label: "Session index resolver", status: "done" as const },
+          { id: 3, label: "Polling watcher", status: "done" as const },
+          { id: 4, label: "Design hacker UI theme", status: "active" as const },
+          { id: 5, label: "Keyboard navigation", status: "pending" as const },
+        ],
+      },
+    ],
+  },
+  {
+    name: "project_outclaws",
+    branch: "main",
+    status: "active" as const,
+    lastActive: "5m ago",
+    agents: [
+      {
+        name: "stream-a",
+        status: "working" as const,
+        tasks: [
+          { id: 1, label: "Auth module", status: "done" as const },
+          { id: 2, label: "User dashboard", status: "active" as const },
+          { id: 3, label: "API endpoints", status: "pending" as const },
+        ],
+      },
+      {
+        name: "stream-b",
+        status: "working" as const,
+        tasks: [
+          { id: 1, label: "Database schema", status: "done" as const },
+          { id: 2, label: "Migration scripts", status: "active" as const },
+        ],
+      },
+      {
+        name: "stream-c",
+        status: "idle" as const,
+        tasks: [
+          { id: 1, label: "Unit tests", status: "blocked" as const },
+          { id: 2, label: "E2E tests", status: "pending" as const },
+        ],
+      },
+    ],
+  },
+  {
+    name: "project_sound_effects",
+    branch: "main",
+    status: "done" as const,
+    lastActive: "1h ago",
+    agents: [
+      {
+        name: "main",
+        status: "idle" as const,
+        tasks: [
+          { id: 1, label: "Cross-platform audio", status: "done" as const },
+          { id: 2, label: "12 theme packs", status: "done" as const },
+          { id: 3, label: "Opencode plugin", status: "done" as const },
+        ],
+      },
+    ],
+  },
+  {
+    name: "project_keyboard",
+    branch: "main",
+    status: "idle" as const,
+    lastActive: "20d ago",
+    agents: [
+      {
+        name: "main",
+        status: "idle" as const,
+        tasks: [
+          { id: 1, label: "Next.js 15 setup", status: "done" as const },
+          { id: 2, label: "Blueprint wireframes", status: "done" as const },
+          { id: 3, label: "i18n + deploy", status: "pending" as const },
+        ],
+      },
+    ],
+  },
+];
+
+// ─── Global View: Project List Panel ─────────────────────────
+function ProjectList({ focusIdx, panelFocused }: { focusIdx: number; panelFocused: boolean }) {
+  return (
+    <Panel title="Projects" hotkey="1" focused={panelFocused} width={34}>
+      <Box flexDirection="column" marginTop={1}>
+        {PROJECTS.map((p, i) => {
+          const s = STATUS[p.status];
+          const focused = i === focusIdx;
+          return (
+            <Box key={i}>
+              <Text color={focused ? C.cyan : C.dim}>{focused ? "▸ " : "  "}</Text>
+              <Text color={s.color}>{s.icon} </Text>
+              <Text color={focused ? C.text : C.subtext} bold={focused}>
+                {p.name.replace("project_", "")}
+              </Text>
+            </Box>
+          );
+        })}
+      </Box>
+    </Panel>
+  );
+}
+
+// ─── Global View: Detail Panel ───────────────────────────────
+function ProjectDetail({ project, panelFocused }: { project: MockProject; panelFocused: boolean }) {
+  const allTasks = project.agents.flatMap((a) => a.tasks);
+  const done = allTasks.filter((t) => t.status === "done").length;
+
+  return (
+    <Panel title={project.name.replace("project_", "")} hotkey="2" focused={panelFocused}>
+      {/* Project info */}
+      <Box flexDirection="column" marginTop={1}>
+        <Box>
+          <Text color={C.mauve}>⎇ </Text>
+          <Text color={C.text}>{project.branch}</Text>
+          <Text color={C.dim}> │ </Text>
+          <Text color={C.subtext}>{project.agents.length} agent{project.agents.length > 1 ? "s" : ""}</Text>
+          <Text color={C.dim}> │ </Text>
+          <Text color={C.subtext}>{project.lastActive}</Text>
+        </Box>
+
+        <Box marginTop={1}>
+          <Progress done={done} total={allTasks.length} width={20} />
+        </Box>
+
+        {/* Agent sections */}
+        {project.agents.map((agent, ai) => {
+          const as_ = STATUS[agent.status];
+          return (
+            <Box key={ai} flexDirection="column" marginTop={1}>
+              <Text>
+                <Text color={as_.color}>{as_.icon} </Text>
+                <Text color={C.teal} bold>{agent.name}</Text>
+              </Text>
+              {agent.tasks.map((t) => {
+                const ts = TASK_STATUS[t.status];
+                return (
+                  <Box key={t.id}>
+                    <Text color={ts.color}>  {ts.icon} </Text>
+                    <Text
+                      color={t.status === "done" ? C.dim : C.text}
+                      strikethrough={t.status === "done"}
+                    >
+                      #{t.id} {t.label}
+                    </Text>
+                  </Box>
+                );
+              })}
+            </Box>
+          );
+        })}
+      </Box>
+    </Panel>
+  );
+}
+
+// ─── Global View: Activity Log ───────────────────────────────
+function ActivityLog({ panelFocused }: { panelFocused: boolean }) {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setTick((v) => v + 1), 1000);
     return () => clearInterval(t);
   }, []);
-
   const spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][tick % 10];
-  const time = new Date().toLocaleTimeString();
+
+  const logs = [
+    { time: "10:08", project: "monitor", action: "▶", task: "#4 Design hacker UI", color: C.yellow },
+    { time: "10:05", project: "outclaws", action: "▶", task: "#2 User dashboard", color: C.yellow },
+    { time: "10:03", project: "monitor", action: "✓", task: "#3 Polling watcher", color: C.green },
+    { time: "09:58", project: "outclaws", action: "✓", task: "#1 Auth module", color: C.green },
+    { time: "09:45", project: "sound_fx", action: "✓", task: "#3 Opencode plugin", color: C.green },
+  ];
 
   return (
-    <Box justifyContent="space-between" marginBottom={1}>
-      <Text>
-        <Text color={C.green}>{spinner}</Text>
-        <Text color={C.dim}> SCANNING </Text>
-        <Text color={C.gray}>~/.claude/tasks/</Text>
-      </Text>
-      <Text>
-        <Text color={C.dim}>UPTIME </Text>
-        <Text color={C.green}>{tick}s</Text>
-        <Text color={C.dim}> │ </Text>
-        <Text color={C.cyan}>{time}</Text>
-      </Text>
-    </Box>
-  );
-}
-
-// ─── Hacker-style Progress Bar ───────────────────────────────
-function HackerProgress({ done, total, width = 20 }: { done: number; total: number; width?: number }) {
-  const pct = total > 0 ? done / total : 0;
-  const filled = Math.round(pct * width);
-  const empty = width - filled;
-  const pctStr = `${Math.round(pct * 100)}%`;
-
-  return (
-    <Text>
-      <Text color={C.dim}>{"["}</Text>
-      <Text color={C.green}>{"█".repeat(filled)}</Text>
-      <Text color={C.dim}>{"░".repeat(empty)}</Text>
-      <Text color={C.dim}>{"] "}</Text>
-      <Text color={pct === 1 ? C.green : C.yellow}>{pctStr}</Text>
-    </Text>
-  );
-}
-
-// ─── Focusable Session Card ──────────────────────────────────
-function SessionCard({
-  name,
-  tasks,
-  focused,
-  expanded,
-}: {
-  name: string;
-  tasks: Array<{ label: string; status: string }>;
-  focused: boolean;
-  expanded: boolean;
-}) {
-  const done = tasks.filter((t) => t.status === "done").length;
-  const borderColor = focused ? C.green : C.dim;
-  const icon: Record<string, string> = { done: "✓", active: "▶", pending: "○" };
-  const color: Record<string, string> = { done: C.dim, active: C.yellow, pending: C.gray };
-
-  if (!expanded) {
-    return (
-      <Box>
-        <Text color={focused ? C.green : C.gray}>
-          {focused ? "▸ " : "  "}
-        </Text>
-        <Text color={focused ? C.cyan : C.gray} bold={focused}>
-          {name}
-        </Text>
-        <Text color={C.dim}>
-          {" — "}{done}/{tasks.length} done
-        </Text>
-      </Box>
-    );
-  }
-
-  return (
-    <Box
-      flexDirection="column"
-      borderStyle="single"
-      borderColor={borderColor}
-      paddingX={1}
-      marginBottom={1}
-    >
-      <Box justifyContent="space-between">
-        <Text>
-          <Text color={C.green}>{focused ? "▸ " : "  "}</Text>
-          <Text color={C.cyan} bold>{name}</Text>
-        </Text>
-        <HackerProgress done={done} total={tasks.length} width={15} />
-      </Box>
-
+    <Panel title="Activity" hotkey="3" focused={panelFocused}>
       <Box flexDirection="column" marginTop={1}>
-        {tasks.map((t, i) => (
+        {logs.map((log, i) => (
           <Box key={i}>
-            <Text color={color[t.status] ?? C.gray}>
-              {"  "}{icon[t.status] ?? "?"} {t.label}
-            </Text>
+            <Text color={C.dim}>{log.time} </Text>
+            <Text color={C.subtext}>{log.project.padEnd(10)} </Text>
+            <Text color={log.color}>{log.action} </Text>
+            <Text color={C.text}>{log.task}</Text>
           </Box>
         ))}
       </Box>
+      <Box marginTop={1}>
+        <Text color={C.green}>{spinner} </Text>
+        <Text color={C.dim}>polling ~/.claude/tasks/ </Text>
+      </Box>
+    </Panel>
+  );
+}
+
+// ─── Focus View: Kanban Columns ──────────────────────────────
+function KanbanBoard({ project }: { project: MockProject }) {
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text color={C.mauve}>⎇ </Text>
+        <Text color={C.cyan} bold>{project.name.replace("project_", "")}</Text>
+        <Text color={C.dim}> │ </Text>
+        <Text color={C.subtext}>{project.branch}</Text>
+        <Text color={C.dim}> │ </Text>
+        <Text color={C.subtext}>{project.agents.length} agents</Text>
+      </Box>
+
+      <Box marginTop={1} gap={1}>
+        {project.agents.map((agent, ai) => {
+          const as_ = STATUS[agent.status];
+          const done = agent.tasks.filter((t) => t.status === "done").length;
+          return (
+            <Box
+              key={ai}
+              flexDirection="column"
+              borderStyle="single"
+              borderColor={agent.status === "working" ? C.green : C.dim}
+              paddingX={1}
+              width={28}
+            >
+              <Box justifyContent="space-between">
+                <Text>
+                  <Text color={as_.color}>{as_.icon} </Text>
+                  <Text color={C.teal} bold>{agent.name}</Text>
+                </Text>
+                <Text color={C.dim}>{done}/{agent.tasks.length}</Text>
+              </Box>
+              <Box flexDirection="column" marginTop={1}>
+                {agent.tasks.map((t) => {
+                  const ts = TASK_STATUS[t.status];
+                  return (
+                    <Box key={t.id}>
+                      <Text color={ts.color}>{ts.icon} </Text>
+                      <Text
+                        color={t.status === "done" ? C.dim : C.text}
+                        strikethrough={t.status === "done"}
+                      >
+                        {t.label}
+                      </Text>
+                    </Box>
+                  );
+                })}
+              </Box>
+            </Box>
+          );
+        })}
+      </Box>
     </Box>
   );
 }
 
-// ─── Keyboard Help ───────────────────────────────────────────
-function HelpBar() {
+// ─── Focus View Page ─────────────────────────────────────────
+function FocusView() {
+  // Show active projects only
+  const active = PROJECTS.filter((p) => p.status === "active");
+  return (
+    <Panel title="Focus Mode" hotkey="F">
+      <Box flexDirection="column" marginTop={1} gap={1}>
+        {active.map((project, i) => (
+          <KanbanBoard key={i} project={project} />
+        ))}
+      </Box>
+    </Panel>
+  );
+}
+
+// ─── Bottom Bar ──────────────────────────────────────────────
+function BottomBar({ page }: { page: string }) {
   return (
     <Box marginTop={1}>
-      <Text color={C.dim}>
-        <Text color={C.green}>↑↓</Text> navigate  <Text color={C.green}>Enter</Text> expand  <Text color={C.green}>Tab</Text> view  <Text color={C.green}>q</Text> quit
+      <Text>
+        <Text color={C.cyan} bold> {page === "global" ? "GLOBAL" : "FOCUS"} </Text>
+        <Text color={C.dim}> │ </Text>
+        <Text color={C.green}>↑↓</Text><Text color={C.subtext}> nav </Text>
+        <Text color={C.green}>Enter</Text><Text color={C.subtext}> select </Text>
+        <Text color={C.green}>Tab</Text><Text color={C.subtext}> switch view </Text>
+        <Text color={C.green}>1-3</Text><Text color={C.subtext}> panel </Text>
+        <Text color={C.green}>h</Text><Text color={C.subtext}> hide done </Text>
+        <Text color={C.green}>q</Text><Text color={C.subtext}> quit</Text>
       </Text>
     </Box>
   );
 }
 
-// ─── Scan Line Effect ────────────────────────────────────────
-function ScanLine() {
-  const [pos, setPos] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setPos((v) => (v + 1) % 3), 800);
-    return () => clearInterval(t);
-  }, []);
-
-  const line = "─".repeat(55);
-  const colors = [C.dim, C.gray, C.dim];
-  return <Text color={colors[pos]}> {line}</Text>;
-}
-
 // ─── Main App ────────────────────────────────────────────────
-const MOCK_SESSIONS = [
-  {
-    name: "project_claude_monitor",
-    tasks: [
-      { label: "#1 Setup Ink + TypeScript", status: "done" },
-      { label: "#2 Add session index resolver", status: "done" },
-      { label: "#3 Implement polling watcher", status: "done" },
-      { label: "#4 Design hacker UI theme", status: "active" },
-      { label: "#5 Add keyboard navigation", status: "pending" },
-    ],
-  },
-  {
-    name: "project_claude_sound_effects",
-    tasks: [
-      { label: "#1 Cross-platform audio", status: "done" },
-      { label: "#2 12 theme sound packs", status: "done" },
-      { label: "#3 Opencode plugin", status: "active" },
-    ],
-  },
-  {
-    name: "project_keyboard",
-    tasks: [
-      { label: "#1 Next.js 15 setup", status: "done" },
-      { label: "#2 Blueprint wireframes", status: "done" },
-      { label: "#3 i18n configuration", status: "done" },
-      { label: "#4 Build & deploy", status: "pending" },
-    ],
-  },
-];
-
 function App() {
   const { exit } = useApp();
+  const [page, setPage] = useState<"global" | "focus">("global");
   const [focusIdx, setFocusIdx] = useState(0);
-  const [expandedSet, setExpandedSet] = useState<Set<number>>(new Set([0]));
+  const [activePanel, setActivePanel] = useState(1);
+  const [hideDone, setHideDone] = useState(false);
+
+  const visibleProjects = hideDone ? PROJECTS.filter((p) => p.status !== "done") : PROJECTS;
 
   useInput((input, key) => {
     if (input === "q") exit();
+    if (key.tab) setPage((p) => (p === "global" ? "focus" : "global"));
+    if (input === "h") setHideDone((v) => !v);
+    if (input === "1") setActivePanel(1);
+    if (input === "2") setActivePanel(2);
+    if (input === "3") setActivePanel(3);
     if (key.upArrow || input === "k") setFocusIdx((v) => Math.max(0, v - 1));
-    if (key.downArrow || input === "j") setFocusIdx((v) => Math.min(MOCK_SESSIONS.length - 1, v + 1));
-    if (key.return) {
-      setExpandedSet((prev) => {
-        const next = new Set(prev);
-        next.has(focusIdx) ? next.delete(focusIdx) : next.add(focusIdx);
-        return next;
-      });
-    }
+    if (key.downArrow || input === "j") setFocusIdx((v) => Math.min(visibleProjects.length - 1, v + 1));
   });
 
+  const currentProject = visibleProjects[focusIdx] ?? PROJECTS[0];
+
   return (
-    <Box flexDirection="column" paddingX={1}>
-      <Header />
-      <StatusBar />
-      <ScanLine />
-
-      <Box flexDirection="column" marginTop={1}>
-        {MOCK_SESSIONS.map((session, i) => (
-          <SessionCard
-            key={i}
-            name={session.name}
-            tasks={session.tasks}
-            focused={focusIdx === i}
-            expanded={expandedSet.has(i)}
-          />
-        ))}
-      </Box>
-
-      <ScanLine />
-      <HelpBar />
+    <Box flexDirection="column">
+      {page === "global" ? (
+        <>
+          {/* Top: Projects + Detail side by side */}
+          <Box>
+            <ProjectList focusIdx={focusIdx} panelFocused={activePanel === 1} />
+            <ProjectDetail project={currentProject} panelFocused={activePanel === 2} />
+          </Box>
+          {/* Bottom: Activity log */}
+          <ActivityLog panelFocused={activePanel === 3} />
+        </>
+      ) : (
+        <FocusView />
+      )}
+      <BottomBar page={page} />
     </Box>
   );
 }
