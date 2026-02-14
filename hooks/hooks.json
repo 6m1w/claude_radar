@@ -55,6 +55,17 @@
           }
         ]
       }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/capture.sh tool_failure",
+            "timeout": 3
+          }
+        ]
+      }
     ]
   }
 }

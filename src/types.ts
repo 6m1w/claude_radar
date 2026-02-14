@@ -237,10 +237,11 @@ export type ViewProject = {
 // ─── Hook event types (capture.sh → events.jsonl) ───────────
 
 // Raw event line from events.jsonl
-// event types: "tool" (PostToolUse, all tools), "stop", "start",
-//   "task" (legacy — old PostToolUse with matcher), "subagent_stop", "notification"
+// event types: "tool" (PostToolUse, all tools), "tool_failure" (PostToolUseFailure),
+//   "stop", "start", "task" (legacy — old PostToolUse with matcher),
+//   "subagent_stop", "notification"
 export interface HookEvent {
-  event: "tool" | "task" | "stop" | "start" | "subagent_stop" | "notification";
+  event: "tool" | "tool_failure" | "task" | "stop" | "start" | "subagent_stop" | "notification";
   ts: string; // ISO 8601
   data: HookEventData;
 }
