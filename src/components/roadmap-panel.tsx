@@ -2,7 +2,7 @@
  * RoadmapPanel — left-bottom panel showing roadmap progress for selected project
  *
  * Displays parsed checkbox data from PRD.md / docs with section-level progress.
- * When focused (hotkey 3): h/l switches files, j/k navigates sections,
+ * When focused (hotkey 3): h/l switches files, j/k navigates sections + items,
  * Enter/Space toggles section expand (accordion behavior).
  */
 import React from "react";
@@ -20,6 +20,7 @@ export function RoadmapPanel({
   selectedIdx = 0,
   sectionIdx = 0,
   expandedSection = null,
+  itemIdx = -1,
   hotkey,
 }: {
   project?: ViewProject;
@@ -28,6 +29,7 @@ export function RoadmapPanel({
   selectedIdx?: number;
   sectionIdx?: number;
   expandedSection?: number | null;
+  itemIdx?: number;
   hotkey?: string;
 }) {
   // Empty state
@@ -64,10 +66,20 @@ export function RoadmapPanel({
     }
   }
 
-  // Viewport: keep cursor section visible, center when possible
-  const cursorLineIdx = contentLines.findIndex(
-    (l) => l.type === "section" && l.idx === safeSectionIdx
-  );
+  // Viewport: keep cursor visible (could be on section header or item)
+  let cursorLineIdx: number;
+  if (focused && expandedSection === safeSectionIdx && itemIdx >= 0) {
+    // Cursor is on an item within the expanded section
+    cursorLineIdx = contentLines.findIndex(
+      (l) => l.type === "item" && l.sectionIdx === safeSectionIdx && l.itemIdx === itemIdx
+    );
+  } else {
+    cursorLineIdx = contentLines.findIndex(
+      (l) => l.type === "section" && l.idx === safeSectionIdx
+    );
+  }
+  if (cursorLineIdx < 0) cursorLineIdx = 0;
+
   const hasOverflow = contentLines.length > contentBudget;
   const maxVisible = hasOverflow ? contentBudget - 1 : contentBudget;
 
@@ -106,14 +118,14 @@ export function RoadmapPanel({
       {visibleContent.map((line, vi) => {
         if (line.type === "section") {
           const section = sections[line.idx];
-          const isCursor = focused && line.idx === safeSectionIdx;
+          const isSectionCursor = focused && line.idx === safeSectionIdx && itemIdx < 0;
           const isExpanded = focused && expandedSection === line.idx;
           const icon = isExpanded ? "▾" : "▸";
-          const titleColor = isCursor ? C.text : C.subtext;
+          const titleColor = isSectionCursor ? C.text : C.subtext;
           const countColor = section.done === section.total ? C.success : C.subtext;
           return (
             <Box key={`s-${line.idx}`} height={1} overflow="hidden">
-              <Text color={isCursor ? C.primary : C.dim}>{isCursor ? icon : "▸"} </Text>
+              <Text color={isSectionCursor ? C.primary : C.dim}>{isSectionCursor || isExpanded ? icon : "▸"} </Text>
               <Text wrap="truncate" color={titleColor}>{truncateToWidth(section.title, 20)}</Text>
               <Box flexGrow={1} />
               <Text color={countColor}>{section.done}/{section.total}</Text>
@@ -122,12 +134,13 @@ export function RoadmapPanel({
         }
         // Expanded item
         const item = sections[line.sectionIdx].items[line.itemIdx];
-        const icon = item.done ? "✓" : "○";
-        const color = item.done ? C.success : C.subtext;
+        const isItemCursor = focused && line.sectionIdx === safeSectionIdx && line.itemIdx === itemIdx;
+        const doneIcon = item.done ? "✓" : "○";
+        const color = isItemCursor ? C.text : item.done ? C.success : C.subtext;
         return (
           <Text key={`i-${line.sectionIdx}-${line.itemIdx}`} wrap="truncate">
-            <Text color={C.dim}>  </Text>
-            <Text color={color}>{icon} </Text>
+            <Text color={isItemCursor ? C.primary : C.dim}>{isItemCursor ? "▸" : " "} </Text>
+            <Text color={color}>{doneIcon} </Text>
             <Text color={color}>{truncateToWidth(item.text, 22)}</Text>
           </Text>
         );

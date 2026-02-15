@@ -149,14 +149,23 @@ function RoadmapSwimLane({
   colWidths: number[];
   labelW: number;
 }) {
-  // Only show projects with roadmap data, sorted by activity (active first, then recent)
+  // Only show projects with roadmap data, deduplicate worktrees that share parent's data
+  const seenParents = new Set<string>();
   const withRoadmap = projects
-    .filter((p) => p.roadmap.length > 0 && p.roadmap.some((r) => r.totalItems > 0))
+    .filter((p) => {
+      if (p.roadmap.length === 0 || !p.roadmap.some((r) => r.totalItems > 0)) return false;
+      // Skip worktree if its parent repo is already shown
+      if (p.worktreeOf) {
+        if (seenParents.has(p.worktreeOf)) return false;
+        seenParents.add(p.worktreeOf);
+      } else {
+        seenParents.add(p.projectPath);
+      }
+      return true;
+    })
     .sort((a, b) => {
-      // Active projects first
       if (a.isActive && !b.isActive) return -1;
       if (!a.isActive && b.isActive) return 1;
-      // Then by most recent activity
       return b.lastActivity.getTime() - a.lastActivity.getTime();
     });
 

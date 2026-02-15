@@ -128,6 +128,8 @@ export function App() {
   const [roadmapDocIdx, setRoadmapDocIdx] = useState(0);
   const [roadmapSectionIdx, setRoadmapSectionIdx] = useState(0);
   const [expandedSection, setExpandedSection] = useState<number | null>(null);
+  // -1 = cursor on section header, >= 0 = cursor on item within expanded section
+  const [roadmapItemIdx, setRoadmapItemIdx] = useState(-1);
 
   // Kanban state (shared across agent/swimlane views)
   const [kanbanHideDone, setKanbanHideDone] = useState(true);
@@ -285,22 +287,66 @@ export function App() {
           setRoadmapDocIdx((i) => i - 1);
           setRoadmapSectionIdx(0);
           setExpandedSection(null);
+          setRoadmapItemIdx(-1);
         }
         if ((input === "l" || key.rightArrow) && roadmapDocIdx < roadmaps.length - 1) {
           setRoadmapDocIdx((i) => i + 1);
           setRoadmapSectionIdx(0);
           setExpandedSection(null);
+          setRoadmapItemIdx(-1);
         }
-        // j/k navigates sections
-        if ((input === "j" || key.downArrow) && roadmapSectionIdx < sections.length - 1) {
-          setRoadmapSectionIdx((i) => i + 1);
+        // j/k navigates flattened list: section headers + expanded items
+        if (input === "j" || key.downArrow) {
+          if (expandedSection === roadmapSectionIdx && roadmapItemIdx >= 0) {
+            // Inside expanded section — move to next item or next section
+            const items = sections[roadmapSectionIdx]?.items ?? [];
+            if (roadmapItemIdx < items.length - 1) {
+              setRoadmapItemIdx((i) => i + 1);
+            } else if (roadmapSectionIdx < sections.length - 1) {
+              setRoadmapSectionIdx((i) => i + 1);
+              setRoadmapItemIdx(-1);
+            }
+          } else if (expandedSection === roadmapSectionIdx && roadmapItemIdx === -1) {
+            // On expanded section header — enter items
+            const items = sections[roadmapSectionIdx]?.items ?? [];
+            if (items.length > 0) {
+              setRoadmapItemIdx(0);
+            } else if (roadmapSectionIdx < sections.length - 1) {
+              setRoadmapSectionIdx((i) => i + 1);
+            }
+          } else if (roadmapSectionIdx < sections.length - 1) {
+            setRoadmapSectionIdx((i) => i + 1);
+            setRoadmapItemIdx(-1);
+          }
         }
-        if ((input === "k" || key.upArrow) && roadmapSectionIdx > 0) {
-          setRoadmapSectionIdx((i) => i - 1);
+        if (input === "k" || key.upArrow) {
+          if (expandedSection === roadmapSectionIdx && roadmapItemIdx > 0) {
+            setRoadmapItemIdx((i) => i - 1);
+          } else if (expandedSection === roadmapSectionIdx && roadmapItemIdx === 0) {
+            // Back to section header
+            setRoadmapItemIdx(-1);
+          } else if (roadmapSectionIdx > 0) {
+            const prevIdx = roadmapSectionIdx - 1;
+            setRoadmapSectionIdx(prevIdx);
+            // If previous section is expanded, land on its last item
+            if (expandedSection === prevIdx) {
+              const items = sections[prevIdx]?.items ?? [];
+              setRoadmapItemIdx(items.length > 0 ? items.length - 1 : -1);
+            } else {
+              setRoadmapItemIdx(-1);
+            }
+          }
         }
         // Enter/Space toggles expand (accordion)
         if (key.return || input === " ") {
-          setExpandedSection((prev) => prev === roadmapSectionIdx ? null : roadmapSectionIdx);
+          if (roadmapItemIdx >= 0) {
+            // On an item — collapse parent section
+            setExpandedSection(null);
+            setRoadmapItemIdx(-1);
+          } else {
+            setExpandedSection((prev) => prev === roadmapSectionIdx ? null : roadmapSectionIdx);
+            setRoadmapItemIdx(-1);
+          }
         }
       }
       return;
@@ -315,6 +361,7 @@ export function App() {
       setRoadmapDocIdx(0);
       setRoadmapSectionIdx(0);
       setExpandedSection(null);
+      setRoadmapItemIdx(-1);
     }
     if ((input === "k" || key.upArrow) && projectIdx > 0) {
       const next = projectIdx - 1;
@@ -324,6 +371,7 @@ export function App() {
       setRoadmapDocIdx(0);
       setRoadmapSectionIdx(0);
       setExpandedSection(null);
+      setRoadmapItemIdx(-1);
     }
 
     // Space → toggle multi-select for kanban
@@ -471,7 +519,7 @@ export function App() {
               <Text color={C.dim}>  ▼ {belowCount} more</Text>
             )}
           </Panel>
-          {showRoadmap && <RoadmapPanel project={current} height={roadmapHeight} focused={focusedPanel === "roadmap"} selectedIdx={roadmapDocIdx} sectionIdx={roadmapSectionIdx} expandedSection={expandedSection} hotkey="3" />}
+          {showRoadmap && <RoadmapPanel project={current} height={roadmapHeight} focused={focusedPanel === "roadmap"} selectedIdx={roadmapDocIdx} sectionIdx={roadmapSectionIdx} expandedSection={expandedSection} itemIdx={roadmapItemIdx} hotkey="3" />}
         </Box>
 
         {/* Right: Tasks only — explicit height + maxLines prevents layout overflow */}
@@ -540,8 +588,6 @@ function RightPanel({
   const push = (key: string, node: React.ReactNode) => { if (lines.length < cap) lines.push(<Box key={key} flexShrink={0} height={1} overflow="hidden">{node}</Box>); };
   const CAP_ALERTS = 3;
   const CAP_TEAM = 3;
-  const CAP_PLANNING = 4;
-  const CAP_ACTIVITY = 5;
   const CAP_DETAIL = 4;
 
   // Worktree lineage
@@ -564,7 +610,7 @@ function RightPanel({
     ) : (() => {
       const isRunning = project.isActive || project.activeSessions > 0;
       if (!isRunning) return null;
-      return <Text color={C.warning}>● Agent running</Text>;
+      return <Text color={C.success}>● Agent running</Text>;
     })()}
   </Text>);
 
@@ -639,14 +685,9 @@ function RightPanel({
   } else {
     liveTasks.forEach((t, i) => push(`t-${t.id}`, renderTask(t, i)));
   }
-  if (goneTasks.length > 0) push("gone", <Text color={C.dim}>  {"\u25b8"} {goneTasks.length} archived</Text>);
+  if (goneTasks.length > 0) push("gone", <Text color={C.dim}>  ▸ {goneTasks.length} archived</Text>);
 
-  // Gone sessions
-  if (project.goneSessionCount > 0 && liveTasks.length === 0) {
-    push("gsess", <Text color={C.dim}>▸ {project.goneSessionCount} archived session{project.goneSessionCount > 1 ? "s" : ""}</Text>);
-  }
-
-  // Task detail
+  // Task detail (when focused on a live task)
   if (focused && project.tasks[taskIdx] && !project.tasks[taskIdx].gone) {
     const t = project.tasks[taskIdx];
     push("td-sep", <Text> </Text>);
@@ -661,28 +702,17 @@ function RightPanel({
     if (t.description) push("td-desc", <Text wrap="truncate" color={C.subtext}>{t.description.replace(/[\r\n\t]+/g, " ")}</Text>);
   }
 
-  // Planning log (L2)
-  if (project.planningLog.length > 0) {
-    const reversed = project.planningLog.slice().reverse();
-    let compactSeen = 0;
-    const compactTotal = reversed.filter((e) => e.toolName === "_compact").length;
-    const filtered = reversed.filter((evt) => {
-      if (evt.toolName === "_compact") { compactSeen++; return compactSeen <= 1; }
-      return true;
-    }).slice(0, CAP_PLANNING);
-    const collapsedCompact = compactTotal > 1 ? compactTotal - 1 : 0;
-    push("pl-sep", <Text> </Text>);
-    push("pl-hdr", <Text color={C.dim}>─── Planning ─────────────────────</Text>);
-    filtered.forEach((evt, i) => push(`pl-${i}`, <Text wrap="truncate"><Text color={C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text><Text color={C.primary}>  {evt.summary}</Text></Text>));
-    if (collapsedCompact > 0) push("pl-cc", <Text wrap="truncate" color={C.dim}>      +{collapsedCompact} earlier compaction{collapsedCompact > 1 ? "s" : ""}</Text>);
-  }
-
-  // Activity feed (L3)
-  if (project.activityLog.length > 0) {
-    push("al-sep", <Text> </Text>);
-    push("al-hdr", <Text color={C.dim}>─── Activity ─────────────────────</Text>);
-    project.activityLog.slice().reverse().slice(0, CAP_ACTIVITY).forEach((evt, i) =>
-      push(`al-${i}`, <Text wrap="truncate"><Text color={evt.isError ? C.error : C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text><Text color={C.dim}>  </Text><Text color={activityColor(evt.toolName, !!evt.isError)}>{evt.summary}</Text></Text>)
+  // Unified "Recent" feed — merge L2 planning + L3 activity, sort by time, show last 5
+  const CAP_RECENT = 5;
+  const recentEvents = [...project.planningLog, ...project.activityLog]
+    .filter((e) => e.toolName !== "_compact")
+    .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
+    .slice(0, CAP_RECENT);
+  if (recentEvents.length > 0) {
+    push("rc-sep", <Text> </Text>);
+    push("rc-hdr", <Text color={C.dim}>─── Recent ───────────────────────</Text>);
+    recentEvents.forEach((evt, i) =>
+      push(`rc-${i}`, <Text wrap="truncate"><Text color={evt.isError ? C.error : C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text><Text color={C.dim}>  </Text><Text color={activityColor(evt.toolName, !!evt.isError)}>{evt.summary}</Text></Text>)
     );
   }
 
