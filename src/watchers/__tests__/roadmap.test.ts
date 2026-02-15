@@ -80,6 +80,22 @@ describe("parseCheckboxes", () => {
     expect(sections[0].items[0].done).toBe(true);
   });
 
+  it("should handle asterisk and plus list markers", () => {
+    const md = `## Tasks
+- [x] dash done
+* [x] asterisk done
++ [ ] plus pending
+* [ ] asterisk pending`;
+    const sections = parseCheckboxes(md);
+    expect(sections).toHaveLength(1);
+    expect(sections[0].total).toBe(4);
+    expect(sections[0].done).toBe(2);
+    expect(sections[0].items[0].text).toBe("dash done");
+    expect(sections[0].items[1].text).toBe("asterisk done");
+    expect(sections[0].items[2].text).toBe("plus pending");
+    expect(sections[0].items[2].done).toBe(false);
+  });
+
   it("should handle indented/nested checkboxes", () => {
     const md = `## Features
 - [x] Parent feature
