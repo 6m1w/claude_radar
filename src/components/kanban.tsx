@@ -387,6 +387,147 @@ function ByAgentLayout({
   );
 }
 
+// ─── RoadmapLayout (checkbox items from .md files) ────────────
+
+// Buckets for roadmap items: unchecked → todo, checked → done
+type RoadmapBucket = {
+  sectionTitle: string;
+  items: { text: string; done: boolean }[];
+};
+
+function buildRoadmapBuckets(project: ViewProject): { todo: RoadmapBucket[]; done: RoadmapBucket[] } {
+  const todo: RoadmapBucket[] = [];
+  const done: RoadmapBucket[] = [];
+  for (const roadmap of project.roadmap) {
+    for (const section of roadmap.sections) {
+      const todoItems = section.items.filter((it) => !it.done);
+      const doneItems = section.items.filter((it) => it.done);
+      if (todoItems.length > 0) todo.push({ sectionTitle: section.title, items: todoItems });
+      if (doneItems.length > 0) done.push({ sectionTitle: section.title, items: doneItems });
+    }
+  }
+  return { todo, done };
+}
+
+function RoadmapLayout({
+  projects,
+  activeCols,
+  colWidths,
+  labelW,
+}: {
+  projects: ViewProject[];
+  activeCols: KanbanColumn[];
+  colWidths: number[];
+  labelW: number;
+}) {
+  return (
+    <>
+      {projects.map((project) => {
+        const { todo, done } = buildRoadmapBuckets(project);
+
+        // Render items for a column: list of section groups with capped items
+        const renderBuckets = (buckets: RoadmapBucket[], colW: number) => {
+          const lines: React.ReactNode[] = [];
+          let count = 0;
+          const MAX_ITEMS = 15;
+          for (const bucket of buckets) {
+            if (count >= MAX_ITEMS) break;
+            // Section sub-header
+            const titleMax = Math.max(8, colW - 6);
+            const title = bucket.sectionTitle.length > titleMax
+              ? bucket.sectionTitle.slice(0, titleMax - 1) + "\u2026"
+              : bucket.sectionTitle;
+            lines.push(
+              <Text key={`s-${bucket.sectionTitle}`} wrap="truncate" color={C.accent}>
+                {"\u25b8"} {title} ({bucket.items.length})
+              </Text>
+            );
+            count++;
+            for (const item of bucket.items) {
+              if (count >= MAX_ITEMS) {
+                const remaining = bucket.items.length - (count - 1);
+                if (remaining > 0) {
+                  lines.push(<Text key={`overflow-${bucket.sectionTitle}`} color={C.dim}>  +{remaining} more</Text>);
+                }
+                break;
+              }
+              const text = item.text.length > colW - 4
+                ? item.text.slice(0, colW - 5) + "\u2026"
+                : item.text;
+              lines.push(
+                <Text key={`i-${bucket.sectionTitle}-${count}`} wrap="truncate">
+                  <Text color={item.done ? C.success : C.subtext}>{"\u2503"} </Text>
+                  <Text color={item.done ? C.dim : C.text} strikethrough={item.done}>{text}</Text>
+                </Text>
+              );
+              count++;
+            }
+          }
+          return lines;
+        };
+
+        // Compute max rows needed
+        const todoLines = todo.reduce((s, b) => s + 1 + b.items.length, 0);
+        const doneLines = done.reduce((s, b) => s + 1 + b.items.length, 0);
+        const maxRows = Math.max(1, Math.min(16, Math.max(todoLines, doneLines)));
+
+        // Source info
+        const primaryRoadmap = project.roadmap[0];
+        const pct = primaryRoadmap && primaryRoadmap.totalItems > 0
+          ? Math.round((primaryRoadmap.totalDone / primaryRoadmap.totalItems) * 100)
+          : 0;
+
+        return (
+          <Box key={project.projectPath} flexDirection="column">
+            {/* Horizontal divider */}
+            <Text color={C.dim}>
+              {"\u2500".repeat(labelW)}
+              {activeCols.map((_, i) => "\u253c" + "\u2500".repeat(colWidths[i] + 1)).join("")}
+            </Text>
+
+            {/* Row 0: project name */}
+            <Box>
+              <Box width={labelW}>
+                <Text wrap="truncate" color={C.text} bold>{project.name}</Text>
+              </Box>
+              {activeCols.map((col, ci) => {
+                const colW = colWidths[ci];
+                const buckets = col === "todo" ? todo : col === "done" ? done : [];
+                const firstLine = buckets.length > 0 ? renderBuckets(buckets, colW) : [];
+                return (
+                  <React.Fragment key={col}>
+                    <Sep />
+                    <Box width={colW} flexDirection="column">
+                      {firstLine.length > 0 ? firstLine : null}
+                    </Box>
+                  </React.Fragment>
+                );
+              })}
+            </Box>
+
+            {/* Row 1: source + pct */}
+            {primaryRoadmap && (
+              <Box>
+                <Box width={labelW}>
+                  <Text wrap="truncate" color={C.accent}>
+                    {primaryRoadmap.source} {"\u00b7"} {pct}%
+                  </Text>
+                </Box>
+                {activeCols.map((col, ci) => (
+                  <React.Fragment key={col}>
+                    <Sep />
+                    <Box width={colWidths[ci]} />
+                  </React.Fragment>
+                ))}
+              </Box>
+            )}
+          </Box>
+        );
+      })}
+    </>
+  );
+}
+
 // ─── KanbanView (main export) ────────────────────────────────
 
 export function KanbanView({
@@ -397,7 +538,7 @@ export function KanbanView({
 }: {
   projects: ViewProject[];
   selectedCount: number;
-  layout: "swimlane" | "by_agent";
+  layout: "swimlane" | "by_agent" | "roadmap";
   hideDone: boolean;
 }) {
   const stdout = useStdout();
@@ -407,8 +548,8 @@ export function KanbanView({
   const contentW = cols - 4;
 
   const filterLabel = selectedCount > 0 ? ` (${selectedCount} selected)` : "";
-  const layoutLabel = layout === "swimlane" ? "SWIM" : "AGENT";
-  const hideLabel = hideDone ? " ⊘DONE" : "";
+  const layoutLabel = layout === "roadmap" ? "ROADMAP" : layout === "swimlane" ? "SWIM" : "AGENT";
+  const hideLabel = hideDone ? " \u229ADONE" : "";
 
   if (layout === "by_agent") {
     return (
@@ -421,7 +562,7 @@ export function KanbanView({
     );
   }
 
-  // ─── Swimlane layout ────────────────────────────────────────
+  // ─── Swimlane / Roadmap layout ──────────────────────────────
   const activeCols = hideDone ? ALL_COLUMNS.filter((c) => c !== "done") : ALL_COLUMNS;
   const numCols = activeCols.length;
 
@@ -430,15 +571,27 @@ export function KanbanView({
   const perCol = Math.max(12, Math.floor(colAvail / numCols));
   const colWidths = activeCols.map(() => perCol);
 
-  // Count tasks per column
+  // Count items per column
   const counts: Record<KanbanColumn, number> = { todo: 0, needs_input: 0, doing: 0, done: 0 };
-  for (const project of projects) {
-    const seen = new Set<string>();
-    for (const task of project.tasks) {
-      const key = `${task.id}-${task.gone ? "g" : "l"}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      counts[classifyTask(task, project)]++;
+  if (layout === "roadmap") {
+    // Roadmap: unchecked → TODO, checked → DONE
+    for (const project of projects) {
+      for (const roadmap of project.roadmap) {
+        for (const section of roadmap.sections) {
+          counts.todo += section.total - section.done;
+          counts.done += section.done;
+        }
+      }
+    }
+  } else {
+    for (const project of projects) {
+      const seen = new Set<string>();
+      for (const task of project.tasks) {
+        const key = `${task.id}-${task.gone ? "g" : "l"}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        counts[classifyTask(task, project)]++;
+      }
     }
   }
 
@@ -472,12 +625,21 @@ export function KanbanView({
         })}
       </Box>
 
-      <SwimLaneLayout
-        projects={projects}
-        activeCols={activeCols}
-        colWidths={colWidths}
-        labelW={labelW}
-      />
+      {layout === "roadmap" ? (
+        <RoadmapLayout
+          projects={projects}
+          activeCols={activeCols}
+          colWidths={colWidths}
+          labelW={labelW}
+        />
+      ) : (
+        <SwimLaneLayout
+          projects={projects}
+          activeCols={activeCols}
+          colWidths={colWidths}
+          labelW={labelW}
+        />
+      )}
     </Panel>
   );
 }

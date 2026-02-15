@@ -12,8 +12,9 @@ import { Progress } from "./components/progress.js";
 import { useWatchSessions } from "./watchers/use-watch.js";
 import { useMetrics } from "./hooks/use-metrics.js";
 import type { MergedProjectData, TaskItem, TodoItem, SessionHistoryEntry, AgentInfo, TeamConfig, ActivityEvent, DisplayTask, ViewProject } from "./types.js";
-import { formatDwell } from "./utils.js";
+import { formatDwell, formatRelativeTime } from "./utils.js";
 import { KanbanView } from "./components/kanban.js";
+import { RoadmapPanel } from "./components/roadmap-panel.js";
 
 // ─── Adapter: MergedProjectData → ViewProject ───────────────
 function toViewProject(p: MergedProjectData): ViewProject {
@@ -78,19 +79,6 @@ function toViewProject(p: MergedProjectData): ViewProject {
 
 // ─── Helper functions ───────────────────────────────────────
 
-// Format relative time with seconds-level granularity for activity feed
-function formatRelativeTime(isoDate: string): string {
-  const elapsed = Date.now() - new Date(isoDate).getTime();
-  if (elapsed < 0) return "now";
-  const secs = Math.floor(elapsed / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
-
 // Tool name → color for activity feed quick scanning
 function activityColor(toolName: string, isError: boolean): string {
   if (isError) return C.error;
@@ -110,7 +98,7 @@ function taskStats(p: ViewProject) {
 }
 
 // ─── View state ─────────────────────────────────────────────
-type View = "dashboard" | "agent" | "swimlane";
+type View = "dashboard" | "agent" | "roadmap";
 type BottomTab = "docs" | "git" | "sessions";
 
 export function App() {
@@ -191,7 +179,11 @@ export function App() {
   const bottomHeight = Math.max(8, Math.floor(termRows / 3));
   const fixedRows = 2 + bottomHeight + 2 + 4; // Row A + Bottom + StatusBar + borders
   const middleAvailable = Math.max(8, termRows - fixedRows);
-  const visibleProjects = Math.max(3, middleAvailable - 2); // -2 for panel border
+  const ROADMAP_HEIGHT = 10;
+  const showRoadmap = middleAvailable - 2 - ROADMAP_HEIGHT >= 5;
+  const visibleProjects = showRoadmap
+    ? Math.max(3, middleAvailable - 2 - ROADMAP_HEIGHT)
+    : Math.max(3, middleAvailable - 2);
 
   // Viewport scrolling
   const safeProjectIdx = Math.min(projectIdx, Math.max(0, sorted.length - 1));
@@ -214,7 +206,7 @@ export function App() {
 
     // Tab → cycle views: dashboard → agent → swimlane → dashboard
     if (key.tab) {
-      const cycle: View[] = ["dashboard", "agent", "swimlane"];
+      const cycle: View[] = ["dashboard", "agent", "roadmap"];
       const idx = cycle.indexOf(view);
       setView(cycle[(idx + 1) % cycle.length]);
       setInnerFocus(false);
@@ -223,7 +215,7 @@ export function App() {
     }
 
     // Agent / Swimlane views
-    if (view === "agent" || view === "swimlane") {
+    if (view === "agent" || view === "roadmap") {
       if (key.escape) { setView("dashboard"); return; }
       if (input === "h") setKanbanHideDone((h) => !h);
       return;
@@ -315,22 +307,24 @@ export function App() {
   const totalActive = sorted.filter((p) => p.isActive).length;
 
   const viewLabel = view === "agent" ? "AGENT"
-    : view === "swimlane" ? "SWIMLANE"
+    : view === "roadmap" ? "ROADMAP"
     : bottomFocused ? "BOTTOM"
     : innerFocus ? "DETAIL"
     : "DASHBOARD";
 
-  if (view === "agent" || view === "swimlane") {
-    // Filter: selected projects, or all projects with tasks if none selected
+  if (view === "agent" || view === "roadmap") {
+    // Filter: selected projects, or all with relevant data if none selected
     const kanbanProjects = selectedNames.size > 0
-      ? sorted.filter((p) => selectedNames.has(p.projectPath) && p.tasks.length > 0)
-      : sorted.filter((p) => p.tasks.length > 0);
+      ? sorted.filter((p) => selectedNames.has(p.projectPath) && (view === "roadmap" ? p.roadmap.length > 0 : p.tasks.length > 0))
+      : view === "roadmap"
+        ? sorted.filter((p) => p.roadmap.length > 0)
+        : sorted.filter((p) => p.tasks.length > 0);
     return (
       <Box flexDirection="column" height={termRows} paddingBottom={1}>
         <KanbanView
           projects={kanbanProjects}
           selectedCount={selectedNames.size}
-          layout={view === "agent" ? "by_agent" : "swimlane"}
+          layout={view === "agent" ? "by_agent" : "roadmap"}
           hideDone={kanbanHideDone}
         />
         <StatusBar view={view} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} bottomFocused={false} hideDone={kanbanHideDone} />
@@ -387,60 +381,63 @@ export function App() {
 
       {/* Row B: Projects + Tasks — fills remaining space */}
       <Box flexGrow={1}>
-        {/* Left: Project list with viewport scrolling */}
-        <Panel title={`PROJECTS (${sorted.length})`} width={34}>
-          {aboveCount > 0 && (
-            <Text color={C.dim}>  ▲ {aboveCount} more</Text>
-          )}
-          {visSlice.map((p, vi) => {
-            const realIdx = scrollOffset + vi;
-            const isCursor = realIdx === safeProjectIdx;
-            const stats = taskStats(p);
-            const isActive = p.isActive;
-            const icon = isActive ? I.working : stats.total > 0 && stats.done === stats.total ? I.done : I.idle;
-            const iconColor = isActive ? C.warning : stats.done === stats.total && stats.total > 0 ? C.success : C.dim;
-            const isSelected = selectedNames.has(p.projectPath);
-            const isWorktree = !!p.worktreeOf;
-            // Check if this is the last worktree in a consecutive group
-            const nextP = visSlice[vi + 1];
-            const isLastWorktree = isWorktree && (!nextP || !nextP.worktreeOf || nextP.worktreeOf !== p.worktreeOf);
-            const treePrefix = isWorktree ? (isLastWorktree ? "└" : "├") : " ";
-            // Truncate name to fit within panel (inner width ~30)
-            const maxName = p.branch !== "main" ? 14 : 20;
-            const displayName = p.name.length > maxName ? p.name.slice(0, maxName - 1) + "…" : p.name;
-            return (
-              <Text key={p.projectPath} wrap="truncate">
-                <Text color={isCursor ? C.primary : C.dim}>
-                  {isCursor ? I.cursor : " "}
-                </Text>
-                <Text color={C.dim}>{treePrefix}</Text>
-                {/* Selection indicator (☑/☐) */}
-                {selectedNames.size > 0 && (
-                  <Text color={isSelected ? C.success : C.dim}>
-                    {isSelected ? "☑" : "☐"}{" "}
+        {/* Left column: Project list + Roadmap panel */}
+        <Box flexDirection="column" width={34}>
+          <Panel title={`PROJECTS (${sorted.length})`} flexGrow={1}>
+            {aboveCount > 0 && (
+              <Text color={C.dim}>  ▲ {aboveCount} more</Text>
+            )}
+            {visSlice.map((p, vi) => {
+              const realIdx = scrollOffset + vi;
+              const isCursor = realIdx === safeProjectIdx;
+              const stats = taskStats(p);
+              const isActive = p.isActive;
+              const icon = isActive ? I.working : stats.total > 0 && stats.done === stats.total ? I.done : I.idle;
+              const iconColor = isActive ? C.warning : stats.done === stats.total && stats.total > 0 ? C.success : C.dim;
+              const isSelected = selectedNames.has(p.projectPath);
+              const isWorktree = !!p.worktreeOf;
+              // Check if this is the last worktree in a consecutive group
+              const nextP = visSlice[vi + 1];
+              const isLastWorktree = isWorktree && (!nextP || !nextP.worktreeOf || nextP.worktreeOf !== p.worktreeOf);
+              const treePrefix = isWorktree ? (isLastWorktree ? "└" : "├") : " ";
+              // Truncate name to fit within panel (inner width ~30)
+              const maxName = p.branch !== "main" ? 14 : 20;
+              const displayName = p.name.length > maxName ? p.name.slice(0, maxName - 1) + "…" : p.name;
+              return (
+                <Text key={p.projectPath} wrap="truncate">
+                  <Text color={isCursor ? C.primary : C.dim}>
+                    {isCursor ? I.cursor : " "}
                   </Text>
-                )}
-                <Text color={iconColor}>{icon} </Text>
-                <Text color={isCursor ? C.text : C.subtext} bold={isCursor}>
-                  {displayName}
-                </Text>
-                {p.branch !== "main" && (
-                  <Text color={C.accent}> ⎇{p.branch.length > 12 ? p.branch.slice(0, 11) + "…" : p.branch}</Text>
-                )}
-                {p.agentDetails.length > 0 && (
-                  <Text color={C.dim}>{" "}
-                    {p.agentDetails.map((a) =>
-                      a.processState === "running" ? `●` : a.processState === "idle" ? `○` : `✕`
-                    ).join("")}
+                  <Text color={C.dim}>{treePrefix}</Text>
+                  {/* Selection indicator (☑/☐) */}
+                  {selectedNames.size > 0 && (
+                    <Text color={isSelected ? C.success : C.dim}>
+                      {isSelected ? "☑" : "☐"}{" "}
+                    </Text>
+                  )}
+                  <Text color={iconColor}>{icon} </Text>
+                  <Text color={isCursor ? C.text : C.subtext} bold={isCursor}>
+                    {displayName}
                   </Text>
-                )}
-              </Text>
-            );
-          })}
-          {belowCount > 0 && (
-            <Text color={C.dim}>  ▼ {belowCount} more</Text>
-          )}
-        </Panel>
+                  {p.branch !== "main" && (
+                    <Text color={C.accent}> ⎇{p.branch.length > 12 ? p.branch.slice(0, 11) + "…" : p.branch}</Text>
+                  )}
+                  {p.agentDetails.length > 0 && (
+                    <Text color={C.dim}>{" "}
+                      {p.agentDetails.map((a) =>
+                        a.processState === "running" ? `●` : a.processState === "idle" ? `○` : `✕`
+                      ).join("")}
+                    </Text>
+                  )}
+                </Text>
+              );
+            })}
+            {belowCount > 0 && (
+              <Text color={C.dim}>  ▼ {belowCount} more</Text>
+            )}
+          </Panel>
+          {showRoadmap && <RoadmapPanel project={current} height={ROADMAP_HEIGHT} />}
+        </Box>
 
         {/* Right: Tasks only (simplified — no tab switching) */}
         <RightPanel
@@ -680,7 +677,21 @@ function RightPanel({
         </>
       )}
 
-      {/* Activity feed — recent tool calls from hook events */}
+      {/* Planning log (L2) — agent planning events */}
+      {project.planningLog.length > 0 && (
+        <>
+          <Text> </Text>
+          <Text color={C.dim}>─── Planning ─────────────────────</Text>
+          {project.planningLog.slice().reverse().slice(0, 4).map((evt, i) => (
+            <Text key={`p-${i}`} wrap="truncate">
+              <Text color={C.dim}>{formatRelativeTime(evt.ts).padStart(4)}</Text>
+              <Text color={C.primary}>  {evt.summary}</Text>
+            </Text>
+          ))}
+        </>
+      )}
+
+      {/* Activity feed (L3) — recent tool calls from hook events */}
       {project.activityLog.length > 0 && (
         <>
           <Text> </Text>
@@ -1023,12 +1034,12 @@ function StatusBar({ view, label, hasActive, allDone, bottomFocused, hideDone }:
         <Text color={C.dim}>│ </Text>
         {view === "agent" ? (
           <>
-            <Text color={C.success}>Tab</Text><Text color={C.subtext}> →swimlane  </Text>
+            <Text color={C.success}>Tab</Text><Text color={C.subtext}> →roadmap  </Text>
             <Text color={C.success}>h</Text><Text color={C.subtext}> {hideDone ? "show done" : "hide done"}  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> dashboard  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
-        ) : view === "swimlane" ? (
+        ) : view === "roadmap" ? (
           <>
             <Text color={C.success}>Tab</Text><Text color={C.subtext}> →dashboard  </Text>
             <Text color={C.success}>h</Text><Text color={C.subtext}> {hideDone ? "show done" : "hide done"}  </Text>
