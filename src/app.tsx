@@ -174,16 +174,22 @@ export function App() {
   const currentTasks = current?.tasks ?? [];
 
   // Layout calculation
+  // Ink flex handles borders internally — only count truly fixed-height elements
   const termRows = rows;
-  // Row A: 2 lines, Bottom panel: ~1/3, StatusBar: 2, borders: ~4
-  const bottomHeight = Math.max(8, Math.floor(termRows / 3));
-  const fixedRows = 2 + bottomHeight + 2 + 4; // Row A + Bottom + StatusBar + borders
-  const middleAvailable = Math.max(8, termRows - fixedRows);
-  const ROADMAP_HEIGHT = 10;
-  const showRoadmap = middleAvailable - 2 - ROADMAP_HEIGHT >= 5;
+  const ROADMAP_HEIGHT = 7;
+  const overhead = 1 + 2 + 2; // paddingBottom(1) + rowA(2) + statusBar(2)
+  const panelChrome = 3;       // each Panel eats: border(2) + title line(1)
+
+  // Bottom panel: always 1/4 of terminal (min 6)
+  const bottomHeight = Math.max(6, Math.floor(termRows / 4));
+  // Row B (middle section) gets everything else
+  const rowBHeight = termRows - overhead - bottomHeight;
+  // Try fitting roadmap: need at least 3 visible projects
+  const projectsWithRoadmap = rowBHeight - ROADMAP_HEIGHT - panelChrome;
+  const showRoadmap = projectsWithRoadmap >= 3;
   const visibleProjects = showRoadmap
-    ? Math.max(3, middleAvailable - 2 - ROADMAP_HEIGHT)
-    : Math.max(3, middleAvailable - 2);
+    ? Math.max(3, projectsWithRoadmap)
+    : Math.max(3, rowBHeight - panelChrome);
 
   // Viewport scrolling
   const safeProjectIdx = Math.min(projectIdx, Math.max(0, sorted.length - 1));
@@ -539,6 +545,23 @@ function RightPanel({
         </Box>
       )}
 
+      {/* Alerts — pattern-detected issues */}
+      {project.activityAlerts.length > 0 && (
+        <>
+          {project.activityAlerts.map((alert, i) => {
+            const icon = alert.severity === "error" ? "▲" : "△";
+            const color = alert.severity === "error" ? C.error : C.warning;
+            return (
+              <Text key={`alert-${i}`} wrap="truncate">
+                <Text color={color}> {icon} </Text>
+                <Text color={color}>{alert.message}</Text>
+                <Text color={C.dim}> {formatRelativeTime(alert.ts)}</Text>
+              </Text>
+            );
+          })}
+        </>
+      )}
+
       {/* Task list — grouped by agent for multi-agent projects, flat for single-agent */}
       {(() => {
         const liveTasks = project.tasks.filter((t) => !t.gone);
@@ -772,8 +795,8 @@ function BottomPanel({
     );
   });
 
-  // Content area available height (subtract 2 for panel border + tab header)
-  const contentHeight = Math.max(3, height - 4);
+  // Content area: panel border(2) + tab header row(1) = 3 lines of chrome
+  const contentHeight = Math.max(3, height - 3);
 
   return (
     <Panel title="" focused={focused} height={height}>
