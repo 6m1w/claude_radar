@@ -136,85 +136,92 @@ function Sep() {
 
 const SEP_W = 2; // display width of "│ "
 
-// ─── SwimLaneLayout (1-line compact cards) ───────────────────
+// ─── RoadmapSwimLane (L1 data — checkboxes from .md files) ───
 
-function SwimLaneLayout({
+function RoadmapSwimLane({
   projects,
-  activeCols,
+  hideDone,
   colWidths,
   labelW,
 }: {
   projects: ViewProject[];
-  activeCols: KanbanColumn[];
+  hideDone: boolean;
   colWidths: number[];
   labelW: number;
 }) {
+  // Only show projects with roadmap data, sorted by completion % (lowest first)
+  const withRoadmap = projects
+    .filter((p) => p.roadmap.length > 0 && p.roadmap.some((r) => r.totalItems > 0))
+    .sort((a, b) => {
+      const aPct = a.roadmap.reduce((s, r) => s + r.totalDone, 0) / Math.max(1, a.roadmap.reduce((s, r) => s + r.totalItems, 0));
+      const bPct = b.roadmap.reduce((s, r) => s + r.totalDone, 0) / Math.max(1, b.roadmap.reduce((s, r) => s + r.totalItems, 0));
+      return aPct - bPct;
+    });
+
+  if (withRoadmap.length === 0) {
+    return <Text color={C.dim}>No roadmap data — add [ ] checkboxes to .md files</Text>;
+  }
+
   return (
     <>
-      {projects.map((project) => {
-        const buckets = buildBuckets(project);
-        // Merge non-displayed columns into todo for binary swimlane
-        for (const col of (["needs_input", "doing"] as KanbanColumn[])) {
-          if (!activeCols.includes(col)) {
-            buckets.todo.push(...buckets[col]);
-            buckets[col] = [];
-          }
-        }
-        const maxRows = Math.max(1, ...activeCols.map((c) => buckets[c].length));
-        const isActive = project.isActive;
+      {withRoadmap.map((project) => {
+        // Use primary roadmap file (most items)
+        const primary = project.roadmap.reduce((best, r) => r.totalItems > best.totalItems ? r : best);
+        const todoItems = primary.sections.flatMap((s) => s.items.filter((it) => !it.done));
+        const doneItems = primary.sections.flatMap((s) => s.items.filter((it) => it.done));
+        const maxRows = Math.max(1, hideDone ? todoItems.length : Math.max(todoItems.length, doneItems.length));
 
         return (
           <Box key={project.projectPath} flexDirection="column">
-            {/* Horizontal divider — matches column positions exactly */}
+            {/* Horizontal divider */}
             <Text color={C.dim}>
               {"─".repeat(labelW)}
-              {activeCols.map((_, i) => "┼" + "─".repeat(colWidths[i] + 1)).join("")}
+              {"┼" + "─".repeat(colWidths[0] + 1)}
+              {!hideDone && "┼" + "─".repeat(colWidths[1] + 1)}
             </Text>
 
-            {/* 1 row per task slot */}
+            {/* Rows: label column + TODO + DONE */}
             {Array.from({ length: maxRows }, (_, ri) => {
               let leftText = "";
               let leftColor = C.text;
               if (ri === 0) {
                 leftText = project.name;
-                leftColor = isActive ? C.warning : C.text;
+                leftColor = project.isActive ? C.warning : C.text;
               } else if (ri === 1) {
-                // Milestone summary if available, otherwise branch
-                const primary = project.roadmap.length > 0
-                  ? project.roadmap.reduce((best, r) => r.totalItems > best.totalItems ? r : best)
-                  : null;
-                if (primary && primary.totalItems > 0) {
-                  const src = truncateToWidth(primary.source, 8);
-                  leftText = `${src} ${primary.totalDone}/${primary.totalItems}`;
-                  leftColor = C.subtext;
-                } else {
-                  leftText = `⎇${project.branch}`;
-                  leftColor = C.accent;
-                }
+                leftText = `${truncateToWidth(primary.source, labelW - 6)} ${primary.totalDone}/${primary.totalItems}`;
+                leftColor = C.subtext;
               }
+
+              const todoItem = todoItems[ri];
+              const doneItem = doneItems[ri];
 
               return (
                 <Box key={ri}>
-                  {/* Label cell — fixed width, truncated by Box */}
                   <Box width={labelW} flexShrink={0}>
-                    <Text wrap="truncate" color={leftColor} bold={ri === 0}>
-                      {leftText}
-                    </Text>
+                    <Text wrap="truncate" color={leftColor} bold={ri === 0}>{leftText}</Text>
                   </Box>
-                  {/* Data columns */}
-                  {activeCols.map((col, ci) => {
-                    const task = buckets[col][ri];
-                    return (
-                      <React.Fragment key={col}>
-                        <Sep />
-                        <Box width={colWidths[ci]} flexShrink={0}>
-                          {task ? (
-                            <CompactCard task={task} column={col} />
-                          ) : null}
-                        </Box>
-                      </React.Fragment>
-                    );
-                  })}
+                  <Sep />
+                  <Box width={colWidths[0]} flexShrink={0}>
+                    {todoItem && (
+                      <Text wrap="truncate">
+                        <Text color={C.subtext}>┃ </Text>
+                        <Text color={C.text}>{todoItem.text}</Text>
+                      </Text>
+                    )}
+                  </Box>
+                  {!hideDone && (
+                    <>
+                      <Sep />
+                      <Box width={colWidths[1]} flexShrink={0}>
+                        {doneItem && (
+                          <Text wrap="truncate">
+                            <Text color={C.dim}>┃ </Text>
+                            <Text color={C.dim} strikethrough>{doneItem.text}</Text>
+                          </Text>
+                        )}
+                      </Box>
+                    </>
+                  )}
                 </Box>
               );
             })}
@@ -446,63 +453,57 @@ export function KanbanView({
     );
   }
 
-  // ─── Swimlane layout — 2 columns for binary L1 data ─────────
-  const SWIMLANE_COLS: KanbanColumn[] = ["todo", "done"];
-  const activeCols = hideDone ? SWIMLANE_COLS.filter((c) => c !== "done") : SWIMLANE_COLS;
-  const numCols = activeCols.length;
+  // ─── Swimlane layout — L1 roadmap data, 2 columns (TODO/DONE) ──
+  const numCols = hideDone ? 1 : 2;
 
-  const labelW = Math.min(18, Math.max(12, Math.floor(contentW * 0.15)));
+  const labelW = Math.min(24, Math.max(14, Math.floor(contentW * 0.2)));
   const colAvail = contentW - labelW - numCols * SEP_W;
   const perCol = Math.max(12, Math.floor(colAvail / numCols));
-  const colWidths = activeCols.map(() => perCol);
+  const colWidths = Array.from({ length: numCols }, () => perCol);
 
-  // Count tasks per column
-  const counts: Record<KanbanColumn, number> = { todo: 0, needs_input: 0, doing: 0, done: 0 };
-  for (const project of projects) {
-    const seen = new Set<string>();
-    for (const task of project.tasks) {
-      const key = `${task.id}-${task.gone ? "g" : "l"}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      counts[classifyTask(task, project)]++;
+  // Count L1 items across all projects
+  let totalTodo = 0;
+  let totalDone = 0;
+  for (const p of projects) {
+    for (const r of p.roadmap) {
+      totalDone += r.totalDone;
+      totalTodo += r.totalItems - r.totalDone;
     }
   }
-  // Merge needs_input/doing into todo for binary swimlane display
-  counts.todo += counts.needs_input + counts.doing;
 
   return (
     <Panel
       title={`${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
       flexGrow={1}
     >
-      {/* Header row — uses identical Box widths as content cells */}
+      {/* Header row */}
       <Box>
         <Box width={labelW} flexShrink={0}>
           <Text color={C.primary} bold>PROJECTS</Text>
         </Box>
         <Sep />
-        {activeCols.map((col, ci) => {
-          const cfg = COLUMN_CONFIG[col];
-          const w = colWidths[ci];
-          const countStr = String(counts[col]);
-          const gap = Math.max(1, w - cfg.label.length - countStr.length);
-          return (
-            <React.Fragment key={col}>
-              {ci > 0 && <Sep />}
-              <Box width={w} flexShrink={0}>
-                <Text>
-                  <Text color={cfg.color} bold={cfg.bold}>{cfg.label}</Text>
-                  <Text color={C.dim}>{" ".repeat(gap)}{countStr}</Text>
-                </Text>
-              </Box>
-            </React.Fragment>
-          );
-        })}
+        <Box width={colWidths[0]} flexShrink={0}>
+          <Text>
+            <Text color={C.accent} bold>{"TODO \u2610"}</Text>
+            <Text color={C.dim}>{" ".repeat(Math.max(1, colWidths[0] - 7 - String(totalTodo).length))}{totalTodo}</Text>
+          </Text>
+        </Box>
+        {!hideDone && (
+          <>
+            <Sep />
+            <Box width={colWidths[1]} flexShrink={0}>
+              <Text>
+                <Text color={C.success}>{"DONE \u2611"}</Text>
+                <Text color={C.dim}>{" ".repeat(Math.max(1, colWidths[1] - 7 - String(totalDone).length))}{totalDone}</Text>
+              </Text>
+            </Box>
+          </>
+        )}
       </Box>
 
-      <SwimLaneLayout
+      <RoadmapSwimLane
         projects={projects}
-        activeCols={activeCols}
+        hideDone={hideDone}
         colWidths={colWidths}
         labelW={labelW}
       />
