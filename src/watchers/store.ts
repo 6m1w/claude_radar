@@ -41,6 +41,7 @@ export const PLANNING_TOOLS = new Set([
   "TodoWrite",
   "TeamCreate",
   "SendMessage",
+  "_compact",          // context compaction (session lifecycle)
 ]);
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -972,16 +973,21 @@ export function ingestHookEvents(store: Store, events: HookEvent[]): void {
       store.markSessionStopped(sessionId, event.ts || now);
     }
 
-    // Subagent/notification events → activity log only
-    if ((event.event === "subagent_stop" || event.event === "notification") && cwd) {
+    // Subagent/notification/compact events → activity log only
+    if ((event.event === "subagent_stop" || event.event === "notification" || event.event === "compact") && cwd) {
       const projectPath = cwdToProjectPath(cwd);
-      const summary = event.event === "subagent_stop"
-        ? `SubagentStop: ${data.tool_name ? `${data.tool_name} ` : ""}${data.reason ?? "completed"}`
-        : `Notification: ${truncate(data.reason, 50)}`;
+      let summary: string;
+      if (event.event === "subagent_stop") {
+        summary = `SubagentStop: ${data.tool_name ? `${data.tool_name} ` : ""}${data.reason ?? "completed"}`;
+      } else if (event.event === "compact") {
+        summary = "⚡ Context compacted";
+      } else {
+        summary = `Notification: ${truncate(data.reason, 50)}`;
+      }
       store.addActivity(projectPath, {
         ts: event.ts || now,
         sessionId,
-        toolName: event.event,
+        toolName: event.event === "compact" ? "_compact" : event.event,
         summary,
         projectPath,
       });

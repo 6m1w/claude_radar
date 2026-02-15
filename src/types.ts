@@ -311,7 +311,7 @@ export interface ProjectUsageStats {
 //   "stop", "start", "task" (legacy — old PostToolUse with matcher),
 //   "subagent_stop", "notification"
 export interface HookEvent {
-  event: "tool" | "tool_failure" | "task" | "stop" | "start" | "subagent_stop" | "notification";
+  event: "tool" | "tool_failure" | "task" | "stop" | "start" | "subagent_stop" | "notification" | "compact";
   ts: string; // ISO 8601
   data: HookEventData;
 }
