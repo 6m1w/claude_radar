@@ -381,7 +381,7 @@ export function App() {
   return (
     <Box flexDirection="column" height={termRows}>
       {/* Row A: Minimal status — "● N active" + compaction marquee */}
-      <Box paddingX={1} flexShrink={0}>
+      <Box paddingX={1} flexShrink={0} height={1}>
         <Text wrap="truncate">
           {totalActive > 0 ? (
             <>
@@ -406,7 +406,7 @@ export function App() {
       <Box height={rowBHeight} overflow="hidden">
         {/* Left column: Project list + Roadmap panel */}
         <Box flexDirection="column" width={34} flexShrink={0} height={rowBHeight}>
-          <Panel title={`PROJECTS (${sorted.length})`} flexGrow={1} hotkey="1" focused={focusedPanel === "projects"} height={showRoadmap ? rowBHeight - roadmapHeight : rowBHeight}>
+          <Panel title={`PROJECTS (${sorted.length})`} hotkey="1" focused={focusedPanel === "projects"} height={showRoadmap ? rowBHeight - roadmapHeight : rowBHeight}>
             {aboveCount > 0 && (
               <Text color={C.dim}>  ▲ {aboveCount} more</Text>
             )}
@@ -870,7 +870,7 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
     : `${String(Math.round(metrics.netDown)).padStart(4)}K`;
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={2}>
       {/* Metrics line */}
       <Box>
         <Text color={C.warning}> {mascotFrame} </Text>
