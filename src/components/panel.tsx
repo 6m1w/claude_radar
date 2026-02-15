@@ -30,7 +30,7 @@ export function Panel({
       flexShrink={width ? 0 : undefined}
       paddingX={1}
       paddingY={0}
-      overflowX="hidden"
+      overflow="hidden"
     >
       <Text>
         {hotkey && (
