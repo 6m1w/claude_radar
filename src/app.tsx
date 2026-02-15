@@ -100,6 +100,7 @@ function taskStats(p: ViewProject) {
 // ─── View state ─────────────────────────────────────────────
 type View = "dashboard" | "agent" | "swimlane";
 type BottomTab = "docs" | "git" | "sessions";
+type FocusedPanel = "projects" | "tasks" | "roadmap" | "bottom";
 
 export function App() {
   const { exit } = useApp();
@@ -107,7 +108,7 @@ export function App() {
   const rows = stdout.stdout?.rows ?? 40;
   const { projects: rawProjects } = useWatchSessions();
   const [view, setView] = useState<View>("dashboard");
-  const [innerFocus, setInnerFocus] = useState(false);
+  const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>("projects");
   const [projectIdx, setProjectIdx] = useState(0);
   const [taskIdx, setTaskIdx] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
@@ -117,10 +118,15 @@ export function App() {
   const [bottomTab, setBottomTab] = useState<BottomTab>("git");
   const [bottomDocIdx, setBottomDocIdx] = useState(0);
   const [bottomScrollY, setBottomScrollY] = useState(0);
-  const [bottomFocused, setBottomFocused] = useState(false);
+
+  // Roadmap .md file switching (when roadmap panel is focused)
+  const [roadmapDocIdx, setRoadmapDocIdx] = useState(0);
 
   // Kanban state (shared across agent/swimlane views)
   const [kanbanHideDone, setKanbanHideDone] = useState(true);
+
+  // Derived focus boolean for component compatibility
+  const bottomFocused = focusedPanel === "bottom";
 
   // Convert real data → view model, group worktrees with their main repo
   const viewProjects = rawProjects.map(toViewProject);
@@ -176,7 +182,6 @@ export function App() {
   // Layout calculation
   // Ink flex handles borders internally — only count truly fixed-height elements
   const termRows = rows;
-  const ROADMAP_HEIGHT = 8;
   const overhead = 1 + 2; // rowA(1) + statusBar(2)
   const panelChrome = 5;       // each Panel eats: border(2) + paddingY(2) + title line(1)
 
@@ -184,11 +189,12 @@ export function App() {
   const bottomHeight = Math.max(8, Math.floor(termRows / 4));
   // Row B (middle section) gets everything else
   const rowBHeight = termRows - overhead - bottomHeight;
-  // Try fitting roadmap: need at least 3 visible projects
-  const projectsWithRoadmap = rowBHeight - ROADMAP_HEIGHT - panelChrome;
-  const showRoadmap = projectsWithRoadmap >= 3;
+  // 50/50 split: roadmap panel gets half of left column height
+  const roadmapHeight = Math.floor(rowBHeight / 2);
+  // Need at least 3 visible project lines in each half
+  const showRoadmap = roadmapHeight - panelChrome >= 3;
   const visibleProjects = showRoadmap
-    ? Math.max(3, projectsWithRoadmap)
+    ? Math.max(3, rowBHeight - roadmapHeight - panelChrome)
     : Math.max(3, rowBHeight - panelChrome);
 
   // Viewport scrolling
@@ -215,8 +221,7 @@ export function App() {
       const cycle: View[] = ["dashboard", "agent", "swimlane"];
       const idx = cycle.indexOf(view);
       setView(cycle[(idx + 1) % cycle.length]);
-      setInnerFocus(false);
-      setBottomFocused(false);
+      setFocusedPanel("projects");
       return;
     }
 
@@ -227,82 +232,99 @@ export function App() {
       return;
     }
 
-    // Dashboard view
-    if (view === "dashboard") {
-      if (bottomFocused) {
-        // Bottom panel focused: j/k scroll, h/l switch doc files, d/g/s switch tabs
-        if (key.escape) { setBottomFocused(false); return; }
-        if (input === "j" || key.downArrow) setBottomScrollY((y) => y + 1);
-        if (input === "k" || key.upArrow) setBottomScrollY((y) => Math.max(0, y - 1));
-        if (input === "d") switchBottomTab("docs");
-        if (input === "g") switchBottomTab("git");
-        if (input === "s") switchBottomTab("sessions");
-        if (bottomTab === "docs" && current) {
-          const docKeys = Object.keys(current.docContents);
-          if (input === "h" || key.leftArrow) {
-            setBottomDocIdx((i) => Math.max(0, i - 1));
-            setBottomScrollY(0);
-          }
-          if (input === "l" || key.rightArrow) {
-            setBottomDocIdx((i) => Math.min(docKeys.length - 1, i + 1));
-            setBottomScrollY(0);
-          }
+    // Dashboard: number keys switch focused panel
+    if (input === "1") { setFocusedPanel("projects"); return; }
+    if (input === "2" && current) { setFocusedPanel("tasks"); setTaskIdx(0); return; }
+    if (input === "3") { setFocusedPanel("roadmap"); return; }
+    if (input === "4") { setFocusedPanel("bottom"); return; }
+
+    // Escape → return to projects panel
+    if (key.escape) { setFocusedPanel("projects"); return; }
+
+    // ─── Panel-specific controls ────────────────
+    if (focusedPanel === "bottom") {
+      if (input === "j" || key.downArrow) setBottomScrollY((y) => y + 1);
+      if (input === "k" || key.upArrow) setBottomScrollY((y) => Math.max(0, y - 1));
+      if (input === "d") switchBottomTab("docs");
+      if (input === "g") switchBottomTab("git");
+      if (input === "s") switchBottomTab("sessions");
+      if (bottomTab === "docs" && current) {
+        const docKeys = Object.keys(current.docContents);
+        if (input === "h" || key.leftArrow) {
+          setBottomDocIdx((i) => Math.max(0, i - 1));
+          setBottomScrollY(0);
         }
-        return;
-      }
-
-      if (innerFocus) {
-        // Inner focus: task navigation
-        if (key.escape) { setInnerFocus(false); return; }
-        if ((input === "j" || key.downArrow) && taskIdx < currentTasks.length - 1) {
-          setTaskIdx((i) => i + 1);
+        if (input === "l" || key.rightArrow) {
+          setBottomDocIdx((i) => Math.min(docKeys.length - 1, i + 1));
+          setBottomScrollY(0);
         }
-        if ((input === "k" || key.upArrow) && taskIdx > 0) {
-          setTaskIdx((i) => i - 1);
+      }
+      return;
+    }
+
+    if (focusedPanel === "tasks") {
+      if ((input === "j" || key.downArrow) && taskIdx < currentTasks.length - 1) {
+        setTaskIdx((i) => i + 1);
+      }
+      if ((input === "k" || key.upArrow) && taskIdx > 0) {
+        setTaskIdx((i) => i - 1);
+      }
+      if (input === "d") { switchBottomTab("docs"); setFocusedPanel("bottom"); }
+      if (input === "g") { switchBottomTab("git"); setFocusedPanel("bottom"); }
+      if (input === "s") { switchBottomTab("sessions"); setFocusedPanel("bottom"); }
+      return;
+    }
+
+    if (focusedPanel === "roadmap") {
+      if (current) {
+        const roadmapCount = current.roadmap.length;
+        if ((input === "j" || key.downArrow) && roadmapDocIdx < roadmapCount - 1) {
+          setRoadmapDocIdx((i) => i + 1);
         }
-        if (input === "d") { switchBottomTab("docs"); setBottomFocused(true); }
-        if (input === "g") { switchBottomTab("git"); setBottomFocused(true); }
-        if (input === "s") { switchBottomTab("sessions"); setBottomFocused(true); }
-        return;
+        if ((input === "k" || key.upArrow) && roadmapDocIdx > 0) {
+          setRoadmapDocIdx((i) => i - 1);
+        }
       }
+      return;
+    }
 
-      // Outer focus: project navigation
-      if ((input === "j" || key.downArrow) && projectIdx < sorted.length - 1) {
-        const next = projectIdx + 1;
-        setProjectIdx(next);
-        setScrollOffset(ensureVisible(next));
-        setTaskIdx(0);
-      }
-      if ((input === "k" || key.upArrow) && projectIdx > 0) {
-        const next = projectIdx - 1;
-        setProjectIdx(next);
-        setScrollOffset(ensureVisible(next));
-        setTaskIdx(0);
-      }
+    // ─── Projects panel (outer focus) ────────────
+    if ((input === "j" || key.downArrow) && projectIdx < sorted.length - 1) {
+      const next = projectIdx + 1;
+      setProjectIdx(next);
+      setScrollOffset(ensureVisible(next));
+      setTaskIdx(0);
+      setRoadmapDocIdx(0);
+    }
+    if ((input === "k" || key.upArrow) && projectIdx > 0) {
+      const next = projectIdx - 1;
+      setProjectIdx(next);
+      setScrollOffset(ensureVisible(next));
+      setTaskIdx(0);
+      setRoadmapDocIdx(0);
+    }
 
-      // Space → toggle multi-select for kanban
-      if (input === " " && current) {
-        setSelectedNames((prev) => {
-          const next = new Set(prev);
-          if (next.has(current.projectPath)) {
-            next.delete(current.projectPath);
-          } else {
-            next.add(current.projectPath);
-          }
-          return next;
-        });
-      }
+    // Space → toggle multi-select for kanban
+    if (input === " " && current) {
+      setSelectedNames((prev) => {
+        const next = new Set(prev);
+        if (next.has(current.projectPath)) {
+          next.delete(current.projectPath);
+        } else {
+          next.add(current.projectPath);
+        }
+        return next;
+      });
+    }
 
-      // d/g/s → switch bottom tab + focus bottom
-      if (input === "d") { switchBottomTab("docs"); setBottomFocused(true); }
-      if (input === "g") { switchBottomTab("git"); setBottomFocused(true); }
-      if (input === "s") { switchBottomTab("sessions"); setBottomFocused(true); }
+    // d/g/s → switch bottom tab + focus bottom
+    if (input === "d") { switchBottomTab("docs"); setFocusedPanel("bottom"); }
+    if (input === "g") { switchBottomTab("git"); setFocusedPanel("bottom"); }
+    if (input === "s") { switchBottomTab("sessions"); setFocusedPanel("bottom"); }
 
-      if (key.return && current) {
-        setInnerFocus(true);
-        setTaskIdx(0);
-        setBottomFocused(false);
-      }
+    if (key.return && current) {
+      setFocusedPanel("tasks");
+      setTaskIdx(0);
     }
   });
 
@@ -314,8 +336,9 @@ export function App() {
 
   const viewLabel = view === "agent" ? "AGENT"
     : view === "swimlane" ? "SWIMLANE"
-    : bottomFocused ? "BOTTOM"
-    : innerFocus ? "DETAIL"
+    : focusedPanel === "bottom" ? "BOTTOM"
+    : focusedPanel === "tasks" ? "DETAIL"
+    : focusedPanel === "roadmap" ? "ROADMAP"
     : "DASHBOARD";
 
   if (view === "agent" || view === "swimlane") {
@@ -331,7 +354,7 @@ export function App() {
           layout={view === "agent" ? "by_agent" : "swimlane"}
           hideDone={kanbanHideDone}
         />
-        <StatusBar view={view} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} bottomFocused={false} hideDone={kanbanHideDone} />
+        <StatusBar view={view} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} focusedPanel="projects" hideDone={kanbanHideDone} />
       </Box>
     );
   }
@@ -387,7 +410,7 @@ export function App() {
       <Box height={rowBHeight}>
         {/* Left column: Project list + Roadmap panel */}
         <Box flexDirection="column" width={34}>
-          <Panel title={`PROJECTS (${sorted.length})`} flexGrow={1}>
+          <Panel title={`PROJECTS (${sorted.length})`} flexGrow={1} hotkey="1" focused={focusedPanel === "projects"}>
             {aboveCount > 0 && (
               <Text color={C.dim}>  ▲ {aboveCount} more</Text>
             )}
@@ -440,15 +463,15 @@ export function App() {
               <Text color={C.dim}>  ▼ {belowCount} more</Text>
             )}
           </Panel>
-          {showRoadmap && <RoadmapPanel project={current} height={ROADMAP_HEIGHT} />}
+          {showRoadmap && <RoadmapPanel project={current} height={roadmapHeight} focused={focusedPanel === "roadmap"} selectedIdx={roadmapDocIdx} hotkey="3" />}
         </Box>
 
         {/* Right: Tasks only (simplified — no tab switching) */}
         <RightPanel
           project={current}
-          isInner={innerFocus}
+          focused={focusedPanel === "tasks"}
           taskIdx={taskIdx}
-          bottomFocused={bottomFocused}
+          hotkey="2"
         />
       </Box>
 
@@ -460,6 +483,7 @@ export function App() {
         scrollY={bottomScrollY}
         focused={bottomFocused}
         height={bottomHeight}
+        hotkey="4"
       />
 
       <StatusBar
@@ -467,7 +491,7 @@ export function App() {
         label={viewLabel}
         hasActive={totalActive > 0}
         allDone={totalTasks > 0 && totalDone === totalTasks}
-        bottomFocused={bottomFocused}
+        focusedPanel={focusedPanel}
       />
     </Box>
   );
@@ -476,18 +500,18 @@ export function App() {
 // ─── Right panel: tasks only (simplified) ────────────────────
 function RightPanel({
   project,
-  isInner,
+  focused,
   taskIdx,
-  bottomFocused,
+  hotkey,
 }: {
   project: ViewProject;
-  isInner: boolean;
+  focused: boolean;
   taskIdx: number;
-  bottomFocused: boolean;
+  hotkey?: string;
 }) {
   if (!project) {
     return (
-      <Panel title="TASKS" flexGrow={1}>
+      <Panel title="TASKS" flexGrow={1} hotkey={hotkey}>
         <Text color={C.dim}>Select a project</Text>
       </Panel>
     );
@@ -497,7 +521,7 @@ function RightPanel({
   const title = project.name.toUpperCase();
 
   return (
-    <Panel title={title} flexGrow={1} focused={isInner && !bottomFocused}>
+    <Panel title={title} flexGrow={1} focused={focused} hotkey={hotkey}>
       {/* Worktree lineage — show parent project prominently */}
       {project.worktreeOf && (
         <Text wrap="truncate">
@@ -518,9 +542,11 @@ function RightPanel({
               return `${icon}${a.name}`;
             }).join(" ")}
           </Text>
-        ) : project.agents.length > 0 ? (
-          <Text color={C.dim}>{project.agents.length} agent{project.agents.length > 1 ? "s" : ""}</Text>
-        ) : null}
+        ) : project.agents.length > 1 ? (
+          <Text color={C.dim}>{project.agents.length} agents</Text>
+        ) : (
+          <Text color={C.dim}>○ Single Agent</Text>
+        )}
       </Text>
       {/* Team member list with process states */}
       {project.team && project.agentDetails.length > 0 && (
@@ -572,7 +598,7 @@ function RightPanel({
           : 1;
 
         const renderTask = (t: DisplayTask, idx: number, maxIdWidth: number) => {
-          const isCursor = isInner && !bottomFocused && idx === taskIdx;
+          const isCursor = focused && idx === taskIdx;
           const isGone = !!t.gone;
           const icon = t.status === "completed" ? I.done : t.status === "in_progress" ? I.working : I.idle;
           const iconColor = isGone ? C.dim
@@ -660,8 +686,8 @@ function RightPanel({
         <Text color={C.dim}>▸ {project.goneSessionCount} archived session{project.goneSessionCount > 1 ? "s" : ""}</Text>
       )}
 
-      {/* Task detail (inner focus, selected task) */}
-      {isInner && !bottomFocused && project.tasks[taskIdx] && !project.tasks[taskIdx].gone && (
+      {/* Task detail (task panel focused, selected task) */}
+      {focused && project.tasks[taskIdx] && !project.tasks[taskIdx].gone && (
         <>
           <Text> </Text>
           <Text color={C.dim}>─── Task Detail ─────────────────────</Text>
@@ -761,6 +787,7 @@ function BottomPanel({
   scrollY,
   focused,
   height,
+  hotkey,
 }: {
   project: ViewProject;
   tab: BottomTab;
@@ -768,6 +795,7 @@ function BottomPanel({
   scrollY: number;
   focused: boolean;
   height: number;
+  hotkey?: string;
 }) {
   // Tab header with active indicator
   const tabItems: { key: BottomTab; label: string; hotkey: string }[] = [
@@ -794,7 +822,7 @@ function BottomPanel({
   const contentHeight = Math.max(2, height - 6);
 
   return (
-    <Panel title="" focused={focused} height={height}>
+    <Panel title="" focused={focused} height={height} hotkey={hotkey}>
       <Box>{tabHeader}</Box>
       <Box flexDirection="column" height={contentHeight}>
         {tab === "docs" && (
@@ -1005,8 +1033,8 @@ function sparkline(values: number[], max = 100): string {
     .join("");
 }
 
-function StatusBar({ view, label, hasActive, allDone, bottomFocused, hideDone }: {
-  view: View; label: string; hasActive: boolean; allDone: boolean; bottomFocused: boolean; hideDone?: boolean;
+function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: {
+  view: View; label: string; hasActive: boolean; allDone: boolean; focusedPanel: FocusedPanel; hideDone?: boolean;
 }) {
   const metrics = useMetrics();
   const tick = metrics.tick;
@@ -1064,28 +1092,36 @@ function StatusBar({ view, label, hasActive, allDone, bottomFocused, hideDone }:
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> dashboard  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
-        ) : bottomFocused ? (
+        ) : focusedPanel === "bottom" ? (
           <>
             <Text color={C.success}>↑↓</Text><Text color={C.subtext}> scroll  </Text>
             <Text color={C.success}>h/l</Text><Text color={C.subtext}> file  </Text>
             <Text color={C.success}>d/g/s</Text><Text color={C.subtext}> tab  </Text>
+            <Text color={C.success}>1-4</Text><Text color={C.subtext}> panel  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
-        ) : label === "DETAIL" ? (
+        ) : focusedPanel === "roadmap" ? (
+          <>
+            <Text color={C.success}>↑↓</Text><Text color={C.subtext}> switch .md  </Text>
+            <Text color={C.success}>1-4</Text><Text color={C.subtext}> panel  </Text>
+            <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
+            <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
+          </>
+        ) : focusedPanel === "tasks" ? (
           <>
             <Text color={C.success}>↑↓</Text><Text color={C.subtext}> nav tasks  </Text>
             <Text color={C.success}>d/g/s</Text><Text color={C.subtext}> bottom  </Text>
+            <Text color={C.success}>1-4</Text><Text color={C.subtext}> panel  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
-            <Text color={C.success}>Tab</Text><Text color={C.subtext}> →agent  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
         ) : (
           <>
             <Text color={C.success}>↑↓</Text><Text color={C.subtext}> nav  </Text>
-            <Text color={C.success}>d/g/s</Text><Text color={C.subtext}> bottom  </Text>
-            <Text color={C.success}>Space</Text><Text color={C.subtext}> select  </Text>
             <Text color={C.success}>Enter</Text><Text color={C.subtext}> focus  </Text>
+            <Text color={C.success}>1-4</Text><Text color={C.subtext}> panel  </Text>
+            <Text color={C.success}>Space</Text><Text color={C.subtext}> select  </Text>
             <Text color={C.success}>Tab</Text><Text color={C.subtext}> →agent  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
