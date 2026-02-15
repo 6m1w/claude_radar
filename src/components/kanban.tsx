@@ -14,6 +14,7 @@ import React from "react";
 import { Box, Text, useStdout } from "ink";
 import { C } from "../theme.js";
 import { Panel } from "./panel.js";
+import { Progress } from "./progress.js";
 import { formatDwell } from "../utils.js";
 import type { DisplayTask, ViewProject } from "../types.js";
 
@@ -221,9 +222,9 @@ function SwimLaneLayout({
   );
 }
 
-// ─── By Agent Layout (agents as columns, tasks show status) ──
+// ─── By Agent Layout (vertical list, grouped by project) ─────
 
-// Task card with status icon (used in By Agent where columns are agents, not statuses)
+// Task card with status icon for list view
 function AgentTaskCard({ task, column }: {
   task: DisplayTask;
   column: KanbanColumn;
@@ -231,6 +232,7 @@ function AgentTaskCard({ task, column }: {
   const icon = column === "done" ? "✓" : column === "doing" ? "◍" : column === "needs_input" ? "⊘" : "○";
   const iconColor = column === "done" ? C.success : column === "doing" ? C.warning : column === "needs_input" ? C.error : C.dim;
   const idStr = `#${task.id.length > 5 ? task.id.slice(0, 4) + "…" : task.id}`;
+  const dwell = formatDwell(task.statusChangedAt);
 
   return (
     <Text wrap="truncate">
@@ -241,6 +243,9 @@ function AgentTaskCard({ task, column }: {
       >
         {idStr} {task.subject}
       </Text>
+      {task.owner && <Text color={C.accent}> ({task.owner})</Text>}
+      {task.blockedBy && <Text color={C.error}> ⊘#{task.blockedBy}</Text>}
+      {column !== "done" && dwell && <Text color={C.dim}> {dwell}</Text>}
     </Text>
   );
 }
@@ -254,149 +259,79 @@ function ByAgentLayout({
   contentW: number;
   hideDone: boolean;
 }) {
-  // Collect unique agents and their tasks across all projects
-  type AgentEntry = {
-    name: string;
-    processState?: "running" | "idle" | "dead";
-    tasks: { task: DisplayTask; project: ViewProject; column: KanbanColumn }[];
-  };
-
-  const agentMap = new Map<string, AgentEntry>();
-
-  for (const project of projects) {
-    const seen = new Set<string>();
-    for (const task of project.tasks) {
-      const key = `${task.id}-${task.gone ? "g" : "l"}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-
-      const owner = task.owner ?? "unassigned";
-      if (!agentMap.has(owner)) {
-        const detail = project.agentDetails.find((a) => a.name === owner);
-        agentMap.set(owner, {
-          name: owner,
-          processState: detail?.processState,
-          tasks: [],
-        });
-      }
-      const col = classifyTask(task, project);
-      if (hideDone && col === "done") continue;
-      agentMap.get(owner)!.tasks.push({ task, project, column: col });
-    }
+  if (projects.length === 0) {
+    return <Text color={C.dim}>No active agents</Text>;
   }
 
-  // Sort agents: running first, then idle, then dead/unassigned, then by task count
-  const agents = [...agentMap.values()].sort((a, b) => {
-    const stateOrder = (s?: string) => s === "running" ? 0 : s === "idle" ? 1 : 2;
-    const diff = stateOrder(a.processState) - stateOrder(b.processState);
-    if (diff !== 0) return diff;
-    return b.tasks.length - a.tasks.length;
-  });
-
-  // Sort tasks within each agent: group by project, then by status priority
-  const statusPriority: Record<KanbanColumn, number> = {
-    doing: 0, needs_input: 1, todo: 2, done: 3,
-  };
-  for (const agent of agents) {
-    agent.tasks.sort((a, b) => {
-      // Primary: group by project (same project together)
-      if (a.project.projectPath !== b.project.projectPath) {
-        return a.project.name.localeCompare(b.project.name);
-      }
-      // Secondary: status priority within project
-      return statusPriority[a.column] - statusPriority[b.column];
-    });
-  }
-
-  if (agents.length === 0) {
-    return <Text color={C.dim}>No agents with tasks</Text>;
-  }
-
-  // Column widths
-  const numAgents = Math.min(agents.length, 8); // cap at 8 columns
-  const visibleAgents = agents.slice(0, numAgents);
-  const sepTotal = (numAgents - 1) * SEP_W;
-  const perCol = Math.max(14, Math.floor((contentW - sepTotal) / numAgents));
+  const sepW = Math.min(contentW, 60);
 
   return (
     <Box flexDirection="column">
-      {/* Header: agent names with process state */}
-      <Box>
-        {visibleAgents.map((agent, i) => {
-          const icon = agent.processState === "running" ? "●"
-            : agent.processState === "idle" ? "○" : "✕";
-          const color = agent.processState === "running" ? C.warning
-            : agent.processState === "idle" ? C.dim : C.error;
-          const countStr = String(agent.tasks.length);
-          const nameGap = Math.max(1, perCol - agent.name.length - countStr.length - 2);
-          return (
-            <React.Fragment key={agent.name}>
-              {i > 0 && <Sep />}
-              <Box width={perCol}>
-                <Text wrap="truncate">
-                  <Text color={color}>{icon} </Text>
-                  <Text color={C.text} bold>{agent.name}</Text>
-                  <Text color={C.dim}>{" ".repeat(nameGap)}{countStr}</Text>
-                </Text>
-              </Box>
-            </React.Fragment>
-          );
-        })}
-      </Box>
+      {projects.map((project, pi) => {
+        const buckets = buildBuckets(project);
+        // Order: doing → needs_input → todo → done
+        const ordered: { task: DisplayTask; col: KanbanColumn }[] = [
+          ...buckets.doing.map((t) => ({ task: t, col: "doing" as KanbanColumn })),
+          ...buckets.needs_input.map((t) => ({ task: t, col: "needs_input" as KanbanColumn })),
+          ...buckets.todo.map((t) => ({ task: t, col: "todo" as KanbanColumn })),
+          ...(hideDone ? [] : buckets.done.map((t) => ({ task: t, col: "done" as KanbanColumn }))),
+        ];
 
-      {/* Divider */}
-      <Text color={C.dim}>
-        {visibleAgents.map((_, i) =>
-          (i > 0 ? "┼" + "─".repeat(perCol + 1) : "─".repeat(perCol))
-        ).join("")}
-      </Text>
+        // Agent process state
+        const primaryAgent = project.agentDetails[0];
+        const processState = primaryAgent?.processState
+          ?? (project.isActive ? "running" : project.activeSessions > 0 ? "idle" : undefined);
+        const stateIcon = processState === "running" ? "●"
+          : processState === "idle" ? "○" : "✕";
+        const stateColor = processState === "running" ? C.warning
+          : processState === "idle" ? C.dim : C.error;
 
-      {/* Task columns — grouped by project within each agent */}
-      <Box>
-        {visibleAgents.map((agent, i) => {
-          // Group tasks by project for display
-          const byProject: { project: ViewProject; entries: typeof agent.tasks }[] = [];
-          let currentPath = "";
-          for (const entry of agent.tasks) {
-            if (entry.project.projectPath !== currentPath) {
-              currentPath = entry.project.projectPath;
-              byProject.push({ project: entry.project, entries: [] });
-            }
-            byProject[byProject.length - 1].entries.push(entry);
-          }
+        // Task counts
+        const total = buckets.todo.length + buckets.needs_input.length + buckets.doing.length + buckets.done.length;
+        const done = buckets.done.length;
 
-          return (
-            <React.Fragment key={agent.name}>
-              {i > 0 && <Sep />}
-              <Box flexDirection="column" width={perCol}>
-                {byProject.length > 0 ? (
-                  byProject.map((group) => (
-                    <React.Fragment key={group.project.projectPath}>
-                      {/* Project header */}
-                      <Text wrap="truncate" color={C.accent}>
-                        {"▸ "}{group.project.name}
-                      </Text>
-                      {/* Tasks for this project */}
-                      {group.entries.map((entry, ti) => (
-                        <Box key={`${entry.task.id}-${ti}`} width={perCol}>
-                          <AgentTaskCard task={entry.task} column={entry.column} />
-                        </Box>
-                      ))}
-                    </React.Fragment>
-                  ))
-                ) : (
-                  <Text color={C.dim}>  —</Text>
-                )}
-              </Box>
-            </React.Fragment>
-          );
-        })}
-      </Box>
+        // Branch display
+        const branchStr = project.branch.length > 18
+          ? project.branch.slice(0, 17) + "…"
+          : project.branch;
 
-      {/* Overflow indicator */}
-      {agents.length > numAgents && (
-        <Text color={C.dim}>  +{agents.length - numAgents} more agents</Text>
-      )}
+        return (
+          <Box key={project.projectPath} flexDirection="column">
+            {/* Separator between projects */}
+            {pi > 0 && <Text color={C.dim}>{"─".repeat(sepW)}</Text>}
+
+            {/* Project header: state + name + branch + progress */}
+            <Text wrap="truncate">
+              <Text color={stateColor}>{stateIcon} </Text>
+              <Text color={project.isActive ? C.warning : C.text} bold>{project.name}</Text>
+              <Text color={C.accent}>  ⎇{branchStr}</Text>
+              {total > 0 && (
+                <>
+                  <Text color={C.dim}>  </Text>
+                  <Progress done={done} total={total} width={8} />
+                </>
+              )}
+              {/* Multi-agent indicator */}
+              {project.agentDetails.length > 1 && (
+                <Text color={C.dim}>  {project.agentDetails.map((a) =>
+                  a.processState === "running" ? "●" : a.processState === "idle" ? "○" : "✕"
+                ).join("")}</Text>
+              )}
+            </Text>
+
+            {/* Tasks — flat list with indentation */}
+            {ordered.map(({ task, col }, ti) => (
+              <Text key={`${task.id}-${ti}`} wrap="truncate">
+                <Text>  </Text>
+                <AgentTaskCard task={task} column={col} />
+              </Text>
+            ))}
+            {ordered.length === 0 && (
+              <Text color={C.dim}>  {project.isActive ? "— active, no tasks" : "— no tasks"}</Text>
+            )}
+          </Box>
+        );
+      })}
     </Box>
   );
 }
