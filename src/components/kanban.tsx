@@ -317,10 +317,6 @@ function ByAgentLayout({
     height: number; // lines this project occupies (excl. separator)
   };
   const blocks: ProjectBlock[] = activeProjects.map((project) => {
-    if (project.tasks.length === 0) {
-      // Active session but no tasks — header only (+ 1 "active, no tasks" line)
-      return { project, height: 2 };
-    }
     const buckets = buildBuckets(project);
     const allGroups = [buckets.needs_input, buckets.doing, buckets.todo];
     if (!hideDone) allGroups.push(buckets.done.slice(0, 5));
@@ -418,24 +414,18 @@ function ByAgentLayout({
               <Text color={attention > 0 ? C.error : C.subtext}>{progressStr}</Text>
             </Text>
 
-            {/* Task list or active-no-tasks message */}
-            {project.tasks.length === 0 ? (
-              <Text wrap="truncate" color={C.dim}>  active, no tasks</Text>
-            ) : (
-              <>
-                {visibleTasks.map(({ task, col }, ti) => (
-                  <Text key={`${task.id}-${ti}`} wrap="truncate">
-                    <Text>  </Text>
-                    <AgentTaskCard task={task} column={col} />
-                  </Text>
-                ))}
-                {overflow > 0 && (
-                  <Text wrap="truncate" color={C.dim}>  +{overflow} more</Text>
-                )}
-                {goneCount > 0 && (
-                  <Text wrap="truncate" color={C.dim}>  ▸ {goneCount} archived</Text>
-                )}
-              </>
+            {/* Task list */}
+            {visibleTasks.map(({ task, col }, ti) => (
+              <Text key={`${task.id}-${ti}`} wrap="truncate">
+                <Text>  </Text>
+                <AgentTaskCard task={task} column={col} />
+              </Text>
+            ))}
+            {overflow > 0 && (
+              <Text wrap="truncate" color={C.dim}>  +{overflow} more</Text>
+            )}
+            {goneCount > 0 && (
+              <Text wrap="truncate" color={C.dim}>  ▸ {goneCount} archived</Text>
             )}
           </Box>
         );

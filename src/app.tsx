@@ -372,15 +372,10 @@ export function App() {
     : "DASHBOARD";
 
   if (view === "agent" || view === "swimlane") {
-    // Show projects with tasks OR active agent activity (sessions, hook events, agent processes)
-    const hasActivity = (p: ViewProject) =>
-      p.tasks.length > 0 ||
-      p.activeSessions > 0 ||
-      p.hookSessionCount > 0 ||
-      p.agentDetails.length > 0;
+    // Both views filter the same way — must have tasks to appear
     const kanbanProjects = selectedNames.size > 0
-      ? sorted.filter((p) => selectedNames.has(p.projectPath) && hasActivity(p))
-      : sorted.filter(hasActivity);
+      ? sorted.filter((p) => selectedNames.has(p.projectPath) && p.tasks.length > 0)
+      : sorted.filter((p) => p.tasks.length > 0);
     return (
       <Box flexDirection="column" height={termRows} overflow="hidden">
         <KanbanView
@@ -400,9 +395,6 @@ export function App() {
   const aboveCount = scrollOffset;
   const belowCount = Math.max(0, sorted.length - scrollOffset - visibleProjects);
 
-  // Debug: aggregate session counts for Row A diagnostics
-  const dbgSessions = sorted.reduce((s, p) => s + p.activeSessions, 0);
-  const dbgHook = sorted.reduce((s, p) => s + p.hookSessionCount, 0);
 
   return (
     <Box flexDirection="column" height={termRows} overflow="hidden">
@@ -425,8 +417,6 @@ export function App() {
               {compactingProjects.length > 1 && <Text color={C.dim}> (+{compactingProjects.length - 1})</Text>}
             </>
           )}
-          {/* DEBUG: remove after verifying Row A visibility */}
-          <Text color={C.dim}> [a={totalActive} s={dbgSessions} h={dbgHook}]</Text>
         </Text>
       </Box>
 
