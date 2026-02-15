@@ -18,6 +18,10 @@ const ACTIVE_THRESHOLD_MS = 5 * 60 * 1000;
 // are NOT considered active (prevents stale tasks from pinning projects to top)
 const STALE_TASK_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
 
+// JSONL files below this size are considered "empty" sessions (e.g. accidental opens).
+// They are counted in totalSessions but excluded from lastSessionActivity sorting.
+const MIN_SESSION_SIZE_BYTES = 1024;
+
 // Priority doc files (always checked first, preserved ordering)
 const DOC_PRIORITY = ["CLAUDE.md", "PRD.md", "docs/PRD.md", "TDD.md", "docs/TDD.md", "README.md"];
 
@@ -76,9 +80,20 @@ function discoverProjects(): DiscoveredProject[] {
         for (const file of files) {
           if (!file.endsWith(".jsonl")) continue;
           totalSessions++;
-          const mtime = getModTime(join(dirPath, file));
-          if (mtime > lastSessionActivity) lastSessionActivity = mtime;
-          if (now - mtime.getTime() < ACTIVE_THRESHOLD_MS) activeSessions++;
+          const filePath = join(dirPath, file);
+          let fileSize = 0;
+          try {
+            const st = statSync(filePath);
+            fileSize = st.size;
+            const mtime = st.mtime;
+            // Only count substantial sessions for lastSessionActivity sorting.
+            // Tiny files (< 1KB) are accidental/empty sessions that shouldn't
+            // push old projects to the top of the list.
+            if (fileSize >= MIN_SESSION_SIZE_BYTES && mtime > lastSessionActivity) {
+              lastSessionActivity = mtime;
+            }
+            if (now - mtime.getTime() < ACTIVE_THRESHOLD_MS) activeSessions++;
+          } catch { /* skip */ }
         }
       } catch {
         // skip
