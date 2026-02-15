@@ -110,6 +110,7 @@ export function App() {
   const { exit } = useApp();
   const stdout = useStdout();
   const rows = stdout.stdout?.rows ?? 40;
+  const cols = stdout.stdout?.columns ?? 80;
   const { projects: rawProjects } = useWatchSessions();
   const [view, setView] = useState<View>("dashboard");
   const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>("projects");
@@ -397,7 +398,7 @@ export function App() {
 
 
   return (
-    <Box flexDirection="column" height={termRows} overflow="hidden">
+    <Box flexDirection="column" height={termRows} width={cols} overflow="hidden">
       {/* Row A: plain string, no child <Text> nodes */}
       {(() => {
         const rowAText = totalActive > 0
@@ -407,7 +408,7 @@ export function App() {
           ? ` · ⚡ ${truncateToWidth(compactingProjects[compactTick % compactingProjects.length].name, 16)} compacted${compactingProjects.length > 1 ? ` (+${compactingProjects.length - 1})` : ""}`
           : "";
         return (
-          <Box paddingX={1} flexShrink={0} flexGrow={1} height={1} overflow="hidden">
+          <Box paddingX={1} flexShrink={0} height={1} width={cols} overflow="hidden">
             <Text wrap="truncate" color={totalActive > 0 ? C.warning : C.dim}>{rowAText}{compact}</Text>
           </Box>
         );
