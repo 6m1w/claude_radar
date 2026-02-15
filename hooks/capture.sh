@@ -6,7 +6,8 @@
 # Usage: capture.sh <event_type>
 #   event_type: "tool" (PostToolUse), "tool_failure" (PostToolUseFailure),
 #               "stop" (Stop), "start" (SessionStart),
-#               "subagent_stop" (SubagentStop), "notification" (Notification)
+#               "subagent_stop" (SubagentStop), "notification" (Notification),
+#               "compact" (PreCompact)
 #
 # Output: one JSON line appended to ~/.claude-radar/events.jsonl
 # Performance budget: <10ms total (bash startup + cat + printf + append)
