@@ -1354,7 +1354,7 @@ describe("detectPatterns", () => {
       expect(compactAlerts).toHaveLength(1);
       expect(compactAlerts[0].severity).toBe("warning");
       expect(compactAlerts[0].count).toBe(1);
-      expect(compactAlerts[0].message).toBe("Context compacted");
+      expect(compactAlerts[0].message).toBe("Context compacted — session history compressed");
     });
 
     it("should detect multiple compactions as error (3+)", () => {

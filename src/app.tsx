@@ -545,11 +545,16 @@ function RightPanel({
   const stats = taskStats(project);
   const title = project.name.toUpperCase();
 
-  // Collect content lines into array, truncate to maxLines to prevent layout overflow
-  // (Ink overflow="hidden" clips rendering but NOT layout — content still pushes siblings)
+  // Collect content lines — each item is forced to height={1} to prevent multi-line overflow.
+  // Per-section caps prevent any single section from exhausting the budget.
   const lines: React.ReactNode[] = [];
   const cap = maxLines ?? 999;
-  const push = (key: string, node: React.ReactNode) => { if (lines.length < cap) lines.push(<Box key={key} flexShrink={0}>{node}</Box>); };
+  const push = (key: string, node: React.ReactNode) => { if (lines.length < cap) lines.push(<Box key={key} flexShrink={0} height={1} overflow="hidden">{node}</Box>); };
+  const CAP_ALERTS = 3;
+  const CAP_TEAM = 3;
+  const CAP_PLANNING = 4;
+  const CAP_ACTIVITY = 5;
+  const CAP_DETAIL = 4;
 
   // Worktree lineage
   if (project.worktreeOf) {
@@ -575,15 +580,18 @@ function RightPanel({
     })()}
   </Text>);
 
-  // Team member list
+  // Team member list (cap to prevent long team lists eating space)
   if (project.team && project.agentDetails.length > 0) {
-    push("team", <Box>
-      {project.agentDetails.map((a, i) => {
+    const teamSlice = project.agentDetails.slice(0, CAP_TEAM);
+    const teamMore = project.agentDetails.length - teamSlice.length;
+    push("team", <Text wrap="truncate">
+      {teamSlice.map((a, i) => {
         const icon = a.processState === "running" ? I.active : a.processState === "idle" ? I.idle : "✕";
         const color = a.processState === "running" ? C.warning : a.processState === "idle" ? C.dim : C.error;
         return <Text key={i} color={color}>{i > 0 ? "  " : ""}{icon} {a.name}{a.currentTaskId ? ` #${a.currentTaskId}` : ""}</Text>;
       })}
-    </Box>);
+      {teamMore > 0 && <Text color={C.dim}> +{teamMore}</Text>}
+    </Text>);
   }
   if (stats.total > 0) {
     push("stats", stats.done === stats.total
@@ -591,8 +599,8 @@ function RightPanel({
       : <Text color={C.subtext}>{stats.total - stats.done} remaining</Text>);
   }
 
-  // Alerts (exclude compaction)
-  const taskAlerts = project.activityAlerts.filter((a) => a.type !== "context_compact");
+  // Alerts (exclude compaction, cap per section)
+  const taskAlerts = project.activityAlerts.filter((a) => a.type !== "context_compact").slice(0, CAP_ALERTS);
   for (const [i, alert] of taskAlerts.entries()) {
     const icon = alert.severity === "error" ? "▲" : "△";
     const color = alert.severity === "error" ? C.error : C.warning;
@@ -662,7 +670,7 @@ function RightPanel({
       {t.blockedBy && <><Text color={C.subtext}> │ blocked by: </Text><Text color={C.error}>#{t.blockedBy}</Text></>}
       {t.statusChangedAt && <><Text color={C.subtext}> │ in status: </Text><Text color={C.dim}>↑{formatDwell(t.statusChangedAt)}</Text></>}
     </Text>);
-    if (t.description) push("td-desc", <Text wrap="truncate" color={C.subtext}>{t.description}</Text>);
+    if (t.description) push("td-desc", <Text wrap="truncate" color={C.subtext}>{t.description.replace(/[\r\n\t]+/g, " ")}</Text>);
   }
 
   // Planning log (L2)
@@ -673,7 +681,7 @@ function RightPanel({
     const filtered = reversed.filter((evt) => {
       if (evt.toolName === "_compact") { compactSeen++; return compactSeen <= 1; }
       return true;
-    }).slice(0, 4);
+    }).slice(0, CAP_PLANNING);
     const collapsedCompact = compactTotal > 1 ? compactTotal - 1 : 0;
     push("pl-sep", <Text> </Text>);
     push("pl-hdr", <Text color={C.dim}>─── Planning ─────────────────────</Text>);
@@ -685,7 +693,7 @@ function RightPanel({
   if (project.activityLog.length > 0) {
     push("al-sep", <Text> </Text>);
     push("al-hdr", <Text color={C.dim}>─── Activity ─────────────────────</Text>);
-    project.activityLog.slice().reverse().slice(0, 5).forEach((evt, i) =>
+    project.activityLog.slice().reverse().slice(0, CAP_ACTIVITY).forEach((evt, i) =>
       push(`al-${i}`, <Text wrap="truncate"><Text color={evt.isError ? C.error : C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text><Text color={C.dim}>  </Text><Text color={activityColor(evt.toolName, !!evt.isError)}>{evt.summary}</Text></Text>)
     );
   }
