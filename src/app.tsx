@@ -398,31 +398,20 @@ export function App() {
 
   return (
     <Box flexDirection="column" height={termRows} overflow="hidden">
-      {/* Row A: Minimal status — stable child structure (no Fragment branching) */}
-      <Box paddingX={1} flexShrink={0} height={1} overflow="hidden">
-        <Text wrap="truncate">
-          <Text color={totalActive > 0 ? C.warning : C.dim}>
-            {totalActive > 0 ? `${I.working} ` : "all idle"}
-          </Text>
-          <Text color={C.text} bold={totalActive > 0}>
-            {totalActive > 0 ? String(totalActive) : ""}
-          </Text>
-          <Text color={C.subtext}>
-            {totalActive > 0 ? " active" : ""}
-          </Text>
-          <Text color={C.dim}>
-            {compactingProjects.length > 0 ? " · " : ""}
-          </Text>
-          <Text color={C.warning}>
-            {compactingProjects.length > 0
-              ? `⚡ ${truncateToWidth(compactingProjects[compactTick % compactingProjects.length].name, 16)} compacted`
-              : ""}
-          </Text>
-          <Text color={C.dim}>
-            {compactingProjects.length > 1 ? ` (+${compactingProjects.length - 1})` : ""}
-          </Text>
-        </Text>
-      </Box>
+      {/* Row A: plain string, no child <Text> nodes */}
+      {(() => {
+        const rowAText = totalActive > 0
+          ? `${I.working} ${totalActive} active`
+          : "all idle";
+        const compact = compactingProjects.length > 0
+          ? ` · ⚡ ${truncateToWidth(compactingProjects[compactTick % compactingProjects.length].name, 16)} compacted${compactingProjects.length > 1 ? ` (+${compactingProjects.length - 1})` : ""}`
+          : "";
+        return (
+          <Box paddingX={1} flexShrink={0} height={1} overflow="hidden">
+            <Text wrap="truncate" color={totalActive > 0 ? C.warning : C.dim}>{rowAText}{compact}</Text>
+          </Box>
+        );
+      })()}
 
       {/* Row B: Projects + Tasks — explicit heights prevent Yoga cross-axis overflow */}
       <Box height={rowBHeight} overflow="hidden">
