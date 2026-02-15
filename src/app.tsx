@@ -407,7 +407,7 @@ export function App() {
           ? ` · ⚡ ${truncateToWidth(compactingProjects[compactTick % compactingProjects.length].name, 16)} compacted${compactingProjects.length > 1 ? ` (+${compactingProjects.length - 1})` : ""}`
           : "";
         return (
-          <Box paddingX={1} flexShrink={0} height={1} overflow="hidden">
+          <Box paddingX={1} flexShrink={0} flexGrow={1} height={1} overflow="hidden">
             <Text wrap="truncate" color={totalActive > 0 ? C.warning : C.dim}>{rowAText}{compact}</Text>
           </Box>
         );
