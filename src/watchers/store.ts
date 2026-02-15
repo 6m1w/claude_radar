@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, rename
 import { join, basename } from "node:path";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
+import { getProjectCompactions } from "./usage.js";
 import type {
   ProjectData,
   SessionData,
@@ -128,6 +129,10 @@ export class Store {
   // Ring buffer per project (~50 events). Not persisted — ephemeral observability.
   private _activityBuffers = new Map<string, ActivityEvent[]>();
   private static ACTIVITY_BUFFER_SIZE = 50;
+
+  // Dedup set for JSONL-detected compaction events (sessionId:timestamp)
+  // Prevents re-adding the same compaction on every poll cycle.
+  private _seenCompactions = new Set<string>();
 
   // Load all project files from disk
   load(): void {
@@ -493,6 +498,16 @@ export class Store {
     }
   }
 
+  // Ingest JSONL-detected compaction events, skipping already-seen ones
+  ingestCompactions(events: ActivityEvent[]): void {
+    for (const ev of events) {
+      const key = `${ev.sessionId}:${ev.ts}`;
+      if (this._seenCompactions.has(key)) continue;
+      this._seenCompactions.add(key);
+      this.addActivity(ev.projectPath, ev);
+    }
+  }
+
   // Get recent activity for a project
   getActivityLog(projectPath: string): ActivityEvent[] {
     return this._activityBuffers.get(projectPath) ?? [];
@@ -529,6 +544,7 @@ export class Store {
     return {
       projectPath,
       projectName: basename(projectPath),
+      claudeDir: "",
       sessions: [],
       totalTasks: 0,
       completedTasks: 0,
@@ -561,6 +577,7 @@ export class Store {
     return {
       projectPath: store.projectPath,
       projectName: store.projectName,
+      claudeDir: "",
       sessions,
       totalTasks: allItems.length,
       completedTasks: allItems.filter((i) => i.status === "completed").length,
@@ -720,6 +737,23 @@ function detectPatterns(events: ActivityEvent[]): ActivityAlert[] {
           ts: ev.ts,
         });
       }
+    }
+
+    // 4. Context compaction: _compact events indicate context window pressure
+    const compactEvents = sessionEvents.filter((ev) => ev.toolName === "_compact");
+    if (compactEvents.length > 0) {
+      const latest = compactEvents[compactEvents.length - 1];
+      alerts.push({
+        type: "context_compact",
+        severity: compactEvents.length >= 3 ? "error" : "warning",
+        message: compactEvents.length === 1
+          ? "Context compacted"
+          : `Context compacted ${compactEvents.length} times`,
+        count: compactEvents.length,
+        sessionId,
+        projectPath: latest.projectPath,
+        ts: latest.ts,
+      });
     }
   }
 
@@ -1069,6 +1103,17 @@ export function mergeAndPersist(
   const events = consumeEvents();
   if (events.length > 0) {
     ingestHookEvents(store, events);
+  }
+
+  // Layer 1b: Detect compaction events from JSONL transcripts (active sessions only)
+  // More reliable than PreCompact hook — reads directly from Claude Code's own data.
+  for (const project of liveProjects) {
+    if (project.activeSessions > 0 && project.claudeDir) {
+      const compactions = getProjectCompactions(project.claudeDir, project.projectPath);
+      if (compactions.length > 0) {
+        store.ingestCompactions(compactions);
+      }
+    }
   }
 
   // Layer 2: Merge live scanner data with stored history

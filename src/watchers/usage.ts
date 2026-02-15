@@ -318,6 +318,81 @@ export function getProjectTurnDurations(claudeProjectDir: string, projectPath: s
   return events.sort((a, b) => a.ts.localeCompare(b.ts));
 }
 
+// ─── Compaction detection from JSONL ─────────────────────────
+
+// Detect compaction boundaries in a session JSONL file.
+// Signal: system message with parentUuid=null + logicalParentUuid set.
+// Each boundary = one context compaction event.
+function extractCompaction(line: string): { ts: string; sessionId: string } | null {
+  // Fast pre-check to avoid JSON.parse on non-system lines
+  if (!line.includes('"logicalParentUuid"')) return null;
+
+  try {
+    const obj = JSON.parse(line);
+    if (obj.type !== "system") return null;
+    if (obj.parentUuid !== null) return null;
+    if (!obj.logicalParentUuid) return null;
+
+    return {
+      ts: obj.timestamp ?? "",
+      sessionId: obj.sessionId ?? "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse compaction events from a single session JSONL file.
+ * Returns ActivityEvent[] with toolName="_compact" for each compaction boundary.
+ */
+export function parseCompactions(jsonlPath: string, projectPath: string): ActivityEvent[] {
+  let content: string;
+  try {
+    content = readFileSync(jsonlPath, "utf-8");
+  } catch {
+    return [];
+  }
+
+  const events: ActivityEvent[] = [];
+
+  for (const line of content.split("\n")) {
+    if (!line) continue;
+    const c = extractCompaction(line);
+    if (!c || !c.sessionId) continue;
+
+    events.push({
+      ts: c.ts,
+      sessionId: c.sessionId,
+      toolName: "_compact",
+      summary: "⚡ Context compacted",
+      projectPath,
+    });
+  }
+
+  return events;
+}
+
+/**
+ * Get compaction events for all sessions in a project's Claude directory.
+ */
+export function getProjectCompactions(claudeProjectDir: string, projectPath: string): ActivityEvent[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(claudeProjectDir);
+  } catch {
+    return [];
+  }
+
+  const events: ActivityEvent[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".jsonl")) continue;
+    events.push(...parseCompactions(join(claudeProjectDir, entry), projectPath));
+  }
+
+  return events.sort((a, b) => a.ts.localeCompare(b.ts));
+}
+
 // Exported for testing
 export { resolveModelPricing, calculateCostUSD, FALLBACK_PRICING, LONG_TURN_THRESHOLD_MS };
 export type { ModelPricing, TokenAccumulator, TurnDuration };
