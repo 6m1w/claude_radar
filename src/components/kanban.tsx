@@ -33,7 +33,7 @@ const COLUMN_CONFIG: Record<KanbanColumn, { label: string; color: string; bold: 
 
 // Classify a task into a kanban column based on priority rules
 function classifyTask(task: DisplayTask, project: ViewProject): KanbanColumn {
-  if (task.status === "completed" || task.gone) return "done";
+  if (task.status === "completed") return "done";
   if (task.blockedBy) return "needs_input";
   if (task.status === "in_progress" && task.owner) {
     const agent = project.agentDetails.find((a) => a.name === task.owner);
