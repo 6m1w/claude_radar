@@ -50,7 +50,7 @@ export const catppuccin: Theme = {
     working: "◍",
     idle: "○",
     done: "✓",
-    blocked: "⊘",
+    blocked: "!",
     cursor: "▸",
     selected: "☑",
     unselected: "☐",

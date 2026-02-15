@@ -9,7 +9,7 @@ import { Text } from "ink";
 import { C } from "../theme.js";
 import { Panel } from "./panel.js";
 
-import { formatRelativeTime } from "../utils.js";
+import { formatRelativeTime, truncateToWidth, padEndToWidth } from "../utils.js";
 import type { ViewProject } from "../types.js";
 
 export function RoadmapPanel({
@@ -73,12 +73,10 @@ export function RoadmapPanel({
         {/* Sections of selected file */}
         {selected.sections.slice(0, sectionSlots).map((section, i) => {
           const maxTitleLen = 13;
-          const title = section.title.length > maxTitleLen
-            ? section.title.slice(0, maxTitleLen - 1) + "\u2026"
-            : section.title;
+          const title = truncateToWidth(section.title, maxTitleLen);
           return (
             <Text key={`s-${i}`} wrap="truncate">
-              <Text color={C.subtext}>  {"\u25b8"} {title.padEnd(maxTitleLen)} </Text>
+              <Text color={C.subtext}>  {"\u25b8"} {padEndToWidth(title, maxTitleLen)} </Text>
               <Text color={C.subtext}>{section.done}/{section.total}</Text>
             </Text>
           );
@@ -109,13 +107,11 @@ export function RoadmapPanel({
       {/* Section lines */}
       {selected.sections.slice(0, sectionSlots).map((section, i) => {
         const maxTitleLen = 13;
-        const title = section.title.length > maxTitleLen
-          ? section.title.slice(0, maxTitleLen - 1) + "\u2026"
-          : section.title;
+        const title = truncateToWidth(section.title, maxTitleLen);
 
         return (
           <Text key={i} wrap="truncate">
-            <Text color={C.subtext}>{"\u25b8"} {title.padEnd(maxTitleLen)} </Text>
+            <Text color={C.subtext}>{"\u25b8"} {padEndToWidth(title, maxTitleLen)} </Text>
             <Text color={C.subtext}>{section.done}/{section.total}</Text>
           </Text>
         );
