@@ -413,10 +413,10 @@ export function App() {
         </Text>
       </Box>
 
-      {/* Row B: Projects + Tasks — each column clips independently */}
-      <Box height={rowBHeight}>
+      {/* Row B: Projects + Tasks — parent clips overflow, children flex within */}
+      <Box height={rowBHeight} overflow="hidden">
         {/* Left column: Project list + Roadmap panel */}
-        <Box flexDirection="column" width={34} flexShrink={0} height={rowBHeight} overflow="hidden">
+        <Box flexDirection="column" width={34} flexShrink={0}>
           <Panel title={`PROJECTS (${sorted.length})`} flexGrow={1} hotkey="1" focused={focusedPanel === "projects"}>
             {aboveCount > 0 && (
               <Text color={C.dim}>  ▲ {aboveCount} more</Text>
@@ -473,15 +473,13 @@ export function App() {
           {showRoadmap && <RoadmapPanel project={current} height={roadmapHeight} focused={focusedPanel === "roadmap"} selectedIdx={roadmapDocIdx} hotkey="3" />}
         </Box>
 
-        {/* Right: Tasks only — clip overflow independently */}
-        <Box flexDirection="column" flexGrow={1} height={rowBHeight} overflow="hidden">
-          <RightPanel
-            project={current}
-            focused={focusedPanel === "tasks"}
-            taskIdx={taskIdx}
-            hotkey="2"
-          />
-        </Box>
+        {/* Right: Tasks only */}
+        <RightPanel
+          project={current}
+          focused={focusedPanel === "tasks"}
+          taskIdx={taskIdx}
+          hotkey="2"
+        />
       </Box>
 
       {/* Row C: Bottom tabbed panel */}
