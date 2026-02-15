@@ -18,8 +18,8 @@ const ACTIVE_THRESHOLD_MS = 5 * 60 * 1000;
 // are NOT considered active (prevents stale tasks from pinning projects to top)
 const STALE_TASK_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
 
-// Doc files to detect in project directories
-const DOC_CANDIDATES = ["CLAUDE.md", "PRD.md", "docs/PRD.md", "TDD.md", "docs/TDD.md", "README.md"];
+// Priority doc files (always checked first, preserved ordering)
+const DOC_PRIORITY = ["CLAUDE.md", "PRD.md", "docs/PRD.md", "TDD.md", "docs/TDD.md", "README.md"];
 
 function readJson<T>(path: string): T | null {
   try {
@@ -260,11 +260,23 @@ function readGitInfo(projectPath: string): { branch: string; worktreeOf?: string
 }
 
 // ─── Phase 3: Detect docs in project directory ──────────────────
+// Merge priority candidates + recursive discovery into a single deduped list.
+// Priority docs come first (stable ordering for UI), then any extras found by discovery.
 function detectDocs(projectPath: string): string[] {
   const found: string[] = [];
-  for (const candidate of DOC_CANDIDATES) {
+  const seen = new Set<string>();
+  // Priority candidates first (stable ordering)
+  for (const candidate of DOC_PRIORITY) {
     if (existsSync(join(projectPath, candidate))) {
       found.push(candidate);
+      seen.add(candidate);
+    }
+  }
+  // Add any .md files found by recursive discovery that aren't already listed
+  for (const md of discoverMarkdownFiles(projectPath)) {
+    if (!seen.has(md)) {
+      found.push(md);
+      seen.add(md);
     }
   }
   return found;
