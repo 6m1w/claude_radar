@@ -12,7 +12,7 @@
  */
 import React from "react";
 import { Box, Text, useStdout } from "ink";
-import { C } from "../theme.js";
+import { C, I } from "../theme.js";
 import { Panel } from "./panel.js";
 
 import { formatDwell, truncateToWidth } from "../utils.js";
@@ -106,10 +106,10 @@ function RichCard({ task, column, width }: {
   const idStr = task.id.length <= 5 ? `#${task.id}` : "";
   const badge = task.owner ? truncateToWidth(task.owner.toUpperCase(), 8) : "";
   const dwell = formatDwell(task.statusChangedAt);
-  const meta = [dwell, task.blockedBy ? `⊘#${task.blockedBy}` : ""].filter(Boolean).join("  ");
+  const meta = [dwell, task.blockedBy ? `${I.blocked}#${task.blockedBy}` : ""].filter(Boolean).join("  ");
 
   return (
-    <Box flexDirection="column" width={width}>
+    <Box flexDirection="column" width={width} flexShrink={0}>
       <Text wrap="truncate">
         <Text color={accent}>┃ </Text>
         {idStr && <Text color={C.accent}>{idStr}</Text>}
@@ -153,6 +153,13 @@ function SwimLaneLayout({
     <>
       {projects.map((project) => {
         const buckets = buildBuckets(project);
+        // Merge non-displayed columns into todo for binary swimlane
+        for (const col of (["needs_input", "doing"] as KanbanColumn[])) {
+          if (!activeCols.includes(col)) {
+            buckets.todo.push(...buckets[col]);
+            buckets[col] = [];
+          }
+        }
         const maxRows = Math.max(1, ...activeCols.map((c) => buckets[c].length));
         const isActive = project.isActive;
 
@@ -177,15 +184,11 @@ function SwimLaneLayout({
                   ? project.roadmap.reduce((best, r) => r.totalItems > best.totalItems ? r : best)
                   : null;
                 if (primary && primary.totalItems > 0) {
-                  const pct = Math.round((primary.totalDone / primary.totalItems) * 100);
-                  const barW = 4;
-                  const filled = Math.round((pct / 100) * barW);
-                  const bar = "\u2588".repeat(filled) + "\u2591".repeat(barW - filled);
                   const src = truncateToWidth(primary.source, 8);
-                  leftText = `${src} ${bar} ${pct}%`;
+                  leftText = `${src} ${primary.totalDone}/${primary.totalItems}`;
                   leftColor = C.subtext;
                 } else {
-                  leftText = `\u23C7${project.branch}`;
+                  leftText = `⎇${project.branch}`;
                   leftColor = C.accent;
                 }
               }
@@ -193,7 +196,7 @@ function SwimLaneLayout({
               return (
                 <Box key={ri}>
                   {/* Label cell — fixed width, truncated by Box */}
-                  <Box width={labelW}>
+                  <Box width={labelW} flexShrink={0}>
                     <Text wrap="truncate" color={leftColor} bold={ri === 0}>
                       {leftText}
                     </Text>
@@ -204,7 +207,7 @@ function SwimLaneLayout({
                     return (
                       <React.Fragment key={col}>
                         <Sep />
-                        <Box width={colWidths[ci]}>
+                        <Box width={colWidths[ci]} flexShrink={0}>
                           {task ? (
                             <CompactCard task={task} column={col} />
                           ) : null}
@@ -229,7 +232,7 @@ function AgentTaskCard({ task, column }: {
   task: DisplayTask;
   column: KanbanColumn;
 }) {
-  const icon = column === "done" ? "✓" : column === "doing" ? "◍" : column === "needs_input" ? "⊘" : "○";
+  const icon = column === "done" ? "✓" : column === "doing" ? "◍" : column === "needs_input" ? I.blocked : "○";
   const iconColor = column === "done" ? C.success : column === "doing" ? C.warning : column === "needs_input" ? C.error : C.dim;
   const idPrefix = task.id.length <= 5 ? `#${task.id} ` : "";
   const dwell = formatDwell(task.statusChangedAt);
@@ -244,7 +247,7 @@ function AgentTaskCard({ task, column }: {
         {idPrefix}{task.subject}
       </Text>
       {task.owner && <Text color={C.accent}> ({task.owner})</Text>}
-      {task.blockedBy && <Text color={C.error}> ⊘#{task.blockedBy}</Text>}
+      {task.blockedBy && <Text color={C.error}> {I.blocked}#{task.blockedBy}</Text>}
       {column !== "done" && dwell && <Text color={C.dim}> {dwell}</Text>}
     </Text>
   );
@@ -317,7 +320,7 @@ function ByAgentLayout({
             <Text wrap="truncate">
               <Text color={stateColor}>{stateIcon} </Text>
               <Text color={project.isActive ? C.warning : C.text} bold>{project.name}</Text>
-              <Text color={C.accent}>  \u23C7{branchStr}</Text>
+              <Text color={C.accent}>  ⎇{branchStr}</Text>
               <Text color={C.dim}>  </Text>
               <Text color={attention > 0 ? C.error : C.subtext}>{progressStr}</Text>
             </Text>
@@ -374,7 +377,7 @@ export function KanbanView({
   const contentW = cols - 4;
 
   const filterLabel = selectedCount > 0 ? ` (${selectedCount} selected)` : "";
-  const layoutLabel = layout === "swimlane" ? "SWIM" : "TASKS";
+  const layoutLabel = layout === "swimlane" ? "ROADMAP" : "TASKS";
   const hideLabel = hideDone ? " \u229ADONE" : "";
 
   if (layout === "by_agent") {
@@ -388,8 +391,9 @@ export function KanbanView({
     );
   }
 
-  // ─── Swimlane layout ────────────────────────────────────────
-  const activeCols = hideDone ? ALL_COLUMNS.filter((c) => c !== "done") : ALL_COLUMNS;
+  // ─── Swimlane layout — 2 columns for binary L1 data ─────────
+  const SWIMLANE_COLS: KanbanColumn[] = ["todo", "done"];
+  const activeCols = hideDone ? SWIMLANE_COLS.filter((c) => c !== "done") : SWIMLANE_COLS;
   const numCols = activeCols.length;
 
   const labelW = Math.min(18, Math.max(12, Math.floor(contentW * 0.15)));
@@ -408,6 +412,8 @@ export function KanbanView({
       counts[classifyTask(task, project)]++;
     }
   }
+  // Merge needs_input/doing into todo for binary swimlane display
+  counts.todo += counts.needs_input + counts.doing;
 
   return (
     <Panel
@@ -416,7 +422,7 @@ export function KanbanView({
     >
       {/* Header row — uses identical Box widths as content cells */}
       <Box>
-        <Box width={labelW}>
+        <Box width={labelW} flexShrink={0}>
           <Text color={C.primary} bold>PROJECTS</Text>
         </Box>
         <Sep />
@@ -428,7 +434,7 @@ export function KanbanView({
           return (
             <React.Fragment key={col}>
               {ci > 0 && <Sep />}
-              <Box width={w}>
+              <Box width={w} flexShrink={0}>
                 <Text>
                   <Text color={cfg.color} bold={cfg.bold}>{cfg.label}</Text>
                   <Text color={C.dim}>{" ".repeat(gap)}{countStr}</Text>
