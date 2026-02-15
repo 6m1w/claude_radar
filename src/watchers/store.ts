@@ -42,7 +42,6 @@ export const PLANNING_TOOLS = new Set([
   "TodoWrite",
   "TeamCreate",
   "SendMessage",
-  "_compact",          // context compaction (session lifecycle)
 ]);
 
 // ─── Helpers ─────────────────────────────────────────────────
