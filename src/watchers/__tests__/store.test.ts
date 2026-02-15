@@ -1078,6 +1078,29 @@ describe("activity summary enrichment", () => {
   });
 });
 
+// ─── PreCompact (compact) events ──────────────────────────────
+
+describe("compact events", () => {
+  it("should record compact as planning activity", () => {
+    const store = new Store();
+
+    ingestHookEvents(store, [{
+      event: "compact",
+      ts: new Date().toISOString(),
+      data: {
+        session_id: "sess-1",
+        cwd: "/test/project",
+      },
+    }]);
+
+    const { planningLog, activityLog } = store.getActivitySplit("/test/project");
+    expect(planningLog).toHaveLength(1);
+    expect(planningLog[0].toolName).toBe("_compact");
+    expect(planningLog[0].summary).toContain("Context compacted");
+    expect(activityLog).toHaveLength(0);
+  });
+});
+
 // ─── PostToolUseFailure (tool_failure) events ────────────────
 
 describe("tool_failure events", () => {
