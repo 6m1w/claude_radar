@@ -473,12 +473,13 @@ export function App() {
           {showRoadmap && <RoadmapPanel project={current} height={roadmapHeight} focused={focusedPanel === "roadmap"} selectedIdx={roadmapDocIdx} hotkey="3" />}
         </Box>
 
-        {/* Right: Tasks only */}
+        {/* Right: Tasks only — maxLines prevents layout overflow */}
         <RightPanel
           project={current}
           focused={focusedPanel === "tasks"}
           taskIdx={taskIdx}
           hotkey="2"
+          maxLines={rowBHeight - panelChrome}
         />
       </Box>
 
@@ -510,11 +511,13 @@ function RightPanel({
   focused,
   taskIdx,
   hotkey,
+  maxLines,
 }: {
   project: ViewProject;
   focused: boolean;
   taskIdx: number;
   hotkey?: string;
+  maxLines?: number;
 }) {
   if (!project) {
     return (
@@ -527,268 +530,159 @@ function RightPanel({
   const stats = taskStats(project);
   const title = project.name.toUpperCase();
 
+  // Collect content lines into array, truncate to maxLines to prevent layout overflow
+  // (Ink overflow="hidden" clips rendering but NOT layout — content still pushes siblings)
+  const lines: React.ReactNode[] = [];
+  const cap = maxLines ?? 999;
+  const push = (key: string, node: React.ReactNode) => { if (lines.length < cap) lines.push(<Box key={key} flexShrink={0}>{node}</Box>); };
+
+  // Worktree lineage
+  if (project.worktreeOf) {
+    push("wt", <Text wrap="truncate"><Text color={C.dim}>↳ </Text><Text color={C.subtext}>{project.worktreeOf.split("/").pop()}</Text></Text>);
+  }
+  // Project info header
+  push("info", <Text wrap="truncate">
+    <Text color={C.accent}>⎇ {project.branch} </Text>
+    {project.team ? <Text color={C.warning}>⚑ {project.team.teamName} </Text> : null}
+    {project.agentDetails.length > 0 ? (
+      <Text color={C.dim}>
+        {project.agentDetails.map((a) => {
+          const icon = a.processState === "running" ? I.active : a.processState === "idle" ? I.idle : "✕";
+          return `${icon}${a.name}`;
+        }).join(" ")}
+      </Text>
+    ) : project.agents.length > 1 ? (
+      <Text color={C.dim}>{project.agents.length} agents</Text>
+    ) : (() => {
+      const isRunning = project.isActive || project.activeSessions > 0;
+      if (!isRunning) return null;
+      return <Text color={C.warning}>● Agent running</Text>;
+    })()}
+  </Text>);
+
+  // Team member list
+  if (project.team && project.agentDetails.length > 0) {
+    push("team", <Box>
+      {project.agentDetails.map((a, i) => {
+        const icon = a.processState === "running" ? I.active : a.processState === "idle" ? I.idle : "✕";
+        const color = a.processState === "running" ? C.warning : a.processState === "idle" ? C.dim : C.error;
+        return <Text key={i} color={color}>{i > 0 ? "  " : ""}{icon} {a.name}{a.currentTaskId ? ` #${a.currentTaskId}` : ""}</Text>;
+      })}
+    </Box>);
+  }
+  if (stats.total > 0) {
+    push("stats", stats.done === stats.total
+      ? <Text color={C.dim}>all done</Text>
+      : <Text color={C.subtext}>{stats.total - stats.done} remaining</Text>);
+  }
+
+  // Alerts (exclude compaction)
+  const taskAlerts = project.activityAlerts.filter((a) => a.type !== "context_compact");
+  for (const [i, alert] of taskAlerts.entries()) {
+    const icon = alert.severity === "error" ? "▲" : "△";
+    const color = alert.severity === "error" ? C.error : C.warning;
+    push(`alert-${i}`, <Text wrap="truncate"><Text color={color}> {icon} </Text><Text color={color}>{alert.message}</Text><Text color={C.dim}> {formatRelativeTime(alert.ts)}</Text></Text>);
+  }
+
+  // Task list
+  const liveTasks = project.tasks.filter((t) => !t.gone);
+  const goneTasks = project.tasks.filter((t) => t.gone);
+  const isMultiAgent = project.agents.length > 1;
+  const liveIdLen = liveTasks.length > 0 ? Math.min(4, Math.max(...liveTasks.map((t) => t.id.length), 1)) : 1;
+
+  const renderTask = (t: DisplayTask, idx: number) => {
+    const isCursor = focused && idx === taskIdx;
+    const isGone = !!t.gone;
+    const icon = t.status === "completed" ? I.done : t.status === "in_progress" ? I.working : I.idle;
+    const iconColor = isGone ? C.dim : t.status === "completed" ? C.success : t.status === "in_progress" ? C.warning : C.dim;
+    const showId = t.id.length <= 5;
+    const displayId = showId ? padStartToWidth(t.id, liveIdLen) : "";
+    return (
+      <Text wrap="truncate">
+        <Text color={isCursor ? C.primary : C.dim}>{isCursor ? I.cursor : " "}{" "}</Text>
+        <Text color={iconColor} dimColor={isGone}>{icon} </Text>
+        {showId && <Text color={isGone ? C.dim : C.subtext} dimColor={isGone}>#{displayId} </Text>}
+        <Text color={isGone ? C.dim : t.status === "completed" ? C.dim : isCursor ? C.text : C.subtext} bold={!isGone && isCursor} dimColor={isGone} strikethrough={t.status === "completed"}>{t.subject}</Text>
+        {!isGone && t.owner && <Text color={C.accent}> ({t.owner})</Text>}
+        {!isGone && t.blockedBy && <Text color={C.error}> {I.blocked}#{t.blockedBy}</Text>}
+        {!isGone && t.status !== "completed" && t.statusChangedAt && <Text color={C.dim}> ↑{formatDwell(t.statusChangedAt)}</Text>}
+      </Text>
+    );
+  };
+
+  if (isMultiAgent) {
+    const agents = [...new Set(liveTasks.map((t) => t.owner ?? "unassigned"))];
+    let flatIdx = 0;
+    for (const agent of agents) {
+      const agentTasks = liveTasks.filter((t) => (t.owner ?? "unassigned") === agent);
+      const detail = project.agentDetails.find((a) => a.name === agent);
+      const processState = detail?.processState;
+      const hasActive = agentTasks.some((t) => t.status === "in_progress");
+      const hasBlocked = agentTasks.some((t) => t.blockedBy);
+      const agentStatus = processState ? processState : hasBlocked ? "blocked" : hasActive ? "active" : "idle";
+      const agentIcon = processState === "running" ? I.active : processState === "idle" ? I.idle : processState === "dead" ? "✕" : hasBlocked ? I.blocked : hasActive ? I.working : I.idle;
+      const agentColor = agentStatus === "running" || agentStatus === "active" ? C.warning : agentStatus === "blocked" || agentStatus === "dead" ? C.error : C.dim;
+      push(`ah-${agent}`, <Text wrap="truncate" color={agentColor}>  ── {agentIcon} {agent} ({agentStatus}) ──────────</Text>);
+      for (const t of agentTasks) push(`t-${t.id}`, renderTask(t, flatIdx++));
+    }
+  } else {
+    liveTasks.forEach((t, i) => push(`t-${t.id}`, renderTask(t, i)));
+  }
+  if (goneTasks.length > 0) push("gone", <Text color={C.dim}>  {"\u25b8"} {goneTasks.length} archived</Text>);
+
+  // Gone sessions
+  if (project.goneSessionCount > 0 && liveTasks.length === 0) {
+    push("gsess", <Text color={C.dim}>▸ {project.goneSessionCount} archived session{project.goneSessionCount > 1 ? "s" : ""}</Text>);
+  }
+
+  // Task detail
+  if (focused && project.tasks[taskIdx] && !project.tasks[taskIdx].gone) {
+    const t = project.tasks[taskIdx];
+    push("td-sep", <Text> </Text>);
+    push("td-hdr", <Text color={C.dim}>─── Task Detail ─────────────────────</Text>);
+    push("td-info", <Text wrap="truncate">
+      <Text color={C.subtext}>status: </Text>
+      <Text color={t.status === "in_progress" ? C.warning : t.status === "completed" ? C.success : C.dim}>{t.status}</Text>
+      {t.owner && <><Text color={C.subtext}> │ owner: </Text><Text color={C.accent}>{t.owner}</Text></>}
+      {t.blockedBy && <><Text color={C.subtext}> │ blocked by: </Text><Text color={C.error}>#{t.blockedBy}</Text></>}
+      {t.statusChangedAt && <><Text color={C.subtext}> │ in status: </Text><Text color={C.dim}>↑{formatDwell(t.statusChangedAt)}</Text></>}
+    </Text>);
+    if (t.description) push("td-desc", <Text wrap="truncate" color={C.subtext}>{t.description}</Text>);
+  }
+
+  // Planning log (L2)
+  if (project.planningLog.length > 0) {
+    const reversed = project.planningLog.slice().reverse();
+    let compactSeen = 0;
+    const compactTotal = reversed.filter((e) => e.toolName === "_compact").length;
+    const filtered = reversed.filter((evt) => {
+      if (evt.toolName === "_compact") { compactSeen++; return compactSeen <= 1; }
+      return true;
+    }).slice(0, 4);
+    const collapsedCompact = compactTotal > 1 ? compactTotal - 1 : 0;
+    push("pl-sep", <Text> </Text>);
+    push("pl-hdr", <Text color={C.dim}>─── Planning ─────────────────────</Text>);
+    filtered.forEach((evt, i) => push(`pl-${i}`, <Text wrap="truncate"><Text color={C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text><Text color={C.primary}>  {evt.summary}</Text></Text>));
+    if (collapsedCompact > 0) push("pl-cc", <Text wrap="truncate" color={C.dim}>      +{collapsedCompact} earlier compaction{collapsedCompact > 1 ? "s" : ""}</Text>);
+  }
+
+  // Activity feed (L3)
+  if (project.activityLog.length > 0) {
+    push("al-sep", <Text> </Text>);
+    push("al-hdr", <Text color={C.dim}>─── Activity ─────────────────────</Text>);
+    project.activityLog.slice().reverse().slice(0, 5).forEach((evt, i) =>
+      push(`al-${i}`, <Text wrap="truncate"><Text color={evt.isError ? C.error : C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text><Text color={C.dim}>  </Text><Text color={activityColor(evt.toolName, !!evt.isError)}>{evt.summary}</Text></Text>)
+    );
+  }
+
+  // Empty state
+  if (project.tasks.length === 0 && project.activityLog.length === 0) {
+    push("empty", <Text color={C.dim}>No tasks (session-only project)</Text>);
+  }
+
   return (
     <Panel title={title} flexGrow={1} focused={focused} hotkey={hotkey}>
-      {/* Worktree lineage — show parent project prominently */}
-      {project.worktreeOf && (
-        <Text wrap="truncate">
-          <Text color={C.dim}>↳ </Text>
-          <Text color={C.subtext}>{project.worktreeOf.split("/").pop()}</Text>
-        </Text>
-      )}
-      {/* Project info header */}
-      <Text wrap="truncate">
-        <Text color={C.accent}>⎇ {project.branch} </Text>
-        {project.team ? (
-          <Text color={C.warning}>⚑ {project.team.teamName} </Text>
-        ) : null}
-        {project.agentDetails.length > 0 ? (
-          <Text color={C.dim}>
-            {project.agentDetails.map((a) => {
-              const icon = a.processState === "running" ? I.active : a.processState === "idle" ? I.idle : "✕";
-              return `${icon}${a.name}`;
-            }).join(" ")}
-          </Text>
-        ) : project.agents.length > 1 ? (
-          <Text color={C.dim}>{project.agents.length} agents</Text>
-        ) : (() => {
-          // Single agent: show process-state from heuristics
-          const isRunning = project.isActive || project.activeSessions > 0;
-          if (!isRunning) return null; // no session → hide agent line
-          return <Text color={C.warning}>● Agent running</Text>;
-        })()}
-      </Text>
-      {/* Team member list with process states */}
-      {project.team && project.agentDetails.length > 0 && (
-        <Box>
-          {project.agentDetails.map((a, i) => {
-            const icon = a.processState === "running" ? I.active : a.processState === "idle" ? I.idle : "✕";
-            const color = a.processState === "running" ? C.warning : a.processState === "idle" ? C.dim : C.error;
-            return (
-              <Text key={i} color={color}>
-                {i > 0 ? "  " : ""}{icon} {a.name}{a.currentTaskId ? ` #${a.currentTaskId}` : ""}
-              </Text>
-            );
-          })}
-        </Box>
-      )}
-      {stats.total > 0 && (
-        stats.done === stats.total
-          ? <Text color={C.dim}>all done</Text>
-          : <Text color={C.subtext}>{stats.total - stats.done} remaining</Text>
-      )}
-
-      {/* Alerts — pattern-detected issues (exclude compaction — shown in StatusBar) */}
-      {(() => {
-        const taskAlerts = project.activityAlerts.filter((a) => a.type !== "context_compact");
-        if (taskAlerts.length === 0) return null;
-        return (
-          <>
-            {taskAlerts.map((alert, i) => {
-              const icon = alert.severity === "error" ? "▲" : "△";
-              const color = alert.severity === "error" ? C.error : C.warning;
-              return (
-                <Text key={`alert-${i}`} wrap="truncate">
-                  <Text color={color}> {icon} </Text>
-                  <Text color={color}>{alert.message}</Text>
-                  <Text color={C.dim}> {formatRelativeTime(alert.ts)}</Text>
-                </Text>
-              );
-            })}
-          </>
-        );
-      })()}
-
-      {/* Task list — grouped by agent for multi-agent projects, flat for single-agent */}
-      {(() => {
-        const liveTasks = project.tasks.filter((t) => !t.gone);
-        const goneTasks = project.tasks.filter((t) => t.gone);
-        const isMultiAgent = project.agents.length > 1;
-
-        // Compute max ID width from live tasks only (gone tasks have their own alignment)
-        const liveIdLen = liveTasks.length > 0
-          ? Math.min(4, Math.max(...liveTasks.map((t) => t.id.length), 1))
-          : 1;
-        const goneIdLen = goneTasks.length > 0
-          ? Math.min(4, Math.max(...goneTasks.map((t) => t.id.length), 1))
-          : 1;
-
-        const renderTask = (t: DisplayTask, idx: number, maxIdWidth: number) => {
-          const isCursor = focused && idx === taskIdx;
-          const isGone = !!t.gone;
-          const icon = t.status === "completed" ? I.done : t.status === "in_progress" ? I.working : I.idle;
-          const iconColor = isGone ? C.dim
-            : t.status === "completed" ? C.success
-            : t.status === "in_progress" ? C.warning : C.dim;
-          // Long IDs (>5 chars, e.g. timestamps/UUIDs): omit entirely, show subject only
-          const showId = t.id.length <= 5;
-          const displayId = showId ? padStartToWidth(t.id, maxIdWidth) : "";
-          return (
-            <Text key={`${t.id}-${isGone ? "g" : "l"}`} wrap="truncate">
-              <Text color={isCursor ? C.primary : C.dim}>
-                {isCursor ? I.cursor : " "}{" "}
-              </Text>
-              <Text color={iconColor} dimColor={isGone}>{icon} </Text>
-              {showId && <Text color={isGone ? C.dim : C.subtext} dimColor={isGone}>#{displayId} </Text>}
-              <Text
-                color={isGone ? C.dim : t.status === "completed" ? C.dim : isCursor ? C.text : C.subtext}
-                bold={!isGone && isCursor}
-                dimColor={isGone}
-                strikethrough={t.status === "completed"}
-              >
-                {t.subject}
-              </Text>
-              {!isGone && t.owner && <Text color={C.accent}> ({t.owner})</Text>}
-              {!isGone && t.blockedBy && <Text color={C.error}> {I.blocked}#{t.blockedBy}</Text>}
-              {!isGone && t.status !== "completed" && t.statusChangedAt && (
-                <Text color={C.dim}> ↑{formatDwell(t.statusChangedAt)}</Text>
-              )}
-            </Text>
-          );
-        };
-
-        let elements: React.ReactNode[] = [];
-
-        if (isMultiAgent) {
-          const agents = [...new Set(liveTasks.map((t) => t.owner ?? "unassigned"))];
-          let flatIdx = 0;
-          for (const agent of agents) {
-            const agentTasks = liveTasks.filter((t) => (t.owner ?? "unassigned") === agent);
-            // Use real process state from scanner when available, fall back to task inference
-            const detail = project.agentDetails.find((a) => a.name === agent);
-            const processState = detail?.processState;
-            const hasActive = agentTasks.some((t) => t.status === "in_progress");
-            const hasBlocked = agentTasks.some((t) => t.blockedBy);
-            const agentStatus = processState
-              ? processState
-              : hasBlocked ? "blocked" : hasActive ? "active" : "idle";
-            const agentIcon = processState === "running" ? I.active
-              : processState === "idle" ? I.idle
-              : processState === "dead" ? "✕"
-              : hasBlocked ? I.blocked : hasActive ? I.working : I.idle;
-            const agentColor = agentStatus === "running" || agentStatus === "active" ? C.warning
-              : agentStatus === "blocked" ? C.error
-              : agentStatus === "dead" ? C.error
-              : C.dim;
-            elements.push(
-              <Box key={agent} flexDirection="column">
-                <Text wrap="truncate" color={agentColor}>  ── {agentIcon} {agent} ({agentStatus}) ──────────</Text>
-                {agentTasks.map((t) => renderTask(t, flatIdx++, liveIdLen))}
-              </Box>
-            );
-          }
-        } else {
-          elements = liveTasks.map((t, i) => renderTask(t, i, liveIdLen));
-        }
-
-        // Collapsed gone tasks — single summary line
-        if (goneTasks.length > 0) {
-          elements.push(
-            <Text key="gone-summary" color={C.dim}>  {"\u25b8"} {goneTasks.length} archived</Text>
-          );
-        }
-
-        return elements;
-      })()}
-
-      {/* Gone sessions summary */}
-      {project.goneSessionCount > 0 && project.tasks.filter((t) => !t.gone).length === 0 && (
-        <Text color={C.dim}>▸ {project.goneSessionCount} archived session{project.goneSessionCount > 1 ? "s" : ""}</Text>
-      )}
-
-      {/* Task detail (task panel focused, selected task) */}
-      {focused && project.tasks[taskIdx] && !project.tasks[taskIdx].gone && (
-        <>
-          <Text> </Text>
-          <Text color={C.dim}>─── Task Detail ─────────────────────</Text>
-          <Box>
-            <Text color={C.subtext}>status: </Text>
-            <Text color={project.tasks[taskIdx].status === "in_progress" ? C.warning : project.tasks[taskIdx].status === "completed" ? C.success : C.dim}>
-              {project.tasks[taskIdx].status}
-            </Text>
-            {project.tasks[taskIdx].owner && (
-              <>
-                <Text color={C.subtext}> │ owner: </Text>
-                <Text color={C.accent}>{project.tasks[taskIdx].owner}</Text>
-              </>
-            )}
-            {project.tasks[taskIdx].blockedBy && (
-              <>
-                <Text color={C.subtext}> │ blocked by: </Text>
-                <Text color={C.error}>#{project.tasks[taskIdx].blockedBy}</Text>
-              </>
-            )}
-            {project.tasks[taskIdx].statusChangedAt && (
-              <>
-                <Text color={C.subtext}> │ in status: </Text>
-                <Text color={C.dim}>↑{formatDwell(project.tasks[taskIdx].statusChangedAt)}</Text>
-              </>
-            )}
-          </Box>
-          {project.tasks[taskIdx].description && (
-            <Text wrap="truncate" color={C.subtext}>{project.tasks[taskIdx].description}</Text>
-          )}
-        </>
-      )}
-
-      {/* Planning log (L2) — agent planning events, compact events capped */}
-      {project.planningLog.length > 0 && (() => {
-        const reversed = project.planningLog.slice().reverse();
-        // Cap _compact to most recent 1, collapse older
-        let compactSeen = 0;
-        const compactTotal = reversed.filter((e) => e.toolName === "_compact").length;
-        const filtered = reversed.filter((evt) => {
-          if (evt.toolName === "_compact") {
-            compactSeen++;
-            return compactSeen <= 1;
-          }
-          return true;
-        }).slice(0, 4);
-        const collapsedCompact = compactTotal > 1 ? compactTotal - 1 : 0;
-        return (
-          <>
-            <Text> </Text>
-            <Text color={C.dim}>─── Planning ─────────────────────</Text>
-            {filtered.map((evt, i) => (
-              <Text key={`p-${i}`} wrap="truncate">
-                <Text color={C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text>
-                <Text color={C.primary}>  {evt.summary}</Text>
-              </Text>
-            ))}
-            {collapsedCompact > 0 && (
-              <Text wrap="truncate" color={C.dim}>      +{collapsedCompact} earlier compaction{collapsedCompact > 1 ? "s" : ""}</Text>
-            )}
-          </>
-        );
-      })()}
-
-      {/* Activity feed (L3) — recent tool calls from hook events */}
-      {project.activityLog.length > 0 && (
-        <>
-          <Text> </Text>
-          <Text color={C.dim}>─── Activity ─────────────────────</Text>
-          {project.activityLog
-            .slice()
-            .reverse()
-            .slice(0, 5)
-            .map((evt, i) => (
-              <Text key={i} wrap="truncate">
-                <Text color={evt.isError ? C.error : C.dim}>
-                  {padStartToWidth(formatRelativeTime(evt.ts), 4)}
-                </Text>
-                <Text color={C.dim}>  </Text>
-                <Text color={activityColor(evt.toolName, !!evt.isError)}>
-                  {evt.summary}
-                </Text>
-              </Text>
-            ))}
-        </>
-      )}
-
-      {/* Empty state */}
-      {project.tasks.length === 0 && project.activityLog.length === 0 && (
-        <Text color={C.dim}>No tasks (session-only project)</Text>
-      )}
+      {lines}
     </Panel>
   );
 }
