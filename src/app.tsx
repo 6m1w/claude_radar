@@ -396,7 +396,7 @@ export function App() {
       {/* Row B: Projects + Tasks — explicit height prevents content overflow */}
       <Box height={rowBHeight}>
         {/* Left column: Project list + Roadmap panel */}
-        <Box flexDirection="column" width={34}>
+        <Box flexDirection="column" width={34} flexShrink={0}>
           <Panel title={`PROJECTS (${sorted.length})`} flexGrow={1} hotkey="1" focused={focusedPanel === "projects"}>
             {aboveCount > 0 && (
               <Text color={C.dim}>  ▲ {aboveCount} more</Text>
@@ -612,7 +612,7 @@ function RightPanel({
                 {t.subject}
               </Text>
               {!isGone && t.owner && <Text color={C.accent}> ({t.owner})</Text>}
-              {!isGone && t.blockedBy && <Text color={C.error}> ⊘#{t.blockedBy}</Text>}
+              {!isGone && t.blockedBy && <Text color={C.error}> {I.blocked}#{t.blockedBy}</Text>}
               {!isGone && t.status !== "completed" && t.statusChangedAt && (
                 <Text color={C.dim}> ↑{formatDwell(t.statusChangedAt)}</Text>
               )}
@@ -1080,14 +1080,12 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
             <Text color={C.success}>↑↓</Text><Text color={C.subtext}> scroll  </Text>
             <Text color={C.success}>h/l</Text><Text color={C.subtext}> file  </Text>
             <Text color={C.success}>d/g/s</Text><Text color={C.subtext}> tab  </Text>
-            <Text color={C.success}>1-4</Text><Text color={C.subtext}> panel  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
         ) : focusedPanel === "roadmap" ? (
           <>
             <Text color={C.success}>↑↓</Text><Text color={C.subtext}> switch .md  </Text>
-            <Text color={C.success}>1-4</Text><Text color={C.subtext}> panel  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
@@ -1095,7 +1093,6 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
           <>
             <Text color={C.success}>↑↓</Text><Text color={C.subtext}> nav tasks  </Text>
             <Text color={C.success}>d/g/s</Text><Text color={C.subtext}> bottom  </Text>
-            <Text color={C.success}>1-4</Text><Text color={C.subtext}> panel  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
@@ -1103,7 +1100,6 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
           <>
             <Text color={C.success}>↑↓</Text><Text color={C.subtext}> nav  </Text>
             <Text color={C.success}>Enter</Text><Text color={C.subtext}> focus  </Text>
-            <Text color={C.success}>1-4</Text><Text color={C.subtext}> panel  </Text>
             <Text color={C.success}>Space</Text><Text color={C.subtext}> select  </Text>
             <Text color={C.success}>Tab</Text><Text color={C.subtext}> →agent  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
