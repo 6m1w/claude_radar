@@ -293,12 +293,12 @@ function ByAgentLayout({
     return <Text color={C.dim}>No active agents</Text>;
   }
 
-  // Separate projects: skip worktree-no-task, collapse all-done
+  // Separate projects: skip truly inactive no-task worktrees, collapse all-done
   const activeProjects: ViewProject[] = [];
   const allDoneProjects: ViewProject[] = [];
   for (const p of projects) {
-    // Hide worktree projects with no tasks (noise in task-focused view)
-    if (p.worktreeOf && p.tasks.length === 0) continue;
+    // Skip worktree projects with no tasks AND no active sessions
+    if (p.worktreeOf && p.tasks.length === 0 && p.activeSessions === 0 && p.hookSessionCount === 0) continue;
     const buckets = buildBuckets(p);
     const remaining = buckets.todo.length + buckets.needs_input.length + buckets.doing.length;
     if (remaining === 0 && buckets.done.length > 0) {
@@ -317,6 +317,10 @@ function ByAgentLayout({
     height: number; // lines this project occupies (excl. separator)
   };
   const blocks: ProjectBlock[] = activeProjects.map((project) => {
+    if (project.tasks.length === 0) {
+      // Active session but no tasks — header only (+ 1 "active, no tasks" line)
+      return { project, height: 2 };
+    }
     const buckets = buildBuckets(project);
     const allGroups = [buckets.needs_input, buckets.doing, buckets.todo];
     if (!hideDone) allGroups.push(buckets.done.slice(0, 5));
@@ -414,18 +418,24 @@ function ByAgentLayout({
               <Text color={attention > 0 ? C.error : C.subtext}>{progressStr}</Text>
             </Text>
 
-            {/* Task list — flat, no group headers */}
-            {visibleTasks.map(({ task, col }, ti) => (
-              <Text key={`${task.id}-${ti}`} wrap="truncate">
-                <Text>  </Text>
-                <AgentTaskCard task={task} column={col} />
-              </Text>
-            ))}
-            {overflow > 0 && (
-              <Text wrap="truncate" color={C.dim}>  +{overflow} more</Text>
-            )}
-            {goneCount > 0 && (
-              <Text wrap="truncate" color={C.dim}>  ▸ {goneCount} archived</Text>
+            {/* Task list or active-no-tasks message */}
+            {project.tasks.length === 0 ? (
+              <Text wrap="truncate" color={C.dim}>  active, no tasks</Text>
+            ) : (
+              <>
+                {visibleTasks.map(({ task, col }, ti) => (
+                  <Text key={`${task.id}-${ti}`} wrap="truncate">
+                    <Text>  </Text>
+                    <AgentTaskCard task={task} column={col} />
+                  </Text>
+                ))}
+                {overflow > 0 && (
+                  <Text wrap="truncate" color={C.dim}>  +{overflow} more</Text>
+                )}
+                {goneCount > 0 && (
+                  <Text wrap="truncate" color={C.dim}>  ▸ {goneCount} archived</Text>
+                )}
+              </>
             )}
           </Box>
         );
