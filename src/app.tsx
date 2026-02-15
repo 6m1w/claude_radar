@@ -98,7 +98,7 @@ function taskStats(p: ViewProject) {
 }
 
 // ─── View state ─────────────────────────────────────────────
-type View = "dashboard" | "agent" | "roadmap";
+type View = "dashboard" | "agent" | "swimlane";
 type BottomTab = "docs" | "git" | "sessions";
 
 export function App() {
@@ -212,7 +212,7 @@ export function App() {
 
     // Tab → cycle views: dashboard → agent → swimlane → dashboard
     if (key.tab) {
-      const cycle: View[] = ["dashboard", "agent", "roadmap"];
+      const cycle: View[] = ["dashboard", "agent", "swimlane"];
       const idx = cycle.indexOf(view);
       setView(cycle[(idx + 1) % cycle.length]);
       setInnerFocus(false);
@@ -221,7 +221,7 @@ export function App() {
     }
 
     // Agent / Swimlane views
-    if (view === "agent" || view === "roadmap") {
+    if (view === "agent" || view === "swimlane") {
       if (key.escape) { setView("dashboard"); return; }
       if (input === "h") setKanbanHideDone((h) => !h);
       return;
@@ -313,24 +313,22 @@ export function App() {
   const totalActive = sorted.filter((p) => p.isActive).length;
 
   const viewLabel = view === "agent" ? "AGENT"
-    : view === "roadmap" ? "ROADMAP"
+    : view === "swimlane" ? "SWIMLANE"
     : bottomFocused ? "BOTTOM"
     : innerFocus ? "DETAIL"
     : "DASHBOARD";
 
-  if (view === "agent" || view === "roadmap") {
-    // Filter: selected projects, or all with relevant data if none selected
+  if (view === "agent" || view === "swimlane") {
+    // Filter: selected projects, or all projects with tasks if none selected
     const kanbanProjects = selectedNames.size > 0
-      ? sorted.filter((p) => selectedNames.has(p.projectPath) && (view === "roadmap" ? p.roadmap.length > 0 : p.tasks.length > 0))
-      : view === "roadmap"
-        ? sorted.filter((p) => p.roadmap.length > 0)
-        : sorted.filter((p) => p.tasks.length > 0);
+      ? sorted.filter((p) => selectedNames.has(p.projectPath) && p.tasks.length > 0)
+      : sorted.filter((p) => p.tasks.length > 0);
     return (
       <Box flexDirection="column" height={termRows}>
         <KanbanView
           projects={kanbanProjects}
           selectedCount={selectedNames.size}
-          layout={view === "agent" ? "by_agent" : "roadmap"}
+          layout={view === "agent" ? "by_agent" : "swimlane"}
           hideDone={kanbanHideDone}
         />
         <StatusBar view={view} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} bottomFocused={false} hideDone={kanbanHideDone} />
@@ -1057,12 +1055,12 @@ function StatusBar({ view, label, hasActive, allDone, bottomFocused, hideDone }:
         <Text color={C.dim}>│ </Text>
         {view === "agent" ? (
           <>
-            <Text color={C.success}>Tab</Text><Text color={C.subtext}> →roadmap  </Text>
+            <Text color={C.success}>Tab</Text><Text color={C.subtext}> →swimlane  </Text>
             <Text color={C.success}>h</Text><Text color={C.subtext}> {hideDone ? "show done" : "hide done"}  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> dashboard  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
-        ) : view === "roadmap" ? (
+        ) : view === "swimlane" ? (
           <>
             <Text color={C.success}>Tab</Text><Text color={C.subtext}> →dashboard  </Text>
             <Text color={C.success}>h</Text><Text color={C.subtext}> {hideDone ? "show done" : "hide done"}  </Text>
