@@ -8,7 +8,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import { C } from "../theme.js";
 import { Panel } from "./panel.js";
-import { Progress } from "./progress.js";
+
 import { formatRelativeTime } from "../utils.js";
 import type { ViewProject, RoadmapData } from "../types.js";
 
@@ -45,8 +45,8 @@ export function RoadmapPanel({
     : "";
   const sourceLabel = primary.source + (otherCount > 0 ? ` +${otherCount}` : "");
 
-  // Usable lines after border (height - 2 for panel border)
-  const usableLines = Math.max(2, height - 2);
+  // Usable lines: height - border(2) - paddingY(2) - title(1) = height - 5
+  const usableLines = Math.max(2, height - 5);
   // Line 0 = source line, remaining for sections
   const sectionSlots = usableLines - 1;
 
@@ -79,7 +79,7 @@ export function RoadmapPanel({
         return (
           <Text key={i} wrap="truncate">
             <Text color={C.subtext}>{"\u25b8"} {title.padEnd(maxTitleLen)} </Text>
-            <Progress done={section.done} total={section.total} width={8} />
+            <Text color={C.subtext}>{section.done}/{section.total}</Text>
           </Text>
         );
       })}
