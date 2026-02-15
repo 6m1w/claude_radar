@@ -402,11 +402,11 @@ export function App() {
         </Text>
       </Box>
 
-      {/* Row B: Projects + Tasks — parent clips overflow, children flex within */}
+      {/* Row B: Projects + Tasks — explicit heights prevent Yoga cross-axis overflow */}
       <Box height={rowBHeight} overflow="hidden">
         {/* Left column: Project list + Roadmap panel */}
-        <Box flexDirection="column" width={34} flexShrink={0}>
-          <Panel title={`PROJECTS (${sorted.length})`} flexGrow={1} hotkey="1" focused={focusedPanel === "projects"}>
+        <Box flexDirection="column" width={34} flexShrink={0} height={rowBHeight}>
+          <Panel title={`PROJECTS (${sorted.length})`} flexGrow={1} hotkey="1" focused={focusedPanel === "projects"} height={showRoadmap ? rowBHeight - roadmapHeight : rowBHeight}>
             {aboveCount > 0 && (
               <Text color={C.dim}>  ▲ {aboveCount} more</Text>
             )}
@@ -462,13 +462,14 @@ export function App() {
           {showRoadmap && <RoadmapPanel project={current} height={roadmapHeight} focused={focusedPanel === "roadmap"} selectedIdx={roadmapDocIdx} hotkey="3" />}
         </Box>
 
-        {/* Right: Tasks only — maxLines prevents layout overflow */}
+        {/* Right: Tasks only — explicit height + maxLines prevents layout overflow */}
         <RightPanel
           project={current}
           focused={focusedPanel === "tasks"}
           taskIdx={taskIdx}
           hotkey="2"
           maxLines={rowBHeight - panelChrome}
+          height={rowBHeight}
         />
       </Box>
 
@@ -500,16 +501,18 @@ function RightPanel({
   taskIdx,
   hotkey,
   maxLines,
+  height,
 }: {
   project: ViewProject;
   focused: boolean;
   taskIdx: number;
   hotkey?: string;
   maxLines?: number;
+  height?: number;
 }) {
   if (!project) {
     return (
-      <Panel title="TASKS" flexGrow={1} hotkey={hotkey}>
+      <Panel title="TASKS" flexGrow={1} hotkey={hotkey} height={height}>
         <Text color={C.dim}>Select a project</Text>
       </Panel>
     );
@@ -669,7 +672,7 @@ function RightPanel({
   }
 
   return (
-    <Panel title={title} flexGrow={1} focused={focused} hotkey={hotkey}>
+    <Panel title={title} flexGrow={1} focused={focused} hotkey={hotkey} height={height}>
       {lines}
     </Panel>
   );
