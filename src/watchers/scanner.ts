@@ -689,6 +689,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
     projects.push({
       projectPath: disc.projectPath,
       projectName: disc.projectName,
+      claudeDir: disc.claudeDir,
       gitBranch: git?.branch ?? disc.gitBranch,
       sessions,
       totalTasks: total,
@@ -720,6 +721,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
     projects.push({
       projectPath: path,
       projectName: basename(path),
+      claudeDir: "",  // orphan projects have no claudeDir
       sessions,
       totalTasks: allItems.length,
       completedTasks: allItems.filter((i) => i.status === "completed").length,

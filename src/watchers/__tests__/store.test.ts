@@ -58,6 +58,7 @@ function makeProject(overrides: Partial<ProjectData> = {}): ProjectData {
   return {
     projectPath: "/test/project",
     projectName: "project",
+    claudeDir: "",
     sessions: [makeSession()],
     totalTasks: 1,
     completedTasks: 0,
@@ -1339,6 +1340,46 @@ describe("detectPatterns", () => {
 
       const alerts = detectPatterns(events);
       expect(alerts.filter((a) => a.type === "long_turn")).toEqual([]);
+    });
+  });
+
+  describe("context_compact", () => {
+    it("should detect single compaction as warning", () => {
+      const events: ActivityEvent[] = [
+        makeActivityEvent({ toolName: "_compact", summary: "⚡ Context compacted" }),
+      ];
+
+      const alerts = detectPatterns(events);
+      const compactAlerts = alerts.filter((a) => a.type === "context_compact");
+      expect(compactAlerts).toHaveLength(1);
+      expect(compactAlerts[0].severity).toBe("warning");
+      expect(compactAlerts[0].count).toBe(1);
+      expect(compactAlerts[0].message).toBe("Context compacted");
+    });
+
+    it("should detect multiple compactions as error (3+)", () => {
+      const events: ActivityEvent[] = Array.from({ length: 3 }, (_, i) =>
+        makeActivityEvent({
+          toolName: "_compact",
+          summary: "⚡ Context compacted",
+          ts: new Date(Date.now() + i * 60000).toISOString(),
+        }),
+      );
+
+      const alerts = detectPatterns(events);
+      const compactAlerts = alerts.filter((a) => a.type === "context_compact");
+      expect(compactAlerts).toHaveLength(1);
+      expect(compactAlerts[0].severity).toBe("error");
+      expect(compactAlerts[0].count).toBe(3);
+    });
+
+    it("should not trigger when no _compact events", () => {
+      const events: ActivityEvent[] = [
+        makeActivityEvent({ toolName: "Write", summary: "Write app.tsx" }),
+      ];
+
+      const alerts = detectPatterns(events);
+      expect(alerts.filter((a) => a.type === "context_compact")).toEqual([]);
     });
   });
 
