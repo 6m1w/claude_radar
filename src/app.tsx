@@ -405,7 +405,7 @@ export function App() {
   return (
     <Box flexDirection="column" height={termRows}>
       {/* Row A: Minimal status — "● N active" + compaction marquee */}
-      <Box paddingX={1} flexShrink={0} height={1}>
+      <Box paddingX={1} flexShrink={0} height={1} overflow="hidden">
         <Text wrap="truncate">
           {totalActive > 0 ? (
             <>
@@ -902,9 +902,9 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
     : `${String(Math.round(metrics.netDown)).padStart(4)}K`;
 
   return (
-    <Box flexDirection="column" height={2}>
+    <Box flexDirection="column" height={2} overflow="hidden">
       {/* Metrics line */}
-      <Box>
+      <Box height={1} overflow="hidden">
         <Text color={C.warning}> {mascotFrame} </Text>
         <Text color={C.dim}>│ </Text>
         <Text color={C.subtext}>CPU </Text>
@@ -924,7 +924,7 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
       </Box>
 
       {/* Keyboard hints — context-aware */}
-      <Box>
+      <Box height={1} overflow="hidden">
         <Text color={C.primary} bold> {label} </Text>
         <Text color={C.dim}>│ </Text>
         {view === "agent" ? (
