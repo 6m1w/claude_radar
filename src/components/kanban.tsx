@@ -167,9 +167,18 @@ function RoadmapSwimLane({
       {withRoadmap.map((project) => {
         // Use primary roadmap file (most items)
         const primary = project.roadmap.reduce((best, r) => r.totalItems > best.totalItems ? r : best);
-        const todoItems = primary.sections.flatMap((s) => s.items.filter((it) => !it.done));
-        const doneItems = primary.sections.flatMap((s) => s.items.filter((it) => it.done));
-        const maxRows = Math.max(1, hideDone ? todoItems.length : Math.max(todoItems.length, doneItems.length));
+        // Section-level summaries: TODO = incomplete sections, DONE = complete sections
+        const todoSections = primary.sections.filter((s) => s.total > 0 && s.done < s.total);
+        const doneSections = primary.sections.filter((s) => s.total > 0 && s.done === s.total);
+        const MAX_SECTIONS = 5;
+        const todoVis = todoSections.slice(0, MAX_SECTIONS);
+        const doneVis = hideDone ? [] : doneSections.slice(0, MAX_SECTIONS);
+        const todoOverflow = Math.max(0, todoSections.length - MAX_SECTIONS);
+        const doneOverflow = hideDone ? 0 : Math.max(0, doneSections.length - MAX_SECTIONS);
+        const maxRows = Math.max(1, Math.max(
+          todoVis.length + (todoOverflow > 0 ? 1 : 0),
+          doneVis.length + (doneOverflow > 0 ? 1 : 0),
+        ));
 
         return (
           <Box key={project.projectPath} flexDirection="column">
@@ -180,7 +189,7 @@ function RoadmapSwimLane({
               {!hideDone && "┼" + "─".repeat(colWidths[1] + 1)}
             </Text>
 
-            {/* Rows: label column + TODO + DONE */}
+            {/* Rows: label column + TODO sections + DONE sections */}
             {Array.from({ length: maxRows }, (_, ri) => {
               let leftText = "";
               let leftColor = C.text;
@@ -192,8 +201,10 @@ function RoadmapSwimLane({
                 leftColor = C.subtext;
               }
 
-              const todoItem = todoItems[ri];
-              const doneItem = doneItems[ri];
+              const todoSec = todoVis[ri];
+              const doneSec = doneVis[ri];
+              const isTodoOverflow = !todoSec && ri === todoVis.length && todoOverflow > 0;
+              const isDoneOverflow = !doneSec && ri === doneVis.length && doneOverflow > 0;
 
               return (
                 <Box key={ri}>
@@ -202,23 +213,28 @@ function RoadmapSwimLane({
                   </Box>
                   <Sep />
                   <Box width={colWidths[0]} flexShrink={0}>
-                    {todoItem && (
+                    {todoSec ? (
                       <Text wrap="truncate">
                         <Text color={C.subtext}>┃ </Text>
-                        <Text color={C.text}>{todoItem.text}</Text>
+                        <Text color={C.text}>{truncateToWidth(todoSec.title, colWidths[0] - 10)}</Text>
+                        <Text color={C.dim}> {todoSec.done}/{todoSec.total}</Text>
                       </Text>
-                    )}
+                    ) : isTodoOverflow ? (
+                      <Text wrap="truncate" color={C.dim}>┃ +{todoOverflow} more sections</Text>
+                    ) : null}
                   </Box>
                   {!hideDone && (
                     <>
                       <Sep />
                       <Box width={colWidths[1]} flexShrink={0}>
-                        {doneItem && (
+                        {doneSec ? (
                           <Text wrap="truncate">
                             <Text color={C.dim}>┃ </Text>
-                            <Text color={C.dim} strikethrough>{doneItem.text}</Text>
+                            <Text color={C.dim}>{truncateToWidth(doneSec.title, colWidths[1] - 10)} {doneSec.done}/{doneSec.total}</Text>
                           </Text>
-                        )}
+                        ) : isDoneOverflow ? (
+                          <Text wrap="truncate" color={C.dim}>┃ +{doneOverflow} more sections</Text>
+                        ) : null}
                       </Box>
                     </>
                   )}
