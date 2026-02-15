@@ -189,7 +189,6 @@ export function App() {
   }, [viewProjects]);
 
   const current = sorted[projectIdx];
-  const currentTasks = current?.tasks ?? [];
 
   // Layout calculation
   // Ink flex handles borders internally — only count truly fixed-height elements
@@ -205,11 +204,11 @@ export function App() {
   const roadmapHeight = Math.ceil(rowBHeight / 2);
   // Need at least 3 visible project lines in each half
   const showRoadmap = roadmapHeight - panelChrome >= 3;
-  // Reserve 2 lines for scroll indicators (▲ above / ▼ below) in worst case
-  const scrollIndicatorLines = 2;
-  const visibleProjects = showRoadmap
-    ? Math.max(3, rowBHeight - roadmapHeight - panelChrome - scrollIndicatorLines)
-    : Math.max(3, rowBHeight - panelChrome - scrollIndicatorLines);
+  // Content area inside Projects panel (total height minus chrome)
+  const projectsPanelHeight = showRoadmap ? rowBHeight - roadmapHeight : rowBHeight;
+  const projectsContentArea = projectsPanelHeight - panelChrome;
+  // Conservative estimate for scroll bounds (worst case: both ▲ and ▼ shown)
+  const visibleProjects = Math.max(3, projectsContentArea - 2);
 
   // Viewport scrolling
   const safeProjectIdx = Math.min(projectIdx, Math.max(0, sorted.length - 1));
@@ -274,12 +273,7 @@ export function App() {
     }
 
     if (focusedPanel === "tasks") {
-      if ((input === "j" || key.downArrow) && taskIdx < currentTasks.length - 1) {
-        setTaskIdx((i) => i + 1);
-      }
-      if ((input === "k" || key.upArrow) && taskIdx > 0) {
-        setTaskIdx((i) => i - 1);
-      }
+      // Panel [2] is read-only — no j/k task navigation. Only tab switching + Esc back.
       if (input === "g") { switchBottomTab("git"); setFocusedPanel("bottom"); }
       if (input === "s") { switchBottomTab("sessions"); setFocusedPanel("bottom"); }
       return;
@@ -477,10 +471,15 @@ export function App() {
     );
   }
 
-  // Visible slice of projects
-  const visSlice = sorted.slice(scrollOffset, scrollOffset + visibleProjects);
+  // Dynamic visible count — fill all available content lines, no wasted space
+  const hasAboveIndicator = scrollOffset > 0;
+  const maxRender = projectsContentArea - (hasAboveIndicator ? 1 : 0);
+  const itemsRemaining = sorted.length - scrollOffset;
+  const needsBelowIndicator = itemsRemaining > maxRender;
+  const renderCount = needsBelowIndicator ? maxRender - 1 : Math.min(maxRender, itemsRemaining);
+  const visSlice = sorted.slice(scrollOffset, scrollOffset + renderCount);
   const aboveCount = scrollOffset;
-  const belowCount = Math.max(0, sorted.length - scrollOffset - visibleProjects);
+  const belowCount = Math.max(0, sorted.length - scrollOffset - renderCount);
 
 
   return (
@@ -693,20 +692,15 @@ function RightPanel({
   const liveTasks = project.tasks.filter((t) => !t.gone);
   const goneTasks = project.tasks.filter((t) => t.gone);
   const isMultiAgent = project.agents.length > 1;
-  const liveIdLen = liveTasks.length > 0 ? Math.min(4, Math.max(...liveTasks.map((t) => t.id.length), 1)) : 1;
-
   const renderTask = (t: DisplayTask, idx: number) => {
     const isCursor = focused && idx === taskIdx;
     const isGone = !!t.gone;
     const icon = t.status === "completed" ? I.done : t.status === "in_progress" ? I.working : I.idle;
     const iconColor = isGone ? C.dim : t.status === "completed" ? C.success : t.status === "in_progress" ? C.warning : C.dim;
-    const showId = t.id.length <= 5;
-    const displayId = showId ? padStartToWidth(t.id, liveIdLen) : "";
     return (
       <Text wrap="truncate">
         <Text color={isCursor ? C.primary : C.dim}>{isCursor ? I.cursor : " "}{" "}</Text>
         <Text color={iconColor} dimColor={isGone}>{icon} </Text>
-        {showId && <Text color={isGone ? C.dim : C.subtext} dimColor={isGone}>#{displayId} </Text>}
         <Text color={isGone ? C.dim : t.status === "completed" ? C.dim : isCursor ? C.text : C.subtext} bold={!isGone && isCursor} dimColor={isGone} strikethrough={t.status === "completed"}>{t.subject}</Text>
         {!isGone && t.owner && <Text color={C.accent}> ({t.owner})</Text>}
         {!isGone && t.blockedBy && <Text color={C.error}> {I.blocked}#{t.blockedBy}</Text>}
@@ -715,10 +709,20 @@ function RightPanel({
     );
   };
 
+  // Task list — budget-aware rendering with overflow indicator
+  // Reserve lines for post-task sections (gone, task detail, Recent)
+  const postTaskReserve = (goneTasks.length > 0 ? 1 : 0)
+    + (focused ? 5 : 0)  // task detail: sep + header + info + maybe description
+    + 8;                  // Recent: sep + header + up to 5 events + buffer
+  const taskBudget = Math.max(3, cap - lines.length - postTaskReserve);
+  let taskLinesUsed = 0;
+  let taskOverflow = 0;
+
   if (isMultiAgent) {
     const agents = [...new Set(liveTasks.map((t) => t.owner ?? "unassigned"))];
     let flatIdx = 0;
     for (const agent of agents) {
+      if (taskLinesUsed >= taskBudget) { taskOverflow += liveTasks.filter((t) => (t.owner ?? "unassigned") === agent).length; continue; }
       const agentTasks = liveTasks.filter((t) => (t.owner ?? "unassigned") === agent);
       const detail = project.agentDetails.find((a) => a.name === agent);
       const processState = detail?.processState;
@@ -728,11 +732,21 @@ function RightPanel({
       const agentIcon = processState === "running" ? I.active : processState === "idle" ? I.idle : processState === "dead" ? "✕" : hasBlocked ? I.blocked : hasActive ? I.working : I.idle;
       const agentColor = agentStatus === "running" || agentStatus === "active" ? C.warning : agentStatus === "blocked" || agentStatus === "dead" ? C.error : C.dim;
       push(`ah-${agent}`, <Text wrap="truncate" color={agentColor}>  ── {agentIcon} {agent} ({agentStatus}) ──────────</Text>);
-      for (const t of agentTasks) push(`t-${t.id}`, renderTask(t, flatIdx++));
+      taskLinesUsed++;
+      for (const t of agentTasks) {
+        if (taskLinesUsed >= taskBudget) { taskOverflow++; continue; }
+        push(`t-${t.id}`, renderTask(t, flatIdx++));
+        taskLinesUsed++;
+      }
     }
   } else {
-    liveTasks.forEach((t, i) => push(`t-${t.id}`, renderTask(t, i)));
+    for (let i = 0; i < liveTasks.length; i++) {
+      if (taskLinesUsed >= taskBudget) { taskOverflow = liveTasks.length - i; break; }
+      push(`t-${liveTasks[i].id}`, renderTask(liveTasks[i], i));
+      taskLinesUsed++;
+    }
   }
+  if (taskOverflow > 0) push("tmore", <Text color={C.dim}>  ▼ {taskOverflow} more tasks</Text>);
   if (goneTasks.length > 0) push("gone", <Text color={C.dim}>  ▸ {goneTasks.length} archived</Text>);
 
   // Task detail (when focused on a live task)
@@ -1024,7 +1038,6 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
           </>
         ) : focusedPanel === "tasks" ? (
           <>
-            <Text color={C.success}>↑↓</Text><Text color={C.subtext}> nav tasks  </Text>
             <Text color={C.success}>g/s</Text><Text color={C.subtext}> bottom  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>

@@ -17,18 +17,38 @@ export function useWatchSessions(): {
   const [projects, setProjects] = useState<MergedProjectData[]>([]);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const prevSnapshotRef = useRef<string>("");
+  const prevProjectsRef = useRef<MergedProjectData[]>([]);
   const storeRef = useRef(initStore());
 
   // Shared refresh logic — scan + merge + diff + setState
   const refresh = useCallback(() => {
     const current = scanAll();
     const currentMerged = mergeAndPersist(current.projects, storeRef.current);
-    const key = snapshotKey(currentMerged);
+
+    // Anti-flicker: if a project's task count drops drastically (transient file wipe),
+    // keep previous snapshot for that project. Only accept gradual decreases.
+    const prev = prevProjectsRef.current;
+    const stabilized = prev.length > 0 ? currentMerged.map((p) => {
+      const prevP = prev.find((pp) => pp.projectPath === p.projectPath);
+      if (!prevP) return p;
+      const prevCount = prevP.sessions.flatMap((s) => s.items).length;
+      const currCount = p.sessions.flatMap((s) => s.items).length;
+      // Sudden drop from >=3 to <50% = transient wipe, keep previous tasks
+      if (prevCount >= 3 && currCount < prevCount * 0.5) {
+        return { ...p, sessions: prevP.sessions };
+      }
+      return p;
+    }) : currentMerged;
+
+    const key = snapshotKey(stabilized);
     if (key !== prevSnapshotRef.current) {
       prevSnapshotRef.current = key;
+      prevProjectsRef.current = stabilized;
       setSessions(current.sessions);
-      setProjects(currentMerged);
+      setProjects(stabilized);
       setLastUpdate(new Date());
+    } else {
+      prevProjectsRef.current = stabilized;
     }
   }, []);
 
