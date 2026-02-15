@@ -248,7 +248,7 @@ function AgentTaskCard({ task, column }: {
     <Text wrap="truncate">
       <Text color={iconColor}>{icon} </Text>
       <Text
-        color={column === "done" || task.gone ? C.dim : C.text}
+        color={column === "done" ? C.dim : C.text}
         strikethrough={column === "done"}
       >
         {idPrefix}{task.subject}
@@ -302,10 +302,15 @@ function ByAgentLayout({
     const buckets = buildBuckets(project);
     const allGroups = [buckets.needs_input, buckets.doing, buckets.todo];
     if (!hideDone) allGroups.push(buckets.done.slice(0, 5));
-    const taskCount = allGroups.reduce((s, b) => s + b.length, 0);
-    const visible = Math.min(taskCount, MAX_TASKS);
-    const overflow = taskCount > MAX_TASKS ? 1 : 0;
-    return { project, height: 1 + visible + overflow }; // header + tasks + overflow
+    let goneN = 0;
+    const liveCount = allGroups.reduce((s, b) => {
+      for (const t of b) { if (t.gone) goneN++; else s++; }
+      return s;
+    }, 0);
+    const visible = Math.min(liveCount, MAX_TASKS);
+    const overflow = liveCount > MAX_TASKS ? 1 : 0;
+    const archivedLine = goneN > 0 ? 1 : 0;
+    return { project, height: 1 + visible + overflow + archivedLine };
   });
 
   // Compute visible range: ensure safeCursor is in viewport
@@ -352,24 +357,28 @@ function ByAgentLayout({
         const stateIcon = processState === "running" ? "\u25CF" : "\u25CB";
         const stateColor = processState === "running" ? C.warning : C.dim;
 
-        // Progress
-        const remaining = buckets.todo.length + buckets.needs_input.length + buckets.doing.length;
-        const attention = buckets.needs_input.length;
+        // Progress (exclude gone tasks from counts)
+        const remaining = [...buckets.todo, ...buckets.needs_input, ...buckets.doing].filter((t) => !t.gone).length;
+        const attention = buckets.needs_input.filter((t) => !t.gone).length;
         const progressStr = remaining > 0
           ? `${remaining} remaining${attention > 0 ? ` \u00b7 ${attention}!` : ""}`
           : "all done";
         const branchStr = truncateToWidth(project.branch, 18);
 
-        // Collect all tasks in priority order, cap at MAX_TASKS
+        // Collect live tasks in priority order (exclude gone), cap at MAX_TASKS
         type TaggedTask = { task: DisplayTask; col: KanbanColumn };
         const allTasks: TaggedTask[] = [];
+        let goneCount = 0;
         for (const [col, tasks] of [
           ["needs_input", buckets.needs_input],
           ["doing", buckets.doing],
           ["todo", buckets.todo],
           ...(!hideDone && buckets.done.length > 0 ? [["done", buckets.done.slice(0, 5)]] : []),
         ] as [KanbanColumn, DisplayTask[]][]) {
-          for (const task of tasks) allTasks.push({ task, col });
+          for (const task of tasks) {
+            if (task.gone) { goneCount++; continue; }
+            allTasks.push({ task, col });
+          }
         }
         const visibleTasks = allTasks.slice(0, MAX_TASKS);
         const overflow = Math.max(0, allTasks.length - MAX_TASKS);
@@ -396,6 +405,9 @@ function ByAgentLayout({
             ))}
             {overflow > 0 && (
               <Text wrap="truncate" color={C.dim}>  +{overflow} more</Text>
+            )}
+            {goneCount > 0 && (
+              <Text wrap="truncate" color={C.dim}>  ▸ {goneCount} archived</Text>
             )}
           </Box>
         );
