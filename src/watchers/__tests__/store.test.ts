@@ -205,12 +205,12 @@ describe("Store", () => {
     it("should un-mark item when it reappears in live session", () => {
       const store = new Store();
       const fullSession = makeSession({
-        items: [makeTaskItem({ id: "1" }), makeTaskItem({ id: "2" })],
+        items: [makeTaskItem({ id: "1", subject: "Task A" }), makeTaskItem({ id: "2", subject: "Task B" })],
       });
       store.merge([makeProject({ sessions: [fullSession] })]);
 
       // Task 2 disappears
-      const partialSession = makeSession({ items: [makeTaskItem({ id: "1" })] });
+      const partialSession = makeSession({ items: [makeTaskItem({ id: "1", subject: "Task A" })] });
       store.merge([makeProject({ sessions: [partialSession] })]);
 
       // Task 2 reappears
@@ -242,9 +242,9 @@ describe("Store", () => {
       store.merge([makeProject({
         sessions: [makeSession({
           items: [
-            makeTaskItem({ id: "1", status: "completed" }),
-            makeTaskItem({ id: "2", status: "completed" }),
-            makeTaskItem({ id: "3", status: "pending" }),
+            makeTaskItem({ id: "1", subject: "Task A", status: "completed" }),
+            makeTaskItem({ id: "2", subject: "Task B", status: "completed" }),
+            makeTaskItem({ id: "3", subject: "Task C", status: "pending" }),
           ],
         })],
       })]);
@@ -252,7 +252,7 @@ describe("Store", () => {
       // Tasks 2 and 3 disappear from live
       const merged = store.merge([makeProject({
         sessions: [makeSession({
-          items: [makeTaskItem({ id: "1", status: "completed" })],
+          items: [makeTaskItem({ id: "1", subject: "Task A", status: "completed" })],
         })],
       })]);
 
@@ -1094,11 +1094,13 @@ describe("compact events", () => {
       },
     }]);
 
-    const { planningLog, activityLog } = store.getActivitySplit("/test/project");
-    expect(activityLog).toHaveLength(1);
-    expect(activityLog[0].toolName).toBe("_compact");
-    expect(activityLog[0].summary).toContain("Context compacted");
-    expect(planningLog).toHaveLength(0);
+    const events = store.getEvents("/test/project");
+    const planning = events.filter((e) => e.isPlanning);
+    const activity = events.filter((e) => !e.isPlanning);
+    expect(activity).toHaveLength(1);
+    expect(activity[0].toolName).toBe("_compact");
+    expect(activity[0].summary).toContain("Context compacted");
+    expect(planning).toHaveLength(0);
   });
 });
 
@@ -1354,7 +1356,7 @@ describe("detectPatterns", () => {
       expect(compactAlerts).toHaveLength(1);
       expect(compactAlerts[0].severity).toBe("warning");
       expect(compactAlerts[0].count).toBe(1);
-      expect(compactAlerts[0].message).toBe("Context compacted");
+      expect(compactAlerts[0].message).toBe("Context compacted — session history compressed");
     });
 
     it("should detect multiple compactions as error (3+)", () => {
@@ -1424,15 +1426,17 @@ describe("activity split — planningLog vs activityLog", () => {
       makeHookEvent({ data: { session_id: "s1", cwd: "/test/project", tool_name: "Bash", tool_input: { command: "npm test" } } }),
     ]);
 
-    const { planningLog, activityLog } = store.getActivitySplit("/test/project");
+    const events = store.getEvents("/test/project");
+    const planning = events.filter((e) => e.isPlanning);
+    const activity = events.filter((e) => !e.isPlanning);
 
     // Planning: EnterPlanMode, TaskCreate, ExitPlanMode
-    expect(planningLog).toHaveLength(3);
-    expect(planningLog.map((e) => e.toolName)).toEqual(["EnterPlanMode", "TaskCreate", "ExitPlanMode"]);
+    expect(planning).toHaveLength(3);
+    expect(planning.map((e) => e.toolName)).toEqual(["EnterPlanMode", "TaskCreate", "ExitPlanMode"]);
 
     // Activity: Read, Write, Bash
-    expect(activityLog).toHaveLength(3);
-    expect(activityLog.map((e) => e.toolName)).toEqual(["Read", "Write", "Bash"]);
+    expect(activity).toHaveLength(3);
+    expect(activity.map((e) => e.toolName)).toEqual(["Read", "Write", "Bash"]);
   });
 
   it("should include Task tool in planningLog", () => {
@@ -1443,21 +1447,22 @@ describe("activity split — planningLog vs activityLog", () => {
       makeHookEvent({ data: { session_id: "s1", cwd: "/test/project", tool_name: "Grep", tool_input: { pattern: "TODO" } } }),
     ]);
 
-    const { planningLog, activityLog } = store.getActivitySplit("/test/project");
-    expect(planningLog).toHaveLength(1);
-    expect(planningLog[0].toolName).toBe("Task");
-    expect(activityLog).toHaveLength(1);
-    expect(activityLog[0].toolName).toBe("Grep");
+    const events = store.getEvents("/test/project");
+    const planning = events.filter((e) => e.isPlanning);
+    const activity = events.filter((e) => !e.isPlanning);
+    expect(planning).toHaveLength(1);
+    expect(planning[0].toolName).toBe("Task");
+    expect(activity).toHaveLength(1);
+    expect(activity[0].toolName).toBe("Grep");
   });
 
-  it("should return empty arrays for unknown project", () => {
+  it("should return empty array for unknown project", () => {
     const store = new Store();
-    const { planningLog, activityLog } = store.getActivitySplit("/nonexistent");
-    expect(planningLog).toEqual([]);
-    expect(activityLog).toEqual([]);
+    const events = store.getEvents("/nonexistent");
+    expect(events).toEqual([]);
   });
 
-  it("should propagate planningLog through merge", () => {
+  it("should propagate events with isPlanning through merge", () => {
     const store = new Store();
 
     ingestHookEvents(store, [
@@ -1467,20 +1472,229 @@ describe("activity split — planningLog vs activityLog", () => {
     ]);
 
     const merged = store.merge([makeProject({ projectPath: "/test/project" })]);
-    expect(merged[0].planningLog).toHaveLength(2); // EnterPlanMode + Task
-    expect(merged[0].activityLog).toHaveLength(1); // Read
+    expect(merged[0].events).toHaveLength(3); // all events in single stream
+    expect(merged[0].events.filter((e) => e.isPlanning)).toHaveLength(2); // EnterPlanMode + Task
+    expect(merged[0].events.filter((e) => !e.isPlanning)).toHaveLength(1); // Read
+    // Deprecated compat still works
+    expect(merged[0].planningLog).toHaveLength(2);
+    expect(merged[0].activityLog).toHaveLength(1);
   });
 
-  it("should classify all PLANNING_TOOLS correctly", () => {
-    // Verify every tool in the set is actually classified as planning
+  it("should classify all PLANNING_TOOLS with isPlanning=true", () => {
+    // Verify every tool in the set is tagged with isPlanning
     for (const tool of PLANNING_TOOLS) {
       const store = new Store();
       ingestHookEvents(store, [
         makeHookEvent({ data: { session_id: "s1", cwd: "/test/p", tool_name: tool, tool_input: {} } }),
       ]);
-      const { planningLog } = store.getActivitySplit("/test/p");
-      expect(planningLog).toHaveLength(1);
-      expect(planningLog[0].toolName).toBe(tool);
+      const events = store.getEvents("/test/p");
+      expect(events).toHaveLength(1);
+      expect(events[0].toolName).toBe(tool);
+      expect(events[0].isPlanning).toBe(true);
     }
+  });
+});
+
+// ─── Canonical isActive (Step 48) ─────────────────────────────
+
+describe("canonical isActive", () => {
+  it("should be true when hook sessions exist (even if scanner says inactive)", () => {
+    const store = new Store();
+    // Register a hook session
+    store.markSessionStarted("/test/project", "s1", new Date().toISOString());
+
+    const project = makeProject({
+      projectPath: "/test/project",
+      isActive: false,       // scanner says inactive
+      activeSessions: 0,
+    });
+    const merged = store.merge([project]);
+
+    expect(merged[0].isActive).toBe(true);
+    expect(merged[0].hookSessions).toHaveLength(1);
+  });
+
+  it("should be true when scanner detected active JSONL sessions", () => {
+    const store = new Store();
+    const project = makeProject({
+      projectPath: "/test/project",
+      isActive: false,       // scanner's overall flag
+      activeSessions: 1,     // but has active JSONL sessions
+    });
+    const merged = store.merge([project]);
+
+    expect(merged[0].isActive).toBe(true);
+  });
+
+  it("should be true when in-progress tasks exist and scanner says active", () => {
+    const store = new Store();
+    const project = makeProject({
+      projectPath: "/test/project",
+      isActive: true,        // scanner says active (recent activity)
+      activeSessions: 0,
+      sessions: [makeSession({ items: [makeTaskItem({ status: "in_progress" })] })],
+    });
+    const merged = store.merge([project]);
+
+    expect(merged[0].isActive).toBe(true);
+  });
+
+  it("should be false when no hook sessions, no active sessions, no recent tasks", () => {
+    const store = new Store();
+    const project = makeProject({
+      projectPath: "/test/project",
+      isActive: false,
+      activeSessions: 0,
+      sessions: [makeSession({ items: [makeTaskItem({ status: "completed" })] })],
+    });
+    const merged = store.merge([project]);
+
+    expect(merged[0].isActive).toBe(false);
+  });
+
+  it("should override scanner isActive=true when hook says otherwise", () => {
+    // Scanner may say active due to stale heuristic, but if:
+    // - no hook sessions
+    // - no active JSONL sessions
+    // - no in-progress tasks (all completed)
+    // then canonical should be false
+    const store = new Store();
+    const project = makeProject({
+      projectPath: "/test/project",
+      isActive: true,        // scanner says active (stale heuristic)
+      activeSessions: 0,
+      sessions: [makeSession({ items: [makeTaskItem({ status: "completed" })] })],
+      inProgressTasks: 0,
+    });
+    const merged = store.merge([project]);
+
+    // inProgressTasks=0 means the third condition fails
+    expect(merged[0].isActive).toBe(false);
+  });
+});
+
+// ─── Task dedup (Step 55) ─────────────────────────────────────
+
+describe("task dedup", () => {
+  it("should deduplicate TodoItem and TaskItem with same text", () => {
+    const store = new Store();
+    const project = makeProject({
+      sessions: [
+        makeSession({
+          id: "todos-session",
+          source: "todos",
+          items: [makeTodoItem({ content: "Step 47: Increase PROCESS_CACHE_MS", status: "pending" })],
+        }),
+        makeSession({
+          id: "tasks-session",
+          source: "tasks",
+          items: [makeTaskItem({ id: "t1", subject: "Step 47: Increase PROCESS_CACHE_MS", status: "completed", owner: "main" })],
+        }),
+      ],
+    });
+
+    const merged = store.merge([project]);
+    const allItems = merged[0].sessions.flatMap((s) => s.items);
+
+    // Should deduplicate to 1 item
+    expect(allItems).toHaveLength(1);
+    // Should keep TaskItem (richer metadata)
+    expect("id" in allItems[0]).toBe(true);
+    // Should keep highest status
+    expect(allItems[0].status).toBe("completed");
+  });
+
+  it("should keep both items when text differs", () => {
+    const store = new Store();
+    const project = makeProject({
+      sessions: [
+        makeSession({
+          id: "todos-session",
+          source: "todos",
+          items: [makeTodoItem({ content: "Step 47: Increase cache", status: "pending" })],
+        }),
+        makeSession({
+          id: "tasks-session",
+          source: "tasks",
+          items: [makeTaskItem({ id: "t1", subject: "Step 46: Git HEAD watch", status: "in_progress" })],
+        }),
+      ],
+    });
+
+    const merged = store.merge([project]);
+    const allItems = merged[0].sessions.flatMap((s) => s.items);
+    expect(allItems).toHaveLength(2);
+  });
+
+  it("should prefer TaskItem over TodoItem at same status", () => {
+    const store = new Store();
+    const project = makeProject({
+      sessions: [
+        makeSession({
+          id: "s1",
+          source: "todos",
+          items: [makeTodoItem({ content: "Build scanner", status: "in_progress" })],
+        }),
+        makeSession({
+          id: "s2",
+          source: "tasks",
+          items: [makeTaskItem({ id: "t1", subject: "Build scanner", status: "in_progress", owner: "agent-1" })],
+        }),
+      ],
+    });
+
+    const merged = store.merge([project]);
+    const allItems = merged[0].sessions.flatMap((s) => s.items);
+    expect(allItems).toHaveLength(1);
+    // TaskItem wins (has owner, id, etc.)
+    expect("id" in allItems[0]).toBe(true);
+  });
+
+  it("should handle case-insensitive matching", () => {
+    const store = new Store();
+    const project = makeProject({
+      sessions: [
+        makeSession({
+          id: "s1",
+          items: [makeTodoItem({ content: "FIX BUG", status: "pending" })],
+        }),
+        makeSession({
+          id: "s2",
+          items: [makeTaskItem({ id: "t1", subject: "fix bug", status: "completed" })],
+        }),
+      ],
+    });
+
+    const merged = store.merge([project]);
+    const allItems = merged[0].sessions.flatMap((s) => s.items);
+    expect(allItems).toHaveLength(1);
+    expect(allItems[0].status).toBe("completed");
+  });
+
+  it("should update totalTasks count after dedup", () => {
+    const store = new Store();
+    const project = makeProject({
+      sessions: [
+        makeSession({
+          id: "s1",
+          items: [
+            makeTodoItem({ content: "Task A", status: "pending" }),
+            makeTodoItem({ content: "Task B", status: "completed" }),
+          ],
+        }),
+        makeSession({
+          id: "s2",
+          items: [
+            makeTaskItem({ id: "t1", subject: "Task A", status: "in_progress" }),
+          ],
+        }),
+      ],
+    });
+
+    const merged = store.merge([project]);
+    // Task A deduped: 3 → 2
+    expect(merged[0].totalTasks).toBe(2);
+    expect(merged[0].inProgressTasks).toBe(1); // Task A kept as in_progress (TaskItem)
+    expect(merged[0].completedTasks).toBe(1);  // Task B
   });
 });

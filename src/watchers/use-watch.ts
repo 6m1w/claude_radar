@@ -77,13 +77,11 @@ function snapshotKey(projects: MergedProjectData[]): string {
         .map((i) => ("id" in i ? `${i.id}:${i.status}` : `${i.content}:${i.status}`))
         .join(",");
       const gitHead = p.gitLog?.[0]?.hash ?? "";
-      const actLen = p.activityLog?.length ?? 0;
-      const actLast = p.activityLog?.[actLen - 1]?.ts ?? "";
-      const planLen = p.planningLog?.length ?? 0;
-      const planLast = p.planningLog?.[planLen - 1]?.ts ?? "";
+      const evtLen = p.events?.length ?? 0;
+      const evtLast = p.events?.[evtLen - 1]?.ts ?? "";
       const alertKey = p.activityAlerts?.map((a) => `${a.type}:${a.count}`).join(",") ?? "";
       const roadmapKey = p.roadmap?.map((r) => `${r.source}:${r.totalDone}/${r.totalItems}`).join(",") ?? "";
-      return `${p.projectPath}|s=${p.totalSessions}|a=${p.activeSessions}|b=${p.gitBranch ?? ""}|gl=${gitHead}|h=${p.hasHistory}|g=${p.goneSessionCount}|act=${actLen}:${actLast}|plan=${planLen}:${planLast}|alerts=${alertKey}|rm=${roadmapKey}|t=${taskKey}`;
+      return `${p.projectPath}|s=${p.totalSessions}|a=${p.activeSessions}|b=${p.gitBranch ?? ""}|gl=${gitHead}|h=${p.hasHistory}|g=${p.goneSessionCount}|evt=${evtLen}:${evtLast}|alerts=${alertKey}|rm=${roadmapKey}|t=${taskKey}`;
     })
     .join("||");
 }

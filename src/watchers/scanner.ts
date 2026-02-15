@@ -11,6 +11,44 @@ const TASKS_DIR = join(CLAUDE_DIR, "tasks");
 const PROJECTS_DIR = join(CLAUDE_DIR, "projects");
 const TEAMS_DIR = join(CLAUDE_DIR, "teams");
 
+// ─── Phase interval config ───────────────────────────────────────
+interface ScanConfig {
+  discoverIntervalMs: number;   // Phase 1: project discovery
+  teamsIntervalMs: number;      // Phase 6: team scanning
+}
+
+const DEFAULT_SCAN_CONFIG: ScanConfig = {
+  discoverIntervalMs: 3_000,    // always re-discover (cheap, no subprocess)
+  teamsIntervalMs: 10_000,      // teams rarely change mid-session
+};
+
+let scanConfig: ScanConfig | null = null;
+
+function loadScanConfig(): ScanConfig {
+  if (scanConfig) return scanConfig;
+  try {
+    const configPath = join(homedir(), ".claude-radar", "config.json");
+    const raw = readJson<{ scan?: Partial<ScanConfig> }>(configPath);
+    scanConfig = { ...DEFAULT_SCAN_CONFIG, ...raw?.scan };
+  } catch {
+    scanConfig = { ...DEFAULT_SCAN_CONFIG };
+  }
+  return scanConfig;
+}
+
+// Per-phase last-run timestamps for interval gating
+const phaseLastRun = new Map<string, number>();
+
+function shouldRunPhase(phase: string, intervalMs: number): boolean {
+  const now = Date.now();
+  const last = phaseLastRun.get(phase) ?? 0;
+  if (now - last >= intervalMs) {
+    phaseLastRun.set(phase, now);
+    return true;
+  }
+  return false;
+}
+
 // Sessions modified within this window are considered "active"
 const ACTIVE_THRESHOLD_MS = 5 * 60 * 1000;
 
@@ -53,6 +91,10 @@ interface DiscoveredProject {
   lastSessionActivity: Date;
   recentSessions: SessionHistoryEntry[];  // from sessions-index entries
 }
+
+// Cached results for gated phases (declared after interfaces)
+let cachedDiscoveredProjects: DiscoveredProject[] | null = null;
+let cachedTeams: Map<string, TeamConfig> | null = null;
 
 function discoverProjects(): DiscoveredProject[] {
   const results: DiscoveredProject[] = [];
@@ -236,7 +278,47 @@ function resolveSegments(base: string, segments: string[]): string {
 }
 
 // ─── Phase 2: Read git info from actual project directory ───────
-function readGitInfo(projectPath: string): { branch: string; worktreeOf?: string } | undefined {
+
+// Parse .git/packed-refs for repos that use packed refs (after gc)
+function readPackedRef(gitDir: string, refName: string): string | undefined {
+  try {
+    const packedPath = join(gitDir, "packed-refs");
+    if (!existsSync(packedPath)) return undefined;
+    const content = readFileSync(packedPath, "utf-8");
+    for (const line of content.split("\n")) {
+      if (line.startsWith("#") || !line.trim()) continue;
+      const [hash, ref] = line.trim().split(/\s+/);
+      if (ref === refName) return hash;
+    }
+  } catch { /* ignore */ }
+  return undefined;
+}
+
+// Resolve the commit SHA that HEAD points to (for cache invalidation)
+function resolveHeadCommit(gitDir: string, headContent: string): string | undefined {
+  if (!headContent.startsWith("ref: ")) {
+    // Detached HEAD — headContent IS the hash
+    return headContent;
+  }
+  const refName = headContent.slice(5); // "refs/heads/<branch>"
+  // Try loose ref first
+  const loosePath = join(gitDir, refName);
+  try {
+    if (existsSync(loosePath)) {
+      return readFileSync(loosePath, "utf-8").trim();
+    }
+  } catch { /* fall through */ }
+  // Try packed-refs
+  return readPackedRef(gitDir, refName);
+}
+
+interface GitInfo {
+  branch: string;
+  worktreeOf?: string;
+  headCommit?: string;
+}
+
+function readGitInfo(projectPath: string): GitInfo | undefined {
   try {
     const dotGit = join(projectPath, ".git");
     if (!existsSync(dotGit)) return undefined;
@@ -261,18 +343,21 @@ function readGitInfo(projectPath: string): { branch: string; worktreeOf?: string
       const branch = headContent.startsWith("ref: refs/heads/")
         ? headContent.replace("ref: refs/heads/", "")
         : headContent.slice(0, 8);
-      return { branch, worktreeOf: mainRepo };
+      // Resolve commit: worktree refs live in main .git dir
+      const mainGitDir = worktreesIdx >= 0 ? gitdir.slice(0, worktreesIdx) + "/.git" : gitdir;
+      const headCommit = resolveHeadCommit(mainGitDir, headContent);
+      return { branch, worktreeOf: mainRepo, headCommit };
     }
 
     // Normal .git directory
     const headPath = join(dotGit, "HEAD");
     if (!existsSync(headPath)) return undefined;
     headContent = readFileSync(headPath, "utf-8").trim();
-    if (headContent.startsWith("ref: refs/heads/")) {
-      return { branch: headContent.replace("ref: refs/heads/", "") };
-    }
-    // Detached HEAD — show short hash
-    return { branch: headContent.slice(0, 8) };
+    const branch = headContent.startsWith("ref: refs/heads/")
+      ? headContent.replace("ref: refs/heads/", "")
+      : headContent.slice(0, 8);
+    const headCommit = resolveHeadCommit(dotGit, headContent);
+    return { branch, headCommit };
   } catch {
     return undefined;
   }
@@ -367,19 +452,150 @@ function dedupeRoadmap(entries: RoadmapData[]): RoadmapData[] {
 }
 
 // ─── Phase 3c: Read git log from project directory ───────────────
-function readGitLog(projectPath: string): GitCommit[] {
+
+// Cache: skip git log subprocess when HEAD commit hasn't changed
+const gitLogCache = new Map<string, { headCommit: string; log: GitCommit[]; cachedAt: number }>();
+const GIT_LOG_CACHE_FALLBACK_MS = 30_000; // time-based fallback when headCommit unavailable
+
+function readGitLog(projectPath: string, headCommit?: string): GitCommit[] {
   try {
     if (!existsSync(join(projectPath, ".git"))) return [];
+
+    const cached = gitLogCache.get(projectPath);
+    if (cached) {
+      if (headCommit && cached.headCommit === headCommit) {
+        // Commit-based cache hit — HEAD unchanged
+        return cached.log;
+      }
+      if (!headCommit && Date.now() - cached.cachedAt < GIT_LOG_CACHE_FALLBACK_MS) {
+        // Time-based fallback when we can't resolve headCommit (packed refs edge case)
+        return cached.log;
+      }
+    }
+
     const raw = execSync(
       `git log --format="%aI|||%h|||%s" -n 20`,
       { cwd: projectPath, encoding: "utf-8", timeout: 3000, stdio: ["pipe", "pipe", "pipe"] }
     );
-    return raw.trim().split("\n").filter(Boolean).map((line) => {
+    const log = raw.trim().split("\n").filter(Boolean).map((line) => {
       const [authorDate, hash, subject] = line.split("|||");
       const typeMatch = subject?.match(/^(\w+)[:(]/);
       return { hash: hash ?? "", subject: subject ?? "", authorDate: authorDate ?? "", type: typeMatch?.[1] };
     });
+
+    gitLogCache.set(projectPath, { headCommit: headCommit ?? "", log, cachedAt: Date.now() });
+    return log;
   } catch { return []; }
+}
+
+// ─── Phase 3b cache: mtime-based docs/roadmap cache ──────────────
+
+interface DocsCacheEntry {
+  docs: string[];
+  roadmap: RoadmapData[];
+  docContents: Record<string, string>;
+  fileMtimes: Map<string, number>;  // relPath → mtimeMs
+  dirMtimeMs: number;               // directory mtime (catches add/delete)
+  lastFullScanMs: number;           // time of last uncached scan
+}
+
+const docsCache = new Map<string, DocsCacheEntry>();
+const DOCS_CACHE_FALLBACK_MS = 30_000; // full re-scan safety net
+
+function getCachedDocs(
+  projectPath: string,
+  worktreeOf?: string,
+): { docs: string[]; roadmap: RoadmapData[]; docContents: Record<string, string> } {
+  const cached = docsCache.get(projectPath);
+  const now = Date.now();
+
+  if (cached) {
+    // Check directory mtime (catches file add/delete)
+    let dirChanged = false;
+    const searchPaths = worktreeOf ? [projectPath, worktreeOf] : [projectPath];
+    for (const base of searchPaths) {
+      try {
+        const dirMtime = statSync(base).mtimeMs;
+        // Also check docs/ subdirectory if it exists
+        const docsDir = join(base, "docs");
+        const docsDirMtime = existsSync(docsDir) ? statSync(docsDir).mtimeMs : 0;
+        if (dirMtime > cached.dirMtimeMs || docsDirMtime > cached.dirMtimeMs) {
+          dirChanged = true;
+          break;
+        }
+      } catch { /* skip */ }
+    }
+
+    // Check individual file mtimes (catches content edits without dir change)
+    let fileChanged = false;
+    if (!dirChanged) {
+      for (const [relPath, cachedMtime] of cached.fileMtimes) {
+        for (const base of searchPaths) {
+          try {
+            const currentMtime = statSync(join(base, relPath)).mtimeMs;
+            if (currentMtime > cachedMtime) {
+              fileChanged = true;
+              break;
+            }
+          } catch { /* file might have been deleted — dir mtime should catch it */ }
+        }
+        if (fileChanged) break;
+      }
+    }
+
+    // 30s full-scan fallback safety net
+    const stale = now - cached.lastFullScanMs > DOCS_CACHE_FALLBACK_MS;
+
+    if (!dirChanged && !fileChanged && !stale) {
+      return { docs: cached.docs, roadmap: cached.roadmap, docContents: cached.docContents };
+    }
+  }
+
+  // Cache miss — run full scan
+  const docs = detectDocs(projectPath, worktreeOf);
+  const mdSearchPaths = worktreeOf ? [projectPath, worktreeOf] : [projectPath];
+  const roadmap = dedupeRoadmap(mdSearchPaths.flatMap(detectRoadmap));
+  const docContents = readDocContents(projectPath, docs, worktreeOf);
+
+  // Record file mtimes for next cache check
+  const fileMtimes = new Map<string, number>();
+  const searchPaths = worktreeOf ? [projectPath, worktreeOf] : [projectPath];
+  for (const relPath of docs) {
+    for (const base of searchPaths) {
+      try {
+        fileMtimes.set(relPath, statSync(join(base, relPath)).mtimeMs);
+        break;
+      } catch { /* skip */ }
+    }
+  }
+
+  // Also track mtime of roadmap source files
+  for (const rd of roadmap) {
+    if (!fileMtimes.has(rd.source)) {
+      for (const base of searchPaths) {
+        try {
+          fileMtimes.set(rd.source, statSync(join(base, rd.source)).mtimeMs);
+          break;
+        } catch { /* skip */ }
+      }
+    }
+  }
+
+  let dirMtimeMs = 0;
+  for (const base of searchPaths) {
+    try {
+      const m = statSync(base).mtimeMs;
+      if (m > dirMtimeMs) dirMtimeMs = m;
+      const docsDir = join(base, "docs");
+      if (existsSync(docsDir)) {
+        const dm = statSync(docsDir).mtimeMs;
+        if (dm > dirMtimeMs) dirMtimeMs = dm;
+      }
+    } catch { /* skip */ }
+  }
+
+  docsCache.set(projectPath, { docs, roadmap, docContents, fileMtimes, dirMtimeMs, lastFullScanMs: now });
+  return { docs, roadmap, docContents };
 }
 
 // ─── Phase 3c: Read doc file contents ────────────────────────────
@@ -535,7 +751,7 @@ function isTeamTaskDir(dirName: string, teams: Map<string, TeamConfig>): boolean
 // Cached process list — refreshed once per scan cycle
 let cachedProcessList: string | null = null;
 let cachedProcessTime = 0;
-const PROCESS_CACHE_MS = 5000;
+const PROCESS_CACHE_MS = 15_000;
 
 function getProcessList(): string {
   const now = Date.now();
@@ -629,11 +845,19 @@ function findTeamForProject(
 
 // ─── Main: project-centric scan ─────────────────────────────────
 export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } {
-  // Phase 1: Discover all projects
-  const discovered = discoverProjects();
+  const config = loadScanConfig();
 
-  // Phase 6: Scan teams
-  const teams = scanTeams();
+  // Phase 1: Discover all projects (interval-gated)
+  if (shouldRunPhase("discover", config.discoverIntervalMs) || !cachedDiscoveredProjects) {
+    cachedDiscoveredProjects = discoverProjects();
+  }
+  const discovered = cachedDiscoveredProjects;
+
+  // Phase 6: Scan teams (interval-gated)
+  if (shouldRunPhase("teams", config.teamsIntervalMs) || !cachedTeams) {
+    cachedTeams = scanTeams();
+  }
+  const teams = cachedTeams;
 
   // Phase 2-4: Build session index, scan tasks/todos
   const sessionIndex = buildSessionIndex(discovered);
@@ -693,13 +917,8 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
 
     // For worktrees, also search the main repo for docs and roadmap
     // (worktrees may not have untracked/gitignored dirs like docs/)
-    const mdSearchPaths = git?.worktreeOf
-      ? [disc.projectPath, git.worktreeOf]
-      : [disc.projectPath];
-    const docs = detectDocs(disc.projectPath, git?.worktreeOf);
-    const roadmap = dedupeRoadmap(mdSearchPaths.flatMap(detectRoadmap));
-    const gitLog = readGitLog(disc.projectPath);
-    const docContents = readDocContents(disc.projectPath, docs, git?.worktreeOf);
+    const { docs, roadmap, docContents } = getCachedDocs(disc.projectPath, git?.worktreeOf);
+    const gitLog = readGitLog(disc.projectPath, git?.headCommit);
 
     // Determine last activity: max of session file activity and task data
     const taskActivity = sessions.length > 0

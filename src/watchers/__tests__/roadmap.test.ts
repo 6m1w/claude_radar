@@ -164,6 +164,135 @@ More text.`;
     expect(sections[0].total).toBe(1);
     expect(sections[0].items[0].text).toBe("Real checkbox");
   });
+
+  // ─── Step 51: Code fence filter ─────────────────────────────
+
+  it("should skip checkboxes inside code fences", () => {
+    const md = `## Features
+- [x] Real feature
+\`\`\`markdown
+- [x] Fake checkbox in code block
+- [ ] Another fake
+\`\`\`
+- [ ] Another real feature`;
+    const sections = parseCheckboxes(md);
+    expect(sections).toHaveLength(1);
+    expect(sections[0].total).toBe(2);
+    expect(sections[0].items[0].text).toBe("Real feature");
+    expect(sections[0].items[1].text).toBe("Another real feature");
+  });
+
+  it("should handle code fences with language tags", () => {
+    const md = `## Tasks
+- [x] Done
+\`\`\`typescript
+// - [x] This is code, not a checkbox
+const panel = "[4] GIT LOG";
+\`\`\`
+- [ ] Pending`;
+    const sections = parseCheckboxes(md);
+    expect(sections[0].total).toBe(2);
+  });
+
+  it("should handle multiple code fence blocks", () => {
+    const md = `## Phase 1
+- [x] Build
+\`\`\`
+- [ ] fake 1
+\`\`\`
+- [ ] Test
+\`\`\`
+- [x] fake 2
+\`\`\`
+- [x] Deploy`;
+    const sections = parseCheckboxes(md);
+    expect(sections[0].total).toBe(3);
+    expect(sections[0].done).toBe(2);
+  });
+
+  it("should skip headings inside code fences", () => {
+    const md = `## Real Section
+- [x] Item A
+\`\`\`
+## Fake Section
+- [x] Fake item
+\`\`\`
+- [ ] Item B`;
+    const sections = parseCheckboxes(md);
+    expect(sections).toHaveLength(1);
+    expect(sections[0].title).toBe("Real Section");
+    expect(sections[0].total).toBe(2);
+  });
+
+  // ─── Step 52: TODO/DONE format support ──────────────────────
+
+  it("should parse TODO/DONE markers", () => {
+    const md = `## Tasks
+- TODO: Build the scanner
+- DONE: Write tests
+- TODO: Deploy`;
+    const sections = parseCheckboxes(md);
+    expect(sections).toHaveLength(1);
+    expect(sections[0].total).toBe(3);
+    expect(sections[0].done).toBe(1);
+    expect(sections[0].items[0]).toEqual({ text: "Build the scanner", done: false });
+    expect(sections[0].items[1]).toEqual({ text: "Write tests", done: true });
+  });
+
+  it("should handle case-insensitive TODO/DONE", () => {
+    const md = `## Items
+- todo: lowercase
+- Todo: capitalized
+- DONE: uppercase
+- done: lowercase done`;
+    const sections = parseCheckboxes(md);
+    expect(sections[0].total).toBe(4);
+    expect(sections[0].done).toBe(2);
+  });
+
+  it("should handle PENDING/COMPLETED variants", () => {
+    const md = `## Sprint
+- PENDING: Feature A
+- COMPLETED: Feature B
+* pending: Feature C
++ completed: Feature D`;
+    const sections = parseCheckboxes(md);
+    expect(sections[0].total).toBe(4);
+    expect(sections[0].done).toBe(2);
+  });
+
+  it("should mix checkbox and TODO/DONE formats", () => {
+    const md = `## Mixed
+- [x] Checkbox done
+- TODO: Keyword pending
+- [ ] Checkbox pending
+- DONE: Keyword done`;
+    const sections = parseCheckboxes(md);
+    expect(sections[0].total).toBe(4);
+    expect(sections[0].done).toBe(2);
+  });
+
+  it("should prefer checkbox over TODO match", () => {
+    // "- [x] TODO: Fix bug" should match as checkbox, not TODO
+    const md = `## Test
+- [x] TODO: Fix bug`;
+    const sections = parseCheckboxes(md);
+    expect(sections[0].items[0].done).toBe(true);
+    expect(sections[0].items[0].text).toBe("TODO: Fix bug");
+  });
+
+  it("should not match TODO/DONE inside code fences", () => {
+    const md = `## Tasks
+- TODO: Real task
+\`\`\`
+- TODO: Fake task in code
+- DONE: Fake done in code
+\`\`\`
+- DONE: Real done`;
+    const sections = parseCheckboxes(md);
+    expect(sections[0].total).toBe(2);
+    expect(sections[0].done).toBe(1);
+  });
 });
 
 // ─── parseRoadmapFile ────────────────────────────────────────
@@ -191,11 +320,15 @@ describe("parseRoadmapFile", () => {
     expect(result).toBeNull();
   });
 
-  it("should return null for file with no checkboxes", () => {
+  it("should return unrecognized for file with no checkboxes", () => {
     const filePath = join(testDir, "README.md");
     writeFileSync(filePath, "# README\nJust text.");
     const result = parseRoadmapFile(filePath, "README.md");
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result!.unrecognized).toBe(true);
+    expect(result!.lineCount).toBe(2);
+    expect(result!.sections).toEqual([]);
+    expect(result!.totalItems).toBe(0);
   });
 
   it("should handle multilingual PRD", () => {
@@ -274,6 +407,42 @@ describe("parseRoadmapFile", () => {
     expect(result!.totalItems).toBe(10);
     // percentage
     expect(Math.round((result!.totalDone / result!.totalItems) * 100)).toBe(50);
+  });
+
+  it("should return null for truly empty file", () => {
+    const filePath = join(testDir, "empty.md");
+    writeFileSync(filePath, "");
+    const result = parseRoadmapFile(filePath, "empty.md");
+    expect(result).toBeNull();
+  });
+
+  it("should return unrecognized with lineCount for text-only file", () => {
+    const filePath = join(testDir, "notes.md");
+    writeFileSync(filePath, "# Notes\nSome text\nMore text\nAnother line");
+    const result = parseRoadmapFile(filePath, "notes.md");
+    expect(result).not.toBeNull();
+    expect(result!.unrecognized).toBe(true);
+    expect(result!.lineCount).toBe(4);
+    expect(result!.source).toBe("notes.md");
+  });
+
+  it("should NOT set unrecognized when checkboxes are found", () => {
+    const filePath = join(testDir, "PRD.md");
+    writeFileSync(filePath, "## Tasks\n- [x] Done\n- [ ] Pending");
+    const result = parseRoadmapFile(filePath, "PRD.md");
+    expect(result).not.toBeNull();
+    expect(result!.unrecognized).toBeUndefined();
+    expect(result!.totalItems).toBe(2);
+  });
+
+  it("should parse TODO/DONE at file level", () => {
+    const filePath = join(testDir, "DESIGN.md");
+    writeFileSync(filePath, "## v2 Review\n- TODO: Row A sticky\n- DONE: Panel overflow\n- TODO: Swimlane sort");
+    const result = parseRoadmapFile(filePath, "DESIGN.md");
+    expect(result).not.toBeNull();
+    expect(result!.unrecognized).toBeUndefined();
+    expect(result!.totalDone).toBe(1);
+    expect(result!.totalItems).toBe(3);
   });
 });
 

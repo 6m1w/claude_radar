@@ -74,6 +74,7 @@ function toViewProject(p: MergedProjectData): ViewProject {
     docContents: p.docContents,
     lastActivity: p.lastActivity,
     isActive: p.isActive,
+    events: p.events,
     planningLog: p.planningLog,
     activityLog: p.activityLog,
     activityAlerts: p.activityAlerts,

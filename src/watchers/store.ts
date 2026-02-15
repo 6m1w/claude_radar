@@ -66,6 +66,73 @@ function nowISO(): string {
   return new Date().toISOString();
 }
 
+// ─── Task dedup (Step 55) ────────────────────────────────────
+
+const STATUS_RANK: Record<string, number> = { pending: 0, in_progress: 1, completed: 2 };
+
+function itemText(item: TodoItem | TaskItem): string {
+  return "subject" in item ? item.subject : item.content;
+}
+
+/**
+ * Deduplicate items across sessions: when a TodoItem.content matches a
+ * TaskItem.subject (same step created by both TodoWrite + TaskCreate),
+ * keep only the best version. Priority: TaskItem > TodoItem (richer
+ * metadata), then highest status wins (completed > in_progress > pending).
+ */
+export function deduplicateSessionItems(sessions: SessionData[]): SessionData[] {
+  type ItemRef = { si: number; ii: number; item: TodoItem | TaskItem };
+
+  // Collect all items flattened with source indices
+  const allRefs: ItemRef[] = [];
+  for (let si = 0; si < sessions.length; si++) {
+    for (let ii = 0; ii < sessions[si].items.length; ii++) {
+      allRefs.push({ si, ii, item: sessions[si].items[ii] });
+    }
+  }
+
+  // Group by normalized key
+  const groups = new Map<string, ItemRef[]>();
+  for (const ref of allRefs) {
+    const key = itemText(ref.item).trim().toLowerCase();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(ref);
+  }
+
+  // For groups with >1 item, pick the best and mark losers for removal
+  const removals = new Set<string>();
+  for (const refs of groups.values()) {
+    if (refs.length <= 1) continue;
+
+    let best = refs[0];
+    for (let i = 1; i < refs.length; i++) {
+      const cur = refs[i];
+      const curIsTask = "id" in cur.item;
+      const bestIsTask = "id" in best.item;
+
+      // TaskItem beats TodoItem
+      if (curIsTask && !bestIsTask) { best = cur; continue; }
+      if (!curIsTask && bestIsTask) continue;
+
+      // Same type: higher status wins
+      if ((STATUS_RANK[cur.item.status] ?? 0) > (STATUS_RANK[best.item.status] ?? 0)) {
+        best = cur;
+      }
+    }
+
+    for (const ref of refs) {
+      if (ref !== best) removals.add(`${ref.si}:${ref.ii}`);
+    }
+  }
+
+  if (removals.size === 0) return sessions;
+
+  return sessions.map((session, si) => ({
+    ...session,
+    items: session.items.filter((_, ii) => !removals.has(`${si}:${ii}`)),
+  }));
+}
+
 // Get a stable identity key for matching live items to stored items
 function itemKey(item: TodoItem | TaskItem): string {
   if ("id" in item && item.id) return `task:${item.id}`;
@@ -375,23 +442,44 @@ export class Store {
       };
     });
 
-    // Recompute task counts including gone items
-    const allItems = [...enrichedSessions, ...goneSessions].flatMap((s) => s.items);
+    // Deduplicate items across sessions (TodoWrite + TaskCreate → single entry)
+    const allSessions = deduplicateSessionItems([...enrichedSessions, ...goneSessions]);
+    const enrichedDeduped = allSessions.slice(0, enrichedSessions.length);
+    const goneDeduped = allSessions.slice(enrichedSessions.length);
+
+    // Recompute task counts after dedup
+    const allItems = allSessions.flatMap((s) => s.items);
     const totalTasks = allItems.length;
     const completedTasks = allItems.filter((i) => i.status === "completed").length;
     const inProgressTasks = allItems.filter((i) => i.status === "in_progress").length;
 
-    const { planningLog, activityLog } = this.getActivitySplit(liveProject.projectPath);
+    const events = this.getEvents(liveProject.projectPath);
+    const hookSessions = this.getHookSessions(liveProject.projectPath);
+
+    // Canonical isActive: priority chain overrides scanner's heuristic
+    // 1. Hook sessions alive → definitely active
+    // 2. Scanner detected active JSONL sessions → active
+    // 3. In-progress tasks with recent activity → active (scanner already checks this)
+    const canonicalIsActive =
+      hookSessions.length > 0 ||
+      liveProject.activeSessions > 0 ||
+      (inProgressTasks > 0 && liveProject.isActive);
+
+    // Deprecated compat: split events for frontend migration period
+    const planningLog = events.filter((e) => e.isPlanning);
+    const activityLog = events.filter((e) => !e.isPlanning);
 
     return {
       ...liveProject,
-      sessions: [...enrichedSessions, ...goneSessions],
+      sessions: [...enrichedDeduped, ...goneDeduped],
       totalTasks,
       completedTasks,
       inProgressTasks,
+      isActive: canonicalIsActive,
       hasHistory: goneSessions.length > 0 || goneItemCount > 0,
       goneSessionCount: goneSessions.length,
-      hookSessions: this.getHookSessions(liveProject.projectPath),
+      hookSessions,
+      events,
       planningLog,
       activityLog,
       activityAlerts: detectPatterns(this.getActivityLog(liveProject.projectPath)),
@@ -531,19 +619,13 @@ export class Store {
     return this._activityBuffers.get(projectPath) ?? [];
   }
 
-  // Split activity buffer into planning (L2) and execution (L3) streams
-  getActivitySplit(projectPath: string): { planningLog: ActivityEvent[]; activityLog: ActivityEvent[] } {
+  // Return all events with isPlanning tag — single L3 evidence stream
+  getEvents(projectPath: string): ActivityEvent[] {
     const all = this.getActivityLog(projectPath);
-    const planningLog: ActivityEvent[] = [];
-    const activityLog: ActivityEvent[] = [];
-    for (const event of all) {
-      if (PLANNING_TOOLS.has(event.toolName)) {
-        planningLog.push(event);
-      } else {
-        activityLog.push(event);
-      }
-    }
-    return { planningLog, activityLog };
+    return all.map((event) => ({
+      ...event,
+      isPlanning: PLANNING_TOOLS.has(event.toolName),
+    }));
   }
 
   // Get all hook-tracked active sessions across all projects
@@ -558,7 +640,9 @@ export class Store {
   }
 
   private buildHookOnlyProject(projectPath: string, hookSessions: HookSessionInfo[]): MergedProjectData {
-    const { planningLog, activityLog } = this.getActivitySplit(projectPath);
+    const events = this.getEvents(projectPath);
+    const planningLog = events.filter((e) => e.isPlanning);
+    const activityLog = events.filter((e) => !e.isPlanning);
     return {
       projectPath,
       projectName: basename(projectPath),
@@ -581,6 +665,7 @@ export class Store {
       hasHistory: false,
       goneSessionCount: 0,
       hookSessions,
+      events,
       planningLog,
       activityLog,
       activityAlerts: detectPatterns(this.getActivityLog(projectPath)),
@@ -590,7 +675,9 @@ export class Store {
   private buildHistoricalProject(store: ProjectStore): MergedProjectData {
     const sessions = Object.values(store.sessions).map(storedSessionToSessionData);
     const allItems = sessions.flatMap((s) => s.items);
-    const { planningLog, activityLog } = this.getActivitySplit(store.projectPath);
+    const events = this.getEvents(store.projectPath);
+    const planningLog = events.filter((e) => e.isPlanning);
+    const activityLog = events.filter((e) => !e.isPlanning);
 
     return {
       projectPath: store.projectPath,
@@ -614,6 +701,7 @@ export class Store {
       hasHistory: true,
       goneSessionCount: sessions.length,
       hookSessions: this.getHookSessions(store.projectPath),
+      events,
       planningLog,
       activityLog,
       activityAlerts: detectPatterns(this.getActivityLog(store.projectPath)),
@@ -1117,6 +1205,8 @@ export function loadStore(): Store {
   return store;
 }
 
+const EVENTS_SIZE_WARNING_BYTES = 5 * 1024 * 1024; // 5MB
+
 export function mergeAndPersist(
   liveProjects: ProjectData[],
   store: Store
@@ -1126,6 +1216,28 @@ export function mergeAndPersist(
   if (events.length > 0) {
     ingestHookEvents(store, events);
   }
+
+  // Warn if events.jsonl is growing too large (non-blocking)
+  try {
+    if (existsSync(EVENTS_PATH)) {
+      const evStat = statSync(EVENTS_PATH);
+      if (evStat.size > EVENTS_SIZE_WARNING_BYTES) {
+        const sizeMB = (evStat.size / (1024 * 1024)).toFixed(1);
+        // Emit warning to all active projects
+        for (const project of liveProjects) {
+          if (project.isActive) {
+            store.addActivity(project.projectPath, {
+              ts: new Date().toISOString(),
+              sessionId: "_system",
+              toolName: "_warning",
+              summary: `⚠ events.jsonl is ${sizeMB}MB — consider restarting TUI`,
+              projectPath: project.projectPath,
+            });
+          }
+        }
+      }
+    }
+  } catch { /* non-blocking */ }
 
   // Layer 1b: Detect compaction events from JSONL transcripts (active sessions only)
   // More reliable than PreCompact hook — reads directly from Claude Code's own data.
