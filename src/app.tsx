@@ -12,7 +12,7 @@ import { Panel } from "./components/panel.js";
 import { useWatchSessions } from "./watchers/use-watch.js";
 import { useMetrics } from "./hooks/use-metrics.js";
 import type { MergedProjectData, TaskItem, TodoItem, SessionHistoryEntry, AgentInfo, TeamConfig, ActivityEvent, DisplayTask, ViewProject } from "./types.js";
-import { formatDwell, formatRelativeTime } from "./utils.js";
+import { formatDwell, formatRelativeTime, truncateToWidth, padEndToWidth, padStartToWidth } from "./utils.js";
 import { KanbanView } from "./components/kanban.js";
 import { RoadmapPanel } from "./components/roadmap-panel.js";
 
@@ -187,7 +187,7 @@ export function App() {
   // Ink flex handles borders internally — only count truly fixed-height elements
   const termRows = rows;
   const overhead = 1 + 2; // rowA(1) + statusBar(2)
-  const panelChrome = 5;       // each Panel eats: border(2) + paddingY(2) + title line(1)
+  const panelChrome = 3;       // each Panel eats: border(2) + title line(1). paddingY=0
 
   // Bottom panel: always 1/4 of terminal (min 8)
   const bottomHeight = Math.max(8, Math.floor(termRows / 4));
@@ -338,7 +338,7 @@ export function App() {
   const totalDone = sorted.reduce((s, p) => s + taskStats(p).done, 0);
   const totalActive = sorted.filter((p) => p.isActive).length;
 
-  const viewLabel = view === "agent" ? "AGENT"
+  const viewLabel = view === "agent" ? "TASKS"
     : view === "swimlane" ? "SWIMLANE"
     : focusedPanel === "bottom" ? "BOTTOM"
     : focusedPanel === "tasks" ? "DETAIL"
@@ -378,39 +378,17 @@ export function App() {
 
   return (
     <Box flexDirection="column" height={termRows}>
-      {/* Row A: Compressed overview bar */}
+      {/* Row A: Minimal status — "● N active" or "all idle" */}
       <Box paddingX={1} flexShrink={0}>
         <Text wrap="truncate">
-          <Text color={C.text} bold>{String(totalProjects)}</Text>
-          <Text color={C.subtext}> projects  </Text>
-          <Text color={totalActive > 0 ? C.warning : C.text} bold>{String(totalActive)}</Text>
-          <Text color={C.subtext}> active  </Text>
-          <Text color={C.text} bold>{String(totalTasks)}</Text>
-          <Text color={C.subtext}> tasks  </Text>
-          {totalTasks > 0 && <Text color={C.subtext}>{totalDone}/{totalTasks}</Text>}
-          {/* Active project summaries */}
-          {activeProjects.length > 0 && (
+          {totalActive > 0 ? (
             <>
-              <Text color={C.dim}>  │ </Text>
-              {activeProjects.slice(0, 3).map((p, i) => {
-                const doing = p.tasks.find((t) => t.status === "in_progress");
-                const name = p.name.length > 16 ? p.name.slice(0, 15) + "…" : p.name;
-                return (
-                  <Text key={i}>
-                    {i > 0 && <Text color={C.dim}> </Text>}
-                    <Text color={C.warning}>{I.working}</Text>
-                    <Text color={C.subtext}>{name}</Text>
-                    {doing && <Text color={C.text}> #{doing.id}</Text>}
-                  </Text>
-                );
-              })}
-              {activeProjects.length > 3 && (
-                <Text color={C.dim}> +{activeProjects.length - 3}</Text>
-              )}
+              <Text color={C.warning}>{I.working} </Text>
+              <Text color={C.text} bold>{totalActive}</Text>
+              <Text color={C.subtext}> active</Text>
             </>
-          )}
-          {activeProjects.length === 0 && totalProjects > 0 && (
-            <Text color={C.dim}>  │  all idle</Text>
+          ) : (
+            <Text color={C.dim}>all idle</Text>
           )}
         </Text>
       </Box>
@@ -438,7 +416,7 @@ export function App() {
               const treePrefix = isWorktree ? (isLastWorktree ? "└" : "├") : " ";
               // Truncate name to fit within panel (inner width ~30)
               const maxName = p.branch !== "main" ? 14 : 20;
-              const displayName = p.name.length > maxName ? p.name.slice(0, maxName - 1) + "…" : p.name;
+              const displayName = truncateToWidth(p.name, maxName);
               return (
                 <Text key={p.projectPath} wrap="truncate">
                   <Text color={isCursor ? C.primary : C.dim}>
@@ -456,7 +434,7 @@ export function App() {
                     {displayName}
                   </Text>
                   {p.branch !== "main" && (
-                    <Text color={C.accent}> ⎇{p.branch.length > 12 ? p.branch.slice(0, 11) + "…" : p.branch}</Text>
+                    <Text color={C.accent}> ⎇{truncateToWidth(p.branch, 12)}</Text>
                   )}
                   {p.agentDetails.length > 0 && (
                     <Text color={C.dim}>{" "}
@@ -572,7 +550,9 @@ function RightPanel({
         </Box>
       )}
       {stats.total > 0 && (
-        <Text color={C.subtext}>tasks: {stats.done}/{stats.total}</Text>
+        stats.done === stats.total
+          ? <Text color={C.dim}>all done</Text>
+          : <Text color={C.subtext}>{stats.total - stats.done} remaining</Text>
       )}
 
       {/* Alerts — pattern-detected issues */}
@@ -613,15 +593,16 @@ function RightPanel({
           const iconColor = isGone ? C.dim
             : t.status === "completed" ? C.success
             : t.status === "in_progress" ? C.warning : C.dim;
-          // Truncate long IDs and pad for alignment within group
-          const displayId = t.id.length > maxIdWidth ? t.id.slice(0, maxIdWidth - 1) + "…" : t.id.padStart(maxIdWidth);
+          // Long IDs (>5 chars, e.g. timestamps/UUIDs): omit entirely, show subject only
+          const showId = t.id.length <= 5;
+          const displayId = showId ? padStartToWidth(t.id, maxIdWidth) : "";
           return (
             <Text key={`${t.id}-${isGone ? "g" : "l"}`} wrap="truncate">
               <Text color={isCursor ? C.primary : C.dim}>
                 {isCursor ? I.cursor : " "}{" "}
               </Text>
               <Text color={iconColor} dimColor={isGone}>{icon} </Text>
-              <Text color={isGone ? C.dim : C.subtext} dimColor={isGone}>#{displayId} </Text>
+              {showId && <Text color={isGone ? C.dim : C.subtext} dimColor={isGone}>#{displayId} </Text>}
               <Text
                 color={isGone ? C.dim : t.status === "completed" ? C.dim : isCursor ? C.text : C.subtext}
                 bold={!isGone && isCursor}
@@ -664,7 +645,7 @@ function RightPanel({
               : C.dim;
             elements.push(
               <Box key={agent} flexDirection="column">
-                <Text color={agentColor}>  ── {agentIcon} {agent} ({agentStatus}) ──────────</Text>
+                <Text wrap="truncate" color={agentColor}>  ── {agentIcon} {agent} ({agentStatus}) ──────────</Text>
                 {agentTasks.map((t) => renderTask(t, flatIdx++, liveIdLen))}
               </Box>
             );
@@ -673,17 +654,10 @@ function RightPanel({
           elements = liveTasks.map((t, i) => renderTask(t, i, liveIdLen));
         }
 
-        // Append gone tasks with separator (compact: no extra blank line)
+        // Collapsed gone tasks — single summary line
         if (goneTasks.length > 0) {
-          const goneStartIdx = liveTasks.length;
           elements.push(
-            <Box key="gone-sep" flexDirection="column">
-              <Text color={C.dim}> ── archived ──</Text>
-              {goneTasks.slice(0, 4).map((t, i) => renderTask(t, goneStartIdx + i, goneIdLen))}
-              {goneTasks.length > 4 && (
-                <Text color={C.dim}>  ... +{goneTasks.length - 4} more</Text>
-              )}
-            </Box>
+            <Text key="gone-summary" color={C.dim}>  {"\u25b8"} {goneTasks.length} archived</Text>
           );
         }
 
@@ -725,7 +699,7 @@ function RightPanel({
             )}
           </Box>
           {project.tasks[taskIdx].description && (
-            <Text color={C.subtext}>{project.tasks[taskIdx].description}</Text>
+            <Text wrap="truncate" color={C.subtext}>{project.tasks[taskIdx].description}</Text>
           )}
         </>
       )}
@@ -737,7 +711,7 @@ function RightPanel({
           <Text color={C.dim}>─── Planning ─────────────────────</Text>
           {project.planningLog.slice().reverse().slice(0, 4).map((evt, i) => (
             <Text key={`p-${i}`} wrap="truncate">
-              <Text color={C.dim}>{formatRelativeTime(evt.ts).padStart(4)}</Text>
+              <Text color={C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text>
               <Text color={C.primary}>  {evt.summary}</Text>
             </Text>
           ))}
@@ -752,11 +726,11 @@ function RightPanel({
           {project.activityLog
             .slice()
             .reverse()
-            .slice(0, 8)
+            .slice(0, 5)
             .map((evt, i) => (
               <Text key={i} wrap="truncate">
                 <Text color={evt.isError ? C.error : C.dim}>
-                  {formatRelativeTime(evt.ts).padStart(4)}
+                  {padStartToWidth(formatRelativeTime(evt.ts), 4)}
                 </Text>
                 <Text color={C.dim}>  </Text>
                 <Text color={activityColor(evt.toolName, !!evt.isError)}>
@@ -827,8 +801,8 @@ function BottomPanel({
     );
   });
 
-  // Content area: panel border(2) + paddingY(2) + title(1) + tab header(1) = 6 lines of chrome
-  const contentHeight = Math.max(2, height - 6);
+  // Content area: panel border(2) + title(1) + tab header(1) = 4 lines of chrome. paddingY=0
+  const contentHeight = Math.max(2, height - 4);
 
   return (
     <Panel title="" focused={focused} height={height} hotkey={hotkey}>
@@ -879,7 +853,7 @@ function DocsContent({
 
   const docKeys = Object.keys(project.docContents);
   if (docKeys.length === 0) {
-    return <Text color={C.dim}>No docs detected in {project.name}</Text>;
+    return <Text wrap="truncate" color={C.dim}>No docs detected in {project.name}</Text>;
   }
 
   const safeIdx = Math.min(docIdx, docKeys.length - 1);
@@ -907,24 +881,24 @@ function DocsContent({
         const lineNum = scrollY + i;
         // Heading detection
         if (line.startsWith("# ")) {
-          return <Text key={lineNum} color={C.text} bold>{line}</Text>;
+          return <Text key={lineNum} wrap="truncate" color={C.text} bold>{line}</Text>;
         }
         if (line.startsWith("## ") || line.startsWith("### ")) {
-          return <Text key={lineNum} color={C.accent} bold>{line}</Text>;
+          return <Text key={lineNum} wrap="truncate" color={C.accent} bold>{line}</Text>;
         }
         // Checkbox detection
         if (line.match(/^\s*- \[x\]/i)) {
-          return <Text key={lineNum} color={C.success}>{line}</Text>;
+          return <Text key={lineNum} wrap="truncate" color={C.success}>{line}</Text>;
         }
         if (line.match(/^\s*- \[ \]/)) {
-          return <Text key={lineNum} color={C.subtext}>{line}</Text>;
+          return <Text key={lineNum} wrap="truncate" color={C.subtext}>{line}</Text>;
         }
         // Code block markers
         if (line.startsWith("```")) {
-          return <Text key={lineNum} color={C.accent}>{line}</Text>;
+          return <Text key={lineNum} wrap="truncate" color={C.accent}>{line}</Text>;
         }
         // Default
-        return <Text key={lineNum} color={C.subtext}>{line}</Text>;
+        return <Text key={lineNum} wrap="truncate" color={C.subtext}>{line}</Text>;
       })}
       {scrollY + contentHeight - 1 < lines.length && (
         <Text color={C.dim}>  ▼ {lines.length - scrollY - contentHeight + 1} more lines</Text>
@@ -947,7 +921,7 @@ function GitLogContent({
   const commits = project ? project.gitLog : [];
 
   if (commits.length === 0) {
-    return <Text color={C.dim}>No git history for {project?.name ?? "project"}</Text>;
+    return <Text wrap="truncate" color={C.dim}>No git history for {project?.name ?? "project"}</Text>;
   }
 
   const visibleCommits = commits.slice(scrollY, scrollY + contentHeight);
@@ -959,11 +933,11 @@ function GitLogContent({
         const typeColor = commit.type ? (COMMIT_TYPE_COLORS[commit.type] ?? C.subtext) : C.subtext;
         // Format date as relative
         const dateStr = formatCommitDate(commit.authorDate);
-        const typeStr = commit.type ? commit.type.padEnd(9).slice(0, 9) : "".padEnd(9);
+        const typeStr = padEndToWidth(commit.type ? truncateToWidth(commit.type, 9) : "", 9);
 
         return (
           <Text key={`${commit.hash}-${idx}`} wrap="truncate">
-            <Text color={C.dim}>{dateStr.padEnd(8)}</Text>
+            <Text color={C.dim}>{padEndToWidth(dateStr, 8)}</Text>
             <Text color={C.accent}> {commit.hash} </Text>
             <Text color={typeColor} bold={!!commit.type}>{typeStr}</Text>
             <Text color={C.text}>{commit.subject.replace(/^(\w+)[:(]\s*/, "")}</Text>
@@ -1007,7 +981,7 @@ function SessionsContent({
   }
 
   if (project.recentSessions.length === 0) {
-    return <Text color={C.dim}>No session history for {project.name}</Text>;
+    return <Text wrap="truncate" color={C.dim}>No session history for {project.name}</Text>;
   }
 
   const sessions = project.recentSessions;
@@ -1019,8 +993,8 @@ function SessionsContent({
       {visible.map((s, i) => (
         <Box key={scrollY + i}>
           <Text color={C.accent}>● </Text>
-          <Text color={C.dim}>{s.sessionId.slice(0, 8)}  </Text>
-          <Text color={C.text}>{s.summary ?? s.firstPrompt?.slice(0, 50) ?? "—"}</Text>
+          <Text color={C.dim}>{truncateToWidth(s.sessionId, 8)}  </Text>
+          <Text color={C.text}>{s.summary ?? (s.firstPrompt ? truncateToWidth(s.firstPrompt, 50) : "—")}</Text>
           {s.gitBranch && <Text color={C.dim}> ⎇{s.gitBranch}</Text>}
         </Box>
       ))}

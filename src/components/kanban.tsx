@@ -15,7 +15,7 @@ import { Box, Text, useStdout } from "ink";
 import { C } from "../theme.js";
 import { Panel } from "./panel.js";
 
-import { formatDwell } from "../utils.js";
+import { formatDwell, truncateToWidth } from "../utils.js";
 import type { DisplayTask, ViewProject } from "../types.js";
 
 // ─── Column classification ──────────────────────────────────
@@ -78,7 +78,7 @@ function CompactCard({ task, column }: {
   const accent = accentColor(column, task);
   const isGone = !!task.gone;
   const isDone = column === "done";
-  const idStr = `#${task.id.length > 5 ? task.id.slice(0, 4) + "…" : task.id}`;
+  const idPrefix = task.id.length <= 5 ? `#${task.id} ` : "";
 
   return (
     <Text wrap="truncate">
@@ -89,7 +89,7 @@ function CompactCard({ task, column }: {
         dimColor={isGone}
         strikethrough={isDone || isGone}
       >
-        {idStr} {task.subject}
+        {idPrefix}{task.subject}
       </Text>
     </Text>
   );
@@ -103,8 +103,8 @@ function RichCard({ task, column, width }: {
   width: number;
 }) {
   const accent = accentColor(column, task);
-  const idStr = `#${task.id.length > 5 ? task.id.slice(0, 4) + "…" : task.id}`;
-  const badge = task.owner ? task.owner.slice(0, 8).toUpperCase() : "";
+  const idStr = task.id.length <= 5 ? `#${task.id}` : "";
+  const badge = task.owner ? truncateToWidth(task.owner.toUpperCase(), 8) : "";
   const dwell = formatDwell(task.statusChangedAt);
   const meta = [dwell, task.blockedBy ? `⊘#${task.blockedBy}` : ""].filter(Boolean).join("  ");
 
@@ -112,8 +112,8 @@ function RichCard({ task, column, width }: {
     <Box flexDirection="column" width={width}>
       <Text wrap="truncate">
         <Text color={accent}>┃ </Text>
-        <Text color={C.accent}>{idStr}</Text>
-        {badge && <Text color={C.dim}>{" ".repeat(Math.max(1, width - idStr.length - badge.length - 2))}{badge}</Text>}
+        {idStr && <Text color={C.accent}>{idStr}</Text>}
+        {badge && <Text color={C.dim}>{" ".repeat(Math.max(1, width - (idStr ? idStr.length : 0) - badge.length - 2))}{badge}</Text>}
       </Text>
       <Text wrap="truncate">
         <Text color={accent}>┃ </Text>
@@ -181,7 +181,7 @@ function SwimLaneLayout({
                   const barW = 4;
                   const filled = Math.round((pct / 100) * barW);
                   const bar = "\u2588".repeat(filled) + "\u2591".repeat(barW - filled);
-                  const src = primary.source.length > 8 ? primary.source.slice(0, 7) + "\u2026" : primary.source;
+                  const src = truncateToWidth(primary.source, 8);
                   leftText = `${src} ${bar} ${pct}%`;
                   leftColor = C.subtext;
                 } else {
@@ -231,7 +231,7 @@ function AgentTaskCard({ task, column }: {
 }) {
   const icon = column === "done" ? "✓" : column === "doing" ? "◍" : column === "needs_input" ? "⊘" : "○";
   const iconColor = column === "done" ? C.success : column === "doing" ? C.warning : column === "needs_input" ? C.error : C.dim;
-  const idStr = `#${task.id.length > 5 ? task.id.slice(0, 4) + "…" : task.id}`;
+  const idPrefix = task.id.length <= 5 ? `#${task.id} ` : "";
   const dwell = formatDwell(task.statusChangedAt);
 
   return (
@@ -241,7 +241,7 @@ function AgentTaskCard({ task, column }: {
         color={column === "done" || task.gone ? C.dim : C.text}
         strikethrough={column === "done" || !!task.gone}
       >
-        {idStr} {task.subject}
+        {idPrefix}{task.subject}
       </Text>
       {task.owner && <Text color={C.accent}> ({task.owner})</Text>}
       {task.blockedBy && <Text color={C.error}> ⊘#{task.blockedBy}</Text>}
@@ -261,70 +261,95 @@ function ByAgentLayout({
     return <Text color={C.dim}>No active agents</Text>;
   }
 
+  // Separate all-done projects for collapsed display
+  const activeProjects: ViewProject[] = [];
+  const allDoneProjects: ViewProject[] = [];
+  for (const p of projects) {
+    const buckets = buildBuckets(p);
+    const remaining = buckets.todo.length + buckets.needs_input.length + buckets.doing.length;
+    if (remaining === 0 && buckets.done.length > 0) {
+      allDoneProjects.push(p);
+    } else {
+      activeProjects.push(p);
+    }
+  }
+
   return (
     <Box flexDirection="column">
-      {projects.map((project, pi) => {
+      {activeProjects.map((project, pi) => {
         const buckets = buildBuckets(project);
-        // Order: doing → needs_input → todo → done
-        const ordered: { task: DisplayTask; col: KanbanColumn }[] = [
-          ...buckets.doing.map((t) => ({ task: t, col: "doing" as KanbanColumn })),
-          ...buckets.needs_input.map((t) => ({ task: t, col: "needs_input" as KanbanColumn })),
-          ...buckets.todo.map((t) => ({ task: t, col: "todo" as KanbanColumn })),
-          ...(hideDone ? [] : buckets.done.map((t) => ({ task: t, col: "done" as KanbanColumn }))),
-        ];
 
         // Agent process state
         const primaryAgent = project.agentDetails[0];
         const processState = primaryAgent?.processState
           ?? (project.isActive ? "running" : project.activeSessions > 0 ? "idle" : undefined);
-        const stateIcon = processState === "running" ? "●" : "○";
+        const stateIcon = processState === "running" ? "\u25CF" : "\u25CB";
         const stateColor = processState === "running" ? C.warning : C.dim;
 
-        // Task counts
-        const total = buckets.todo.length + buckets.needs_input.length + buckets.doing.length + buckets.done.length;
-        const done = buckets.done.length;
+        // Progress: "N remaining" or "N remaining · N!"
+        const remaining = buckets.todo.length + buckets.needs_input.length + buckets.doing.length;
+        const attention = buckets.needs_input.length;
+        const progressStr = remaining > 0
+          ? `${remaining} remaining${attention > 0 ? ` \u00b7 ${attention}!` : ""}`
+          : "all done";
 
         // Branch display
-        const branchStr = project.branch.length > 18
-          ? project.branch.slice(0, 17) + "…"
-          : project.branch;
+        const branchStr = truncateToWidth(project.branch, 18);
+
+        // Status groups: ! ATTENTION → ◍ DOING → ○ TODO → ✓ DONE
+        type StatusGroup = { label: string; icon: string; color: string; tasks: DisplayTask[]; col: KanbanColumn };
+        const groups: StatusGroup[] = [
+          { label: "!", icon: "!", color: C.error, tasks: buckets.needs_input, col: "needs_input" },
+          { label: "\u25CD", icon: "\u25CD", color: C.warning, tasks: buckets.doing, col: "doing" },
+          { label: "\u25CB", icon: "\u25CB", color: C.dim, tasks: buckets.todo, col: "todo" },
+        ];
+        if (!hideDone && buckets.done.length > 0) {
+          // DONE: max 5 shown
+          const doneTasks = buckets.done.slice(0, 5);
+          groups.push({ label: `\u2713 ${buckets.done.length > 5 ? `${doneTasks.length} of ${buckets.done.length}` : `${buckets.done.length}/${buckets.done.length + remaining}`}`, icon: "\u2713", color: C.success, tasks: doneTasks, col: "done" });
+        }
 
         return (
           <Box key={project.projectPath} flexDirection="column">
-            {/* Blank line between projects for consistent spacing */}
             {pi > 0 && <Text>{" "}</Text>}
 
-            {/* Project header: state + name + branch + count */}
+            {/* Project header */}
             <Text wrap="truncate">
               <Text color={stateColor}>{stateIcon} </Text>
               <Text color={project.isActive ? C.warning : C.text} bold>{project.name}</Text>
-              <Text color={C.accent}>  ⎇{branchStr}</Text>
-              {total > 0 && (
-                <>
-                  <Text color={C.dim}>  </Text>
-                  <Text color={C.subtext}>{done}/{total}</Text>
-                </>
-              )}
-              {/* Multi-agent indicator */}
-              {project.agentDetails.length > 1 && (
-                <Text color={C.dim}>  {project.agentDetails.map((a) =>
-                  a.processState === "running" ? "●" : "○"
-                ).join("")}</Text>
-              )}
+              <Text color={C.accent}>  \u23C7{branchStr}</Text>
+              <Text color={C.dim}>  </Text>
+              <Text color={attention > 0 ? C.error : C.subtext}>{progressStr}</Text>
             </Text>
 
-            {/* Tasks — flat list with indentation */}
-            {ordered.length > 0 ? ordered.map(({ task, col }, ti) => (
-              <Text key={`${task.id}-${ti}`} wrap="truncate">
-                <Text>    </Text>
-                <AgentTaskCard task={task} column={col} />
-              </Text>
-            )) : (
-              <Text color={C.dim}>    {project.activeSessions > 0 ? `${project.activeSessions} active session${project.activeSessions > 1 ? "s" : ""} · no tasks` : "no tasks"}</Text>
+            {/* Status-grouped tasks */}
+            {remaining > 0 || !hideDone ? groups.filter((g) => g.tasks.length > 0).map((group) => (
+              <Box key={group.label} flexDirection="column">
+                <Text color={group.color}>  {group.label}</Text>
+                {group.tasks.map((task, ti) => (
+                  <Text key={`${task.id}-${ti}`} wrap="truncate">
+                    <Text>    </Text>
+                    <AgentTaskCard task={task} column={group.col} />
+                  </Text>
+                ))}
+              </Box>
+            )) : null}
+
+            {/* No tasks but has activity */}
+            {project.tasks.length === 0 && (
+              <Text wrap="truncate" color={C.dim}>    {project.activeSessions > 0 ? `${project.activeSessions} active session${project.activeSessions > 1 ? "s" : ""} \u00b7 no tasks` : "no tasks"}</Text>
             )}
           </Box>
         );
       })}
+
+      {/* Collapsed all-done projects */}
+      {allDoneProjects.length > 0 && (
+        <>
+          {activeProjects.length > 0 && <Text>{" "}</Text>}
+          <Text color={C.dim}>  + {allDoneProjects.length} project{allDoneProjects.length > 1 ? "s" : ""} (all done)</Text>
+        </>
+      )}
     </Box>
   );
 }
@@ -349,13 +374,13 @@ export function KanbanView({
   const contentW = cols - 4;
 
   const filterLabel = selectedCount > 0 ? ` (${selectedCount} selected)` : "";
-  const layoutLabel = layout === "swimlane" ? "SWIM" : "AGENT";
+  const layoutLabel = layout === "swimlane" ? "SWIM" : "TASKS";
   const hideLabel = hideDone ? " \u229ADONE" : "";
 
   if (layout === "by_agent") {
     return (
       <Panel
-        title={`KANBAN ${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
+        title={`${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
         flexGrow={1}
       >
         <ByAgentLayout projects={projects} hideDone={hideDone} />
@@ -386,7 +411,7 @@ export function KanbanView({
 
   return (
     <Panel
-      title={`KANBAN ${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
+      title={`${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
       flexGrow={1}
     >
       {/* Header row — uses identical Box widths as content cells */}

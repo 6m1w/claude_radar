@@ -1,3 +1,35 @@
+import stringWidth from "string-width";
+
+// CJK-safe truncation: truncate to N visual columns, append "…" if needed
+export function truncateToWidth(str: string, maxWidth: number): string {
+  if (stringWidth(str) <= maxWidth) return str;
+  let width = 0;
+  for (let i = 0; i < str.length; i++) {
+    const charWidth = stringWidth(str[i]);
+    if (width + charWidth > maxWidth - 1) {
+      return str.slice(0, i) + "\u2026";
+    }
+    width += charWidth;
+  }
+  return str;
+}
+
+// CJK-safe padding: pad to N visual columns with spaces
+export function padEndToWidth(str: string, targetWidth: number): string {
+  const currentWidth = stringWidth(str);
+  return currentWidth >= targetWidth
+    ? str
+    : str + " ".repeat(targetWidth - currentWidth);
+}
+
+// CJK-safe padStart: right-align to N visual columns
+export function padStartToWidth(str: string, targetWidth: number): string {
+  const currentWidth = stringWidth(str);
+  return currentWidth >= targetWidth
+    ? str
+    : " ".repeat(targetWidth - currentWidth) + str;
+}
+
 // Format relative time from ISO string with seconds-level granularity
 export function formatRelativeTime(isoDate: string): string {
   const elapsed = Date.now() - new Date(isoDate).getTime();
