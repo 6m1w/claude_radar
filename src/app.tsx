@@ -355,7 +355,8 @@ export function App() {
       totalProjects: sorted.length,
       totalTasks: sorted.reduce((s, p) => s + p.tasks.length, 0),
       totalDone: sorted.reduce((s, p) => s + taskStats(p).done, 0),
-      totalActive: sorted.filter((p) => p.isActive).length,
+      // Unified active: scanner isActive OR hook sessions (more reliable than JSONL mtime)
+      totalActive: sorted.filter((p) => p.isActive || p.hookSessionCount > 0).length,
       compactingProjects: sorted.filter((p) =>
         p.activityAlerts.some((a) => a.type === "context_compact" && new Date(a.ts).getTime() > fiveMinAgo)
       ),
@@ -399,8 +400,9 @@ export function App() {
   const aboveCount = scrollOffset;
   const belowCount = Math.max(0, sorted.length - scrollOffset - visibleProjects);
 
-  // Active agents summary for Row A
-  const activeProjects = sorted.filter((p) => p.isActive);
+  // Debug: aggregate session counts for Row A diagnostics
+  const dbgSessions = sorted.reduce((s, p) => s + p.activeSessions, 0);
+  const dbgHook = sorted.reduce((s, p) => s + p.hookSessionCount, 0);
 
   return (
     <Box flexDirection="column" height={termRows}>
@@ -423,6 +425,8 @@ export function App() {
               {compactingProjects.length > 1 && <Text color={C.dim}> (+{compactingProjects.length - 1})</Text>}
             </>
           )}
+          {/* DEBUG: remove after verifying Row A visibility */}
+          <Text color={C.dim}> [a={totalActive} s={dbgSessions} h={dbgHook}]</Text>
         </Text>
       </Box>
 
