@@ -341,10 +341,12 @@ export function App() {
   const totalDone = sorted.reduce((s, p) => s + taskStats(p).done, 0);
   const totalActive = sorted.filter((p) => p.isActive).length;
 
-  // Compacting projects for StatusBar marquee
+  // Compacting projects for Row A marquee (5-min window)
+  const fiveMinAgo = Date.now() - 5 * 60 * 1000;
   const compactingProjects = sorted.filter((p) =>
-    p.activityAlerts.some((a) => a.type === "context_compact")
+    p.activityAlerts.some((a) => a.type === "context_compact" && new Date(a.ts).getTime() > fiveMinAgo)
   );
+  const compactTick = Math.floor(Date.now() / 3000); // rotate every 3s
 
   const viewLabel = view === "agent" ? "TASKS"
     : view === "swimlane" ? "SWIMLANE"
@@ -372,7 +374,7 @@ export function App() {
           hideDone={kanbanHideDone}
           cursorIdx={kanbanCursorIdx}
         />
-        <StatusBar view={view} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} focusedPanel="projects" hideDone={kanbanHideDone} compactingProjects={compactingProjects} />
+        <StatusBar view={view} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} focusedPanel="projects" hideDone={kanbanHideDone} />
       </Box>
     );
   }
@@ -387,7 +389,7 @@ export function App() {
 
   return (
     <Box flexDirection="column" height={termRows}>
-      {/* Row A: Minimal status — "● N active" or "all idle" */}
+      {/* Row A: Minimal status — "● N active" + compaction marquee */}
       <Box paddingX={1} flexShrink={0}>
         <Text wrap="truncate">
           {totalActive > 0 ? (
@@ -398,6 +400,13 @@ export function App() {
             </>
           ) : (
             <Text color={C.dim}>all idle</Text>
+          )}
+          {compactingProjects.length > 0 && (
+            <>
+              <Text color={C.dim}> · </Text>
+              <Text color={C.warning}>⚡ {truncateToWidth(compactingProjects[compactTick % compactingProjects.length].name, 16)} compacted</Text>
+              {compactingProjects.length > 1 && <Text color={C.dim}> (+{compactingProjects.length - 1})</Text>}
+            </>
           )}
         </Text>
       </Box>
@@ -488,7 +497,6 @@ export function App() {
         hasActive={totalActive > 0}
         allDone={totalTasks > 0 && totalDone === totalTasks}
         focusedPanel={focusedPanel}
-        compactingProjects={compactingProjects}
       />
     </Box>
   );
@@ -541,9 +549,12 @@ function RightPanel({
           </Text>
         ) : project.agents.length > 1 ? (
           <Text color={C.dim}>{project.agents.length} agents</Text>
-        ) : (
-          <Text color={C.dim}>○ Single Agent</Text>
-        )}
+        ) : (() => {
+          // Single agent: show process-state from heuristics
+          const isRunning = project.isActive || project.activeSessions > 0;
+          if (!isRunning) return null; // no session → hide agent line
+          return <Text color={C.warning}>● Agent running</Text>;
+        })()}
       </Text>
       {/* Team member list with process states */}
       {project.team && project.agentDetails.length > 0 && (
@@ -1047,8 +1058,8 @@ function sparkline(values: number[], max = 100): string {
     .join("");
 }
 
-function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone, compactingProjects = [] }: {
-  view: View; label: string; hasActive: boolean; allDone: boolean; focusedPanel: FocusedPanel; hideDone?: boolean; compactingProjects?: ViewProject[];
+function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: {
+  view: View; label: string; hasActive: boolean; allDone: boolean; focusedPanel: FocusedPanel; hideDone?: boolean;
 }) {
   const metrics = useMetrics();
   const tick = metrics.tick;
@@ -1084,12 +1095,6 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone, co
         <Text color={C.subtext}>{netUp} </Text>
         <Text color={C.primary}>↓</Text>
         <Text color={C.subtext}>{netDown}</Text>
-        {compactingProjects.length > 0 && (
-          <>
-            <Text color={C.dim}> │ </Text>
-            <Text color={C.warning}>⚡ {truncateToWidth(compactingProjects[tick % compactingProjects.length].name, 16)} compacting{compactingProjects.length > 1 ? ` (+${compactingProjects.length - 1})` : ""}</Text>
-          </>
-        )}
         <Text color={C.dim}> │ </Text>
         <Text color={C.primary}>{spinnerChar}</Text>
       </Box>
