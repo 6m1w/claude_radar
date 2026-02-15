@@ -12,7 +12,8 @@ const HEADING_RE = /^(#{1,6})\s+(.+)$/;
 
 // Checkbox: "- [x] done item" or "- [ ] pending item"
 // Also handles indented checkboxes (nested lists)
-const CHECKBOX_RE = /^\s*-\s+\[([ xX])\]\s+(.+)$/;
+// Supports all three Markdown list markers: - * +
+const CHECKBOX_RE = /^\s*[-*+]\s+\[([ xX])\]\s+(.+)$/;
 
 // ─── Parser ──────────────────────────────────────────────────
 
