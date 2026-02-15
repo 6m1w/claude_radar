@@ -425,7 +425,7 @@ export function App() {
           icon: alertIcon[a.type],
           color: alertColor[a.type],
           label: alertLabel[a.type],
-          project: p.name,
+          project: p.worktreeOf ? p.name : p.branch,
           priority: alertPriority[a.type],
         });
       }
@@ -657,7 +657,10 @@ function RightPanel({
     ) : (() => {
       const isRunning = project.isActive || project.activeSessions > 0;
       if (!isRunning) return null;
-      return <Text color={C.success}>● Agent running</Text>;
+      // Show session name if available (from /rename or first prompt)
+      const active = project.recentSessions[0];
+      const label = active?.summary ?? active?.firstPrompt?.slice(0, 20) ?? "Agent";
+      return <Text color={C.success}>⌖ {label} running</Text>;
     })()}
   </Text>);
 
