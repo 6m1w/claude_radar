@@ -123,8 +123,10 @@ export function App() {
 
   const [bottomScrollY, setBottomScrollY] = useState(0);
 
-  // Roadmap .md file switching (when roadmap panel is focused)
+  // Roadmap panel state (when focused via hotkey 3)
   const [roadmapDocIdx, setRoadmapDocIdx] = useState(0);
+  const [roadmapSectionIdx, setRoadmapSectionIdx] = useState(0);
+  const [expandedSection, setExpandedSection] = useState<number | null>(null);
 
   // Kanban state (shared across agent/swimlane views)
   const [kanbanHideDone, setKanbanHideDone] = useState(true);
@@ -274,12 +276,30 @@ export function App() {
 
     if (focusedPanel === "roadmap") {
       if (current) {
-        const roadmapCount = current.roadmap.length;
-        if ((input === "j" || key.downArrow) && roadmapDocIdx < roadmapCount - 1) {
-          setRoadmapDocIdx((i) => i + 1);
-        }
-        if ((input === "k" || key.upArrow) && roadmapDocIdx > 0) {
+        const roadmaps = current.roadmap;
+        const safeDocIdx = Math.min(roadmapDocIdx, roadmaps.length - 1);
+        const sections = roadmaps[safeDocIdx]?.sections ?? [];
+        // h/l switches .md files
+        if ((input === "h" || key.leftArrow) && roadmapDocIdx > 0) {
           setRoadmapDocIdx((i) => i - 1);
+          setRoadmapSectionIdx(0);
+          setExpandedSection(null);
+        }
+        if ((input === "l" || key.rightArrow) && roadmapDocIdx < roadmaps.length - 1) {
+          setRoadmapDocIdx((i) => i + 1);
+          setRoadmapSectionIdx(0);
+          setExpandedSection(null);
+        }
+        // j/k navigates sections
+        if ((input === "j" || key.downArrow) && roadmapSectionIdx < sections.length - 1) {
+          setRoadmapSectionIdx((i) => i + 1);
+        }
+        if ((input === "k" || key.upArrow) && roadmapSectionIdx > 0) {
+          setRoadmapSectionIdx((i) => i - 1);
+        }
+        // Enter/Space toggles expand (accordion)
+        if (key.return || input === " ") {
+          setExpandedSection((prev) => prev === roadmapSectionIdx ? null : roadmapSectionIdx);
         }
       }
       return;
@@ -292,6 +312,8 @@ export function App() {
       setScrollOffset(ensureVisible(next));
       setTaskIdx(0);
       setRoadmapDocIdx(0);
+      setRoadmapSectionIdx(0);
+      setExpandedSection(null);
     }
     if ((input === "k" || key.upArrow) && projectIdx > 0) {
       const next = projectIdx - 1;
@@ -299,6 +321,8 @@ export function App() {
       setScrollOffset(ensureVisible(next));
       setTaskIdx(0);
       setRoadmapDocIdx(0);
+      setRoadmapSectionIdx(0);
+      setExpandedSection(null);
     }
 
     // Space → toggle multi-select for kanban
@@ -459,7 +483,7 @@ export function App() {
               <Text color={C.dim}>  ▼ {belowCount} more</Text>
             )}
           </Panel>
-          {showRoadmap && <RoadmapPanel project={current} height={roadmapHeight} focused={focusedPanel === "roadmap"} selectedIdx={roadmapDocIdx} hotkey="3" />}
+          {showRoadmap && <RoadmapPanel project={current} height={roadmapHeight} focused={focusedPanel === "roadmap"} selectedIdx={roadmapDocIdx} sectionIdx={roadmapSectionIdx} expandedSection={expandedSection} hotkey="3" />}
         </Box>
 
         {/* Right: Tasks only — explicit height + maxLines prevents layout overflow */}
@@ -918,7 +942,9 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
           </>
         ) : focusedPanel === "roadmap" ? (
           <>
-            <Text color={C.success}>↑↓</Text><Text color={C.subtext}> switch .md  </Text>
+            <Text color={C.success}>↑↓</Text><Text color={C.subtext}> sections  </Text>
+            <Text color={C.success}>←→</Text><Text color={C.subtext}> files  </Text>
+            <Text color={C.success}>⏎</Text><Text color={C.subtext}> expand  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
