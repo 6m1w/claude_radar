@@ -6,7 +6,8 @@
 # Usage: capture.sh <event_type>
 #   event_type: "tool" (PostToolUse), "tool_failure" (PostToolUseFailure),
 #               "stop" (Stop), "start" (SessionStart),
-#               "subagent_stop" (SubagentStop), "notification" (Notification)
+#               "subagent_stop" (SubagentStop), "notification" (Notification),
+#               "compact" (PreCompact)
 #
 # Output: one JSON line appended to ~/.claude-radar/events.jsonl
 # Performance budget: <10ms total (bash startup + cat + printf + append)
@@ -26,6 +27,9 @@ STDIN=$(cat)
 
 # Timestamp in ISO 8601 UTC
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Debug: log every invocation to a separate file for troubleshooting
+printf '%s event=%s stdin_len=%d\n' "$TS" "$EVENT" "${#STDIN}" >> "$EVENTS_DIR/hook-invocations.log"
 
 # Append as single JSONL line (O_APPEND guarantees atomicity under PIPE_BUF)
 printf '{"event":"%s","ts":"%s","data":%s}\n' "$EVENT" "$TS" "$STDIN" >> "$EVENTS_FILE"

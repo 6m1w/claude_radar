@@ -2,7 +2,8 @@ import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
-import type { TodoItem, TaskItem, SessionData, SessionMeta, ProjectData, SessionHistoryEntry, TeamConfig, TeamMember, AgentInfo, GitCommit } from "../types.js";
+import type { TodoItem, TaskItem, SessionData, SessionMeta, ProjectData, SessionHistoryEntry, TeamConfig, TeamMember, AgentInfo, GitCommit, RoadmapData } from "../types.js";
+import { parseRoadmapFile } from "./roadmap.js";
 
 const CLAUDE_DIR = join(homedir(), ".claude");
 const TODOS_DIR = join(CLAUDE_DIR, "todos");
@@ -17,8 +18,12 @@ const ACTIVE_THRESHOLD_MS = 5 * 60 * 1000;
 // are NOT considered active (prevents stale tasks from pinning projects to top)
 const STALE_TASK_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
 
-// Doc files to detect in project directories
-const DOC_CANDIDATES = ["CLAUDE.md", "PRD.md", "docs/PRD.md", "TDD.md", "docs/TDD.md", "README.md"];
+// JSONL files below this size are considered "empty" sessions (e.g. accidental opens).
+// They are counted in totalSessions but excluded from lastSessionActivity sorting.
+const MIN_SESSION_SIZE_BYTES = 1024;
+
+// Priority doc files (always checked first, preserved ordering)
+const DOC_PRIORITY = ["CLAUDE.md", "PRD.md", "docs/PRD.md", "TDD.md", "docs/TDD.md", "README.md"];
 
 function readJson<T>(path: string): T | null {
   try {
@@ -75,9 +80,20 @@ function discoverProjects(): DiscoveredProject[] {
         for (const file of files) {
           if (!file.endsWith(".jsonl")) continue;
           totalSessions++;
-          const mtime = getModTime(join(dirPath, file));
-          if (mtime > lastSessionActivity) lastSessionActivity = mtime;
-          if (now - mtime.getTime() < ACTIVE_THRESHOLD_MS) activeSessions++;
+          const filePath = join(dirPath, file);
+          let fileSize = 0;
+          try {
+            const st = statSync(filePath);
+            fileSize = st.size;
+            const mtime = st.mtime;
+            // Only count substantial sessions for lastSessionActivity sorting.
+            // Tiny files (< 1KB) are accidental/empty sessions that shouldn't
+            // push old projects to the top of the list.
+            if (fileSize >= MIN_SESSION_SIZE_BYTES && mtime > lastSessionActivity) {
+              lastSessionActivity = mtime;
+            }
+            if (now - mtime.getTime() < ACTIVE_THRESHOLD_MS) activeSessions++;
+          } catch { /* skip */ }
         }
       } catch {
         // skip
@@ -126,6 +142,10 @@ function discoverProjects(): DiscoveredProject[] {
 
       // Skip root/home directories (too generic)
       if (projectPath === "/" || projectPath === homedir()) continue;
+
+      // Skip phantom projects where resolved path doesn't exist on disk
+      // (lossy resolveSegments can produce non-existent paths)
+      if (!existsSync(projectPath)) continue;
 
       results.push({
         claudeDir: dirPath,
@@ -259,17 +279,94 @@ function readGitInfo(projectPath: string): { branch: string; worktreeOf?: string
 }
 
 // ─── Phase 3: Detect docs in project directory ──────────────────
-function detectDocs(projectPath: string): string[] {
+// Merge priority candidates + recursive discovery into a single deduped list.
+// Priority docs come first (stable ordering for UI), then any extras found by discovery.
+function detectDocs(projectPath: string, fallbackPath?: string): string[] {
   const found: string[] = [];
-  for (const candidate of DOC_CANDIDATES) {
-    if (existsSync(join(projectPath, candidate))) {
-      found.push(candidate);
+  const seen = new Set<string>();
+  const searchPaths = fallbackPath ? [projectPath, fallbackPath] : [projectPath];
+
+  // Priority candidates first (stable ordering)
+  for (const candidate of DOC_PRIORITY) {
+    for (const base of searchPaths) {
+      if (!seen.has(candidate) && existsSync(join(base, candidate))) {
+        found.push(candidate);
+        seen.add(candidate);
+        break;
+      }
+    }
+  }
+  // Add any .md files found by recursive discovery that aren't already listed
+  for (const base of searchPaths) {
+    for (const md of discoverMarkdownFiles(base)) {
+      if (!seen.has(md)) {
+        found.push(md);
+        seen.add(md);
+      }
     }
   }
   return found;
 }
 
-// ─── Phase 3b: Read git log from project directory ───────────────
+// ─── Phase 3b: Discover all .md files + parse checkboxes ─────────
+// Recursively find .md files (depth-limited, skip junk dirs), then
+// parse each for `- [x]` / `- [ ]` checkboxes. Files without
+// checkboxes are automatically filtered out by parseRoadmapFile().
+
+const SKIP_DIRS = new Set([
+  "node_modules", ".git", "dist", "build", "out", ".next", ".nuxt",
+  "vendor", "coverage", "__pycache__", ".venv", "venv", "env",
+  ".turbo", ".cache", ".output", "target", "bin", "obj",
+]);
+const MAX_MD_DEPTH = 3;    // root=0, docs/=1, docs/api/=2, ...
+const MAX_MD_FILES = 30;   // cap to avoid scanning huge monorepos
+
+export function discoverMarkdownFiles(projectPath: string): string[] {
+  const files: string[] = [];
+
+  function walk(dir: string, depth: number, prefix: string) {
+    if (depth > MAX_MD_DEPTH || files.length >= MAX_MD_FILES) return;
+    try {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (files.length >= MAX_MD_FILES) return;
+        if (entry.isDirectory()) {
+          if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
+            walk(join(dir, entry.name), depth + 1, prefix ? `${prefix}/${entry.name}` : entry.name);
+          }
+        } else if (entry.isFile() && entry.name.endsWith(".md")) {
+          files.push(prefix ? `${prefix}/${entry.name}` : entry.name);
+        }
+      }
+    } catch {
+      // permission error or symlink loop — skip
+    }
+  }
+
+  walk(projectPath, 0, "");
+  return files;
+}
+
+function detectRoadmap(projectPath: string): RoadmapData[] {
+  const mdFiles = discoverMarkdownFiles(projectPath);
+  const results: RoadmapData[] = [];
+  for (const relPath of mdFiles) {
+    const data = parseRoadmapFile(join(projectPath, relPath), relPath);
+    if (data) results.push(data);
+  }
+  return results;
+}
+
+// Deduplicate roadmap entries by source file (worktree + main repo may find same .md)
+function dedupeRoadmap(entries: RoadmapData[]): RoadmapData[] {
+  const seen = new Set<string>();
+  return entries.filter((r) => {
+    if (seen.has(r.source)) return false;
+    seen.add(r.source);
+    return true;
+  });
+}
+
+// ─── Phase 3c: Read git log from project directory ───────────────
 function readGitLog(projectPath: string): GitCommit[] {
   try {
     if (!existsSync(join(projectPath, ".git"))) return [];
@@ -288,15 +385,21 @@ function readGitLog(projectPath: string): GitCommit[] {
 // ─── Phase 3c: Read doc file contents ────────────────────────────
 const MAX_DOC_SIZE = 50 * 1024;
 
-function readDocContents(projectPath: string, docFiles: string[]): Record<string, string> {
+function readDocContents(projectPath: string, docFiles: string[], fallbackPath?: string): Record<string, string> {
   const contents: Record<string, string> = {};
   for (const doc of docFiles) {
-    try {
-      const fullPath = join(projectPath, doc);
-      const s = statSync(fullPath);
-      if (s.size > MAX_DOC_SIZE) { contents[doc] = `[File too large: ${Math.round(s.size / 1024)}KB]`; continue; }
-      contents[doc] = readFileSync(fullPath, "utf-8");
-    } catch {}
+    // Try primary path first, then fallback (for worktrees)
+    const candidates = fallbackPath
+      ? [join(projectPath, doc), join(fallbackPath, doc)]
+      : [join(projectPath, doc)];
+    for (const fullPath of candidates) {
+      try {
+        const s = statSync(fullPath);
+        if (s.size > MAX_DOC_SIZE) { contents[doc] = `[File too large: ${Math.round(s.size / 1024)}KB]`; break; }
+        contents[doc] = readFileSync(fullPath, "utf-8");
+        break;
+      } catch { /* try next candidate */ }
+    }
   }
   return contents;
 }
@@ -587,9 +690,16 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
 
     // Read git info from actual project directory
     const git = readGitInfo(disc.projectPath);
-    const docs = detectDocs(disc.projectPath);
+
+    // For worktrees, also search the main repo for docs and roadmap
+    // (worktrees may not have untracked/gitignored dirs like docs/)
+    const mdSearchPaths = git?.worktreeOf
+      ? [disc.projectPath, git.worktreeOf]
+      : [disc.projectPath];
+    const docs = detectDocs(disc.projectPath, git?.worktreeOf);
+    const roadmap = dedupeRoadmap(mdSearchPaths.flatMap(detectRoadmap));
     const gitLog = readGitLog(disc.projectPath);
-    const docContents = readDocContents(disc.projectPath, docs);
+    const docContents = readDocContents(disc.projectPath, docs, git?.worktreeOf);
 
     // Determine last activity: max of session file activity and task data
     const taskActivity = sessions.length > 0
@@ -612,6 +722,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
     projects.push({
       projectPath: disc.projectPath,
       projectName: disc.projectName,
+      claudeDir: disc.claudeDir,
       gitBranch: git?.branch ?? disc.gitBranch,
       sessions,
       totalTasks: total,
@@ -626,6 +737,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       docs,
       gitLog,
       docContents,
+      roadmap,
       recentSessions: disc.recentSessions.slice(-8),
       team: matchedTeam,
       agentDetails,
@@ -642,6 +754,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
     projects.push({
       projectPath: path,
       projectName: basename(path),
+      claudeDir: "",  // orphan projects have no claudeDir
       sessions,
       totalTasks: allItems.length,
       completedTasks: allItems.filter((i) => i.status === "completed").length,
@@ -652,6 +765,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       totalSessions: 0,
       activeSessions: 0,
       docs: [],
+      roadmap: [],
       gitLog: [],
       docContents: {},
       recentSessions: [],

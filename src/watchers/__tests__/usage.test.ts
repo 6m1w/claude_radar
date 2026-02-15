@@ -8,6 +8,8 @@ import {
   getProjectUsage,
   parseTurnDurations,
   getProjectTurnDurations,
+  parseCompactions,
+  getProjectCompactions,
   FALLBACK_PRICING,
   LONG_TURN_THRESHOLD_MS,
 } from "../usage.js";
@@ -344,5 +346,115 @@ describe("getProjectTurnDurations", () => {
 
   it("should return empty for non-existent directory", () => {
     expect(getProjectTurnDurations("/nonexistent/dir", "/test")).toEqual([]);
+  });
+});
+
+// ─── parseCompactions / getProjectCompactions tests ──────────
+
+function makeCompactionBoundary(sessionId: string, ts: string, logicalParent: string): string {
+  return JSON.stringify({
+    type: "system",
+    parentUuid: null,
+    logicalParentUuid: logicalParent,
+    sessionId,
+    timestamp: ts,
+  });
+}
+
+function makeNormalSystemLine(sessionId: string): string {
+  return JSON.stringify({
+    type: "system",
+    parentUuid: "abc-123",
+    sessionId,
+  });
+}
+
+describe("parseCompactions", () => {
+  let testDir: string;
+  beforeEach(() => {
+    testDir = join("/tmp", `compact-test-${Date.now()}`);
+    mkdirSync(testDir, { recursive: true });
+  });
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("should detect compaction boundaries in JSONL", () => {
+    const jsonlPath = join(testDir, "session.jsonl");
+    writeFileSync(jsonlPath, [
+      makeNormalSystemLine("sess-1"),
+      makeCompactionBoundary("sess-1", "2025-06-01T10:00:00Z", "uuid-1"),
+      makeNormalSystemLine("sess-1"),
+      makeCompactionBoundary("sess-1", "2025-06-01T12:00:00Z", "uuid-2"),
+    ].join("\n"));
+
+    const events = parseCompactions(jsonlPath, "/test/project");
+    expect(events).toHaveLength(2);
+    expect(events[0].toolName).toBe("_compact");
+    expect(events[0].ts).toBe("2025-06-01T10:00:00Z");
+    expect(events[0].summary).toBe("⚡ Context compacted");
+    expect(events[1].ts).toBe("2025-06-01T12:00:00Z");
+  });
+
+  it("should return empty for file with no compaction", () => {
+    const jsonlPath = join(testDir, "session.jsonl");
+    writeFileSync(jsonlPath, [
+      makeNormalSystemLine("sess-1"),
+      JSON.stringify({ type: "assistant", message: { content: "hello" } }),
+    ].join("\n"));
+
+    expect(parseCompactions(jsonlPath, "/test")).toEqual([]);
+  });
+
+  it("should return empty for non-existent file", () => {
+    expect(parseCompactions("/nonexistent.jsonl", "/test")).toEqual([]);
+  });
+
+  it("should skip lines where parentUuid is not null", () => {
+    const jsonlPath = join(testDir, "session.jsonl");
+    writeFileSync(jsonlPath, [
+      // Has logicalParentUuid but parentUuid is NOT null — not a compaction
+      JSON.stringify({
+        type: "system",
+        parentUuid: "some-uuid",
+        logicalParentUuid: "another-uuid",
+        sessionId: "sess-1",
+        timestamp: "2025-06-01T10:00:00Z",
+      }),
+    ].join("\n"));
+
+    expect(parseCompactions(jsonlPath, "/test")).toEqual([]);
+  });
+});
+
+describe("getProjectCompactions", () => {
+  let projectDir: string;
+  beforeEach(() => {
+    projectDir = join("/tmp", `compact-project-test-${Date.now()}`);
+    mkdirSync(projectDir, { recursive: true });
+  });
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  it("should aggregate compactions across sessions and sort by timestamp", () => {
+    writeFileSync(
+      join(projectDir, "sess-1.jsonl"),
+      makeCompactionBoundary("sess-1", "2025-06-01T12:00:00Z", "uuid-1"),
+    );
+    writeFileSync(
+      join(projectDir, "sess-2.jsonl"),
+      makeCompactionBoundary("sess-2", "2025-06-01T11:00:00Z", "uuid-2"),
+    );
+    writeFileSync(join(projectDir, "sessions-index.json"), "{}");
+
+    const events = getProjectCompactions(projectDir, "/test");
+    expect(events).toHaveLength(2);
+    expect(events[0].ts).toBe("2025-06-01T11:00:00Z");
+    expect(events[1].ts).toBe("2025-06-01T12:00:00Z");
+  });
+
+  it("should return empty for non-existent directory", () => {
+    expect(getProjectCompactions("/nonexistent/dir", "/test")).toEqual([]);
   });
 });

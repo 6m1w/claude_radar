@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, rename
 import { join, basename } from "node:path";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
+import { getProjectCompactions } from "./usage.js";
 import type {
   ProjectData,
   SessionData,
@@ -27,6 +28,21 @@ const META_PATH = join(STORE_DIR, "meta.json");
 export const EVENTS_PATH = join(STORE_DIR, "events.jsonl");
 
 const SCHEMA_VERSION = 1;
+
+// L2 planning tools — agent's own planning/delegation decisions
+// Separated from L3 execution activity (Read, Write, Bash, etc.)
+export const PLANNING_TOOLS = new Set([
+  "EnterPlanMode",
+  "ExitPlanMode",
+  "Task",              // subagent spawn
+  "TaskCreate",
+  "TaskList",
+  "TaskGet",
+  "TaskUpdate",
+  "TodoWrite",
+  "TeamCreate",
+  "SendMessage",
+]);
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -113,17 +129,31 @@ export class Store {
   private _activityBuffers = new Map<string, ActivityEvent[]>();
   private static ACTIVITY_BUFFER_SIZE = 50;
 
-  // Load all project files from disk
+  // Dedup set for JSONL-detected compaction events (sessionId:timestamp)
+  // Prevents re-adding the same compaction on every poll cycle.
+  private _seenCompactions = new Set<string>();
+
+  // Load all project files from disk, pruning phantom entries
   load(): void {
     if (!existsSync(PROJECTS_DIR)) return;
 
     try {
       const files = readdirSync(PROJECTS_DIR).filter((f) => f.endsWith(".json"));
       for (const file of files) {
-        const data = readJson<ProjectStore>(join(PROJECTS_DIR, file));
-        if (data?.projectPath) {
-          this.projects.set(data.projectPath, data);
+        const filePath = join(PROJECTS_DIR, file);
+        const data = readJson<ProjectStore>(filePath);
+        if (!data?.projectPath) continue;
+
+        // Prune phantom projects: path doesn't exist + no task data
+        const hasItems = Object.values(data.sessions ?? {}).some(
+          (s) => s.items && s.items.length > 0,
+        );
+        if (!hasItems && !existsSync(data.projectPath)) {
+          try { unlinkSync(filePath); } catch { /* ignore */ }
+          continue;
         }
+
+        this.projects.set(data.projectPath, data);
       }
     } catch {
       // Store dir may not be readable
@@ -351,6 +381,8 @@ export class Store {
     const completedTasks = allItems.filter((i) => i.status === "completed").length;
     const inProgressTasks = allItems.filter((i) => i.status === "in_progress").length;
 
+    const { planningLog, activityLog } = this.getActivitySplit(liveProject.projectPath);
+
     return {
       ...liveProject,
       sessions: [...enrichedSessions, ...goneSessions],
@@ -360,7 +392,8 @@ export class Store {
       hasHistory: goneSessions.length > 0 || goneItemCount > 0,
       goneSessionCount: goneSessions.length,
       hookSessions: this.getHookSessions(liveProject.projectPath),
-      activityLog: this.getActivityLog(liveProject.projectPath),
+      planningLog,
+      activityLog,
       activityAlerts: detectPatterns(this.getActivityLog(liveProject.projectPath)),
     };
   }
@@ -461,6 +494,15 @@ export class Store {
     return sessions ? [...sessions.values()] : [];
   }
 
+  // Reverse-lookup: find which project owns a session ID (from hook-tracked sessions)
+  // Used as fallback when cwd is missing from hook events (e.g., PreCompact)
+  lookupProjectBySession(sessionId: string): string | undefined {
+    for (const [projectPath, sessions] of this._hookActiveSessions) {
+      if (sessions.has(sessionId)) return projectPath;
+    }
+    return undefined;
+  }
+
   // Add an activity event to the project's ring buffer
   addActivity(projectPath: string, event: ActivityEvent): void {
     let buf = this._activityBuffers.get(projectPath);
@@ -474,9 +516,34 @@ export class Store {
     }
   }
 
+  // Ingest JSONL-detected compaction events, skipping already-seen ones
+  ingestCompactions(events: ActivityEvent[]): void {
+    for (const ev of events) {
+      const key = `${ev.sessionId}:${ev.ts}`;
+      if (this._seenCompactions.has(key)) continue;
+      this._seenCompactions.add(key);
+      this.addActivity(ev.projectPath, ev);
+    }
+  }
+
   // Get recent activity for a project
   getActivityLog(projectPath: string): ActivityEvent[] {
     return this._activityBuffers.get(projectPath) ?? [];
+  }
+
+  // Split activity buffer into planning (L2) and execution (L3) streams
+  getActivitySplit(projectPath: string): { planningLog: ActivityEvent[]; activityLog: ActivityEvent[] } {
+    const all = this.getActivityLog(projectPath);
+    const planningLog: ActivityEvent[] = [];
+    const activityLog: ActivityEvent[] = [];
+    for (const event of all) {
+      if (PLANNING_TOOLS.has(event.toolName)) {
+        planningLog.push(event);
+      } else {
+        activityLog.push(event);
+      }
+    }
+    return { planningLog, activityLog };
   }
 
   // Get all hook-tracked active sessions across all projects
@@ -491,9 +558,11 @@ export class Store {
   }
 
   private buildHookOnlyProject(projectPath: string, hookSessions: HookSessionInfo[]): MergedProjectData {
+    const { planningLog, activityLog } = this.getActivitySplit(projectPath);
     return {
       projectPath,
       projectName: basename(projectPath),
+      claudeDir: "",
       sessions: [],
       totalTasks: 0,
       completedTasks: 0,
@@ -504,6 +573,7 @@ export class Store {
       totalSessions: 0,
       activeSessions: hookSessions.length,
       docs: [],
+      roadmap: [],
       gitLog: [],
       docContents: {},
       recentSessions: [],
@@ -511,7 +581,8 @@ export class Store {
       hasHistory: false,
       goneSessionCount: 0,
       hookSessions,
-      activityLog: this.getActivityLog(projectPath),
+      planningLog,
+      activityLog,
       activityAlerts: detectPatterns(this.getActivityLog(projectPath)),
     };
   }
@@ -519,10 +590,12 @@ export class Store {
   private buildHistoricalProject(store: ProjectStore): MergedProjectData {
     const sessions = Object.values(store.sessions).map(storedSessionToSessionData);
     const allItems = sessions.flatMap((s) => s.items);
+    const { planningLog, activityLog } = this.getActivitySplit(store.projectPath);
 
     return {
       projectPath: store.projectPath,
       projectName: store.projectName,
+      claudeDir: "",
       sessions,
       totalTasks: allItems.length,
       completedTasks: allItems.filter((i) => i.status === "completed").length,
@@ -533,6 +606,7 @@ export class Store {
       totalSessions: 0,
       activeSessions: 0,
       docs: [],
+      roadmap: [],
       gitLog: [],
       docContents: {},
       recentSessions: [],
@@ -540,7 +614,8 @@ export class Store {
       hasHistory: true,
       goneSessionCount: sessions.length,
       hookSessions: this.getHookSessions(store.projectPath),
-      activityLog: this.getActivityLog(store.projectPath),
+      planningLog,
+      activityLog,
       activityAlerts: detectPatterns(this.getActivityLog(store.projectPath)),
     };
   }
@@ -681,6 +756,23 @@ function detectPatterns(events: ActivityEvent[]): ActivityAlert[] {
         });
       }
     }
+
+    // 4. Context compaction: _compact events indicate session hit context limits
+    const compactEvents = sessionEvents.filter((ev) => ev.toolName === "_compact");
+    if (compactEvents.length > 0) {
+      const latest = compactEvents[compactEvents.length - 1];
+      alerts.push({
+        type: "context_compact",
+        severity: compactEvents.length >= 3 ? "error" : "warning",
+        message: compactEvents.length > 1
+          ? `Context compacted ${compactEvents.length}× — session nearing limits`
+          : "Context compacted — session history compressed",
+        count: compactEvents.length,
+        sessionId,
+        projectPath: latest.projectPath,
+        ts: latest.ts,
+      });
+    }
   }
 
   return alerts;
@@ -751,8 +843,12 @@ function cwdToProjectPath(cwd: string): string {
   return cwd;
 }
 
-// Build a human-readable summary for an activity event
+// Build a human-readable summary for an activity event (always single-line)
 function buildActivitySummary(data: HookEventData): string {
+  return normalizeSingleLine(buildActivitySummaryRaw(data));
+}
+
+function buildActivitySummaryRaw(data: HookEventData): string {
   const tool = data.tool_name ?? "unknown";
   const input = data.tool_input;
 
@@ -804,10 +900,16 @@ function shortenPath(p: string | undefined): string {
   return parts.length > 2 ? parts.slice(-2).join("/") : parts[parts.length - 1];
 }
 
-// Truncate a string with ellipsis
+// Collapse newlines/tabs into spaces so summaries are always single-line in UI
+function normalizeSingleLine(s: string): string {
+  return s.replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
+}
+
+// Truncate a string with ellipsis (normalize first to prevent multi-line rendering)
 function truncate(s: string | undefined, max: number): string {
   if (!s) return "?";
-  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+  const clean = normalizeSingleLine(s);
+  return clean.length > max ? clean.slice(0, max - 1) + "…" : clean;
 }
 
 // Task-related tool names that get ingested into the store (not just activity)
@@ -933,16 +1035,25 @@ export function ingestHookEvents(store: Store, events: HookEvent[]): void {
       store.markSessionStopped(sessionId, event.ts || now);
     }
 
-    // Subagent/notification events → activity log only
-    if ((event.event === "subagent_stop" || event.event === "notification") && cwd) {
-      const projectPath = cwdToProjectPath(cwd);
-      const summary = event.event === "subagent_stop"
-        ? `SubagentStop: ${data.tool_name ? `${data.tool_name} ` : ""}${data.reason ?? "completed"}`
-        : `Notification: ${truncate(data.reason, 50)}`;
+    // Subagent/notification/compact events → activity log only
+    if (event.event === "subagent_stop" || event.event === "notification" || event.event === "compact") {
+      // For compact events, fall back to session-based lookup when cwd is missing
+      const projectPath = cwd
+        ? cwdToProjectPath(cwd)
+        : (event.event === "compact" ? store.lookupProjectBySession(sessionId) : undefined);
+      if (!projectPath) continue;
+      let summary: string;
+      if (event.event === "subagent_stop") {
+        summary = `SubagentStop: ${data.tool_name ? `${data.tool_name} ` : ""}${data.reason ?? "completed"}`;
+      } else if (event.event === "compact") {
+        summary = "⚡ Context compacted";
+      } else {
+        summary = `Notification: ${truncate(data.reason, 50)}`;
+      }
       store.addActivity(projectPath, {
         ts: event.ts || now,
         sessionId,
-        toolName: event.event,
+        toolName: event.event === "compact" ? "_compact" : event.event,
         summary,
         projectPath,
       });
@@ -1024,6 +1135,17 @@ export function mergeAndPersist(
   const events = consumeEvents();
   if (events.length > 0) {
     ingestHookEvents(store, events);
+  }
+
+  // Layer 1b: Detect compaction events from JSONL transcripts (active sessions only)
+  // More reliable than PreCompact hook — reads directly from Claude Code's own data.
+  for (const project of liveProjects) {
+    if (project.activeSessions > 0 && project.claudeDir) {
+      const compactions = getProjectCompactions(project.claudeDir, project.projectPath);
+      if (compactions.length > 0) {
+        store.ingestCompactions(compactions);
+      }
+    }
   }
 
   // Layer 2: Merge live scanner data with stored history
