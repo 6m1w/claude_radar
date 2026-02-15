@@ -103,7 +103,7 @@ function taskStats(p: ViewProject) {
 
 // ─── View state ─────────────────────────────────────────────
 type View = "dashboard" | "agent" | "swimlane";
-type BottomTab = "docs" | "git" | "sessions";
+type BottomTab = "git" | "sessions";
 type FocusedPanel = "projects" | "tasks" | "roadmap" | "bottom";
 
 export function App() {
@@ -120,7 +120,7 @@ export function App() {
 
   // Bottom tabbed panel state
   const [bottomTab, setBottomTab] = useState<BottomTab>("git");
-  const [bottomDocIdx, setBottomDocIdx] = useState(0);
+
   const [bottomScrollY, setBottomScrollY] = useState(0);
 
   // Roadmap .md file switching (when roadmap panel is focused)
@@ -217,7 +217,6 @@ export function App() {
   const switchBottomTab = (tab: BottomTab) => {
     setBottomTab(tab);
     setBottomScrollY(0);
-    if (tab === "docs") setBottomDocIdx(0);
   };
 
   useInput((input, key) => {
@@ -254,20 +253,8 @@ export function App() {
     if (focusedPanel === "bottom") {
       if (input === "j" || key.downArrow) setBottomScrollY((y) => y + 1);
       if (input === "k" || key.upArrow) setBottomScrollY((y) => Math.max(0, y - 1));
-      if (input === "d") switchBottomTab("docs");
       if (input === "g") switchBottomTab("git");
       if (input === "s") switchBottomTab("sessions");
-      if (bottomTab === "docs" && current) {
-        const docKeys = Object.keys(current.docContents);
-        if (input === "h" || key.leftArrow) {
-          setBottomDocIdx((i) => Math.max(0, i - 1));
-          setBottomScrollY(0);
-        }
-        if (input === "l" || key.rightArrow) {
-          setBottomDocIdx((i) => Math.min(docKeys.length - 1, i + 1));
-          setBottomScrollY(0);
-        }
-      }
       return;
     }
 
@@ -278,7 +265,6 @@ export function App() {
       if ((input === "k" || key.upArrow) && taskIdx > 0) {
         setTaskIdx((i) => i - 1);
       }
-      if (input === "d") { switchBottomTab("docs"); setFocusedPanel("bottom"); }
       if (input === "g") { switchBottomTab("git"); setFocusedPanel("bottom"); }
       if (input === "s") { switchBottomTab("sessions"); setFocusedPanel("bottom"); }
       return;
@@ -326,8 +312,7 @@ export function App() {
       });
     }
 
-    // d/g/s → switch bottom tab + focus bottom
-    if (input === "d") { switchBottomTab("docs"); setFocusedPanel("bottom"); }
+    // g/s → switch bottom tab + focus bottom
     if (input === "g") { switchBottomTab("git"); setFocusedPanel("bottom"); }
     if (input === "s") { switchBottomTab("sessions"); setFocusedPanel("bottom"); }
 
@@ -487,7 +472,6 @@ export function App() {
       <BottomPanel
         project={current}
         tab={bottomTab}
-        docIdx={bottomDocIdx}
         scrollY={bottomScrollY}
         focused={bottomFocused}
         height={bottomHeight}
@@ -704,7 +688,6 @@ const COMMIT_TYPE_COLORS: Record<string, string> = {
 function BottomPanel({
   project,
   tab,
-  docIdx,
   scrollY,
   focused,
   height,
@@ -712,136 +695,34 @@ function BottomPanel({
 }: {
   project: ViewProject;
   tab: BottomTab;
-  docIdx: number;
   scrollY: number;
   focused: boolean;
   height: number;
   hotkey?: string;
 }) {
-  // Tab header with active indicator
-  const tabItems: { key: BottomTab; label: string; hotkey: string }[] = [
-    { key: "docs", label: "Docs", hotkey: "d" },
-    { key: "git", label: "Git Log", hotkey: "g" },
-    { key: "sessions", label: "Sessions", hotkey: "s" },
-  ];
+  // Dynamic title: [4] GIT LOG or [4] SESSIONS
+  const title = tab === "git" ? "GIT LOG" : "SESSIONS";
 
-  const tabHeader = tabItems.map((t) => {
-    const isActive = tab === t.key;
-    return (
-      <Text key={t.key}>
-        <Text color={isActive ? C.primary : C.dim}>{isActive ? "[" : " "}</Text>
-        <Text color={isActive ? C.primary : C.subtext} bold={isActive}>
-          {t.hotkey}:{t.label}
-        </Text>
-        <Text color={isActive ? C.primary : C.dim}>{isActive ? "]" : " "}</Text>
-        <Text>  </Text>
-      </Text>
-    );
-  });
-
-  // Content area: panel border(2) + title(1) + tab header(1) = 4 lines of chrome. paddingY=0
-  const contentHeight = Math.max(2, height - 4);
+  // Content area: panel border(2) + title(1) = 3 lines of chrome. paddingY=0
+  const contentHeight = Math.max(2, height - 3);
 
   return (
-    <Panel title="" focused={focused} height={height} hotkey={hotkey}>
-      <Box>{tabHeader}</Box>
-      <Box flexDirection="column" height={contentHeight}>
-        {tab === "docs" && (
-          <DocsContent
-            project={project}
-            docIdx={docIdx}
-            scrollY={scrollY}
-            contentHeight={contentHeight}
-          />
-        )}
-        {tab === "git" && (
-          <GitLogContent
-            project={project}
-            scrollY={scrollY}
-            contentHeight={contentHeight}
-          />
-        )}
-        {tab === "sessions" && (
-          <SessionsContent
-            project={project}
-            scrollY={scrollY}
-            contentHeight={contentHeight}
-          />
-        )}
-      </Box>
-    </Panel>
-  );
-}
-
-// ─── Docs tab content ───────────────────────────────────────
-function DocsContent({
-  project,
-  docIdx,
-  scrollY,
-  contentHeight,
-}: {
-  project: ViewProject;
-  docIdx: number;
-  scrollY: number;
-  contentHeight: number;
-}) {
-  if (!project) {
-    return <Text color={C.dim}>Select a project to view docs</Text>;
-  }
-
-  const docKeys = Object.keys(project.docContents);
-  if (docKeys.length === 0) {
-    return <Text wrap="truncate" color={C.dim}>No docs detected in {project.name}</Text>;
-  }
-
-  const safeIdx = Math.min(docIdx, docKeys.length - 1);
-  const activeDoc = docKeys[safeIdx];
-  const content = project.docContents[activeDoc] ?? "";
-
-  // File selector row
-  const fileTabs = docKeys.map((name, i) => (
-    <Text key={name}>
-      <Text color={i === safeIdx ? C.primary : C.dim} bold={i === safeIdx}>
-        {i === safeIdx ? "▸" : " "} {name}
-      </Text>
-      <Text>  </Text>
-    </Text>
-  ));
-
-  // Basic markdown rendering: split into lines and apply styling
-  const lines = content.split("\n");
-  const visibleLines = lines.slice(scrollY, scrollY + contentHeight - 1);
-
-  return (
-    <>
-      <Box>{fileTabs}</Box>
-      {visibleLines.map((line, i) => {
-        const lineNum = scrollY + i;
-        // Heading detection
-        if (line.startsWith("# ")) {
-          return <Text key={lineNum} wrap="truncate" color={C.text} bold>{line}</Text>;
-        }
-        if (line.startsWith("## ") || line.startsWith("### ")) {
-          return <Text key={lineNum} wrap="truncate" color={C.accent} bold>{line}</Text>;
-        }
-        // Checkbox detection
-        if (line.match(/^\s*- \[x\]/i)) {
-          return <Text key={lineNum} wrap="truncate" color={C.success}>{line}</Text>;
-        }
-        if (line.match(/^\s*- \[ \]/)) {
-          return <Text key={lineNum} wrap="truncate" color={C.subtext}>{line}</Text>;
-        }
-        // Code block markers
-        if (line.startsWith("```")) {
-          return <Text key={lineNum} wrap="truncate" color={C.accent}>{line}</Text>;
-        }
-        // Default
-        return <Text key={lineNum} wrap="truncate" color={C.subtext}>{line}</Text>;
-      })}
-      {scrollY + contentHeight - 1 < lines.length && (
-        <Text color={C.dim}>  ▼ {lines.length - scrollY - contentHeight + 1} more lines</Text>
+    <Panel title={title} focused={focused} height={height} hotkey={hotkey}>
+      {tab === "git" && (
+        <GitLogContent
+          project={project}
+          scrollY={scrollY}
+          contentHeight={contentHeight}
+        />
       )}
-    </>
+      {tab === "sessions" && (
+        <SessionsContent
+          project={project}
+          scrollY={scrollY}
+          contentHeight={contentHeight}
+        />
+      )}
+    </Panel>
   );
 }
 
@@ -862,7 +743,11 @@ function GitLogContent({
     return <Text wrap="truncate" color={C.dim}>No git history for {project?.name ?? "project"}</Text>;
   }
 
-  const visibleCommits = commits.slice(scrollY, scrollY + contentHeight);
+  // Budget: visible commits + overflow indicator(1, conditional)
+  // Must total ≤ contentHeight to prevent layout push
+  const hasMore = scrollY + contentHeight < commits.length;
+  const maxVisible = hasMore ? contentHeight - 1 : contentHeight;
+  const visibleCommits = commits.slice(scrollY, scrollY + maxVisible);
 
   return (
     <>
@@ -882,8 +767,8 @@ function GitLogContent({
           </Text>
         );
       })}
-      {scrollY + contentHeight < commits.length && (
-        <Text color={C.dim}>  ▼ {commits.length - scrollY - contentHeight} more commits</Text>
+      {hasMore && (
+        <Text color={C.dim}>  ▼ {commits.length - scrollY - maxVisible} more commits</Text>
       )}
     </>
   );
@@ -923,7 +808,11 @@ function SessionsContent({
   }
 
   const sessions = project.recentSessions;
-  const visible = sessions.slice(scrollY, scrollY + contentHeight);
+  // Budget: header(1) + visible sessions + overflow indicator(1, conditional)
+  // Must total ≤ contentHeight to prevent layout push
+  const hasMore = scrollY + contentHeight - 1 < sessions.length;
+  const maxVisible = hasMore ? contentHeight - 2 : contentHeight - 1; // -1 for header, -1 for overflow
+  const visible = sessions.slice(scrollY, scrollY + maxVisible);
 
   return (
     <>
@@ -936,8 +825,8 @@ function SessionsContent({
           {s.gitBranch && <Text color={C.dim}> ⎇{s.gitBranch}</Text>}
         </Box>
       ))}
-      {scrollY + contentHeight < sessions.length && (
-        <Text color={C.dim}>  ▼ {sessions.length - scrollY - contentHeight} more</Text>
+      {hasMore && (
+        <Text color={C.dim}>  ▼ {sessions.length - scrollY - maxVisible} more</Text>
       )}
     </>
   );
@@ -1016,8 +905,7 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
         ) : focusedPanel === "bottom" ? (
           <>
             <Text color={C.success}>↑↓</Text><Text color={C.subtext}> scroll  </Text>
-            <Text color={C.success}>h/l</Text><Text color={C.subtext}> file  </Text>
-            <Text color={C.success}>d/g/s</Text><Text color={C.subtext}> tab  </Text>
+            <Text color={C.success}>g/s</Text><Text color={C.subtext}> tab  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
@@ -1030,7 +918,7 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
         ) : focusedPanel === "tasks" ? (
           <>
             <Text color={C.success}>↑↓</Text><Text color={C.subtext}> nav tasks  </Text>
-            <Text color={C.success}>d/g/s</Text><Text color={C.subtext}> bottom  </Text>
+            <Text color={C.success}>g/s</Text><Text color={C.subtext}> bottom  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
