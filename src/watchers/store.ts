@@ -134,17 +134,27 @@ export class Store {
   // Prevents re-adding the same compaction on every poll cycle.
   private _seenCompactions = new Set<string>();
 
-  // Load all project files from disk
+  // Load all project files from disk, pruning phantom entries
   load(): void {
     if (!existsSync(PROJECTS_DIR)) return;
 
     try {
       const files = readdirSync(PROJECTS_DIR).filter((f) => f.endsWith(".json"));
       for (const file of files) {
-        const data = readJson<ProjectStore>(join(PROJECTS_DIR, file));
-        if (data?.projectPath) {
-          this.projects.set(data.projectPath, data);
+        const filePath = join(PROJECTS_DIR, file);
+        const data = readJson<ProjectStore>(filePath);
+        if (!data?.projectPath) continue;
+
+        // Prune phantom projects: path doesn't exist + no task data
+        const hasItems = Object.values(data.sessions ?? {}).some(
+          (s) => s.items && s.items.length > 0,
+        );
+        if (!hasItems && !existsSync(data.projectPath)) {
+          try { unlinkSync(filePath); } catch { /* ignore */ }
+          continue;
         }
+
+        this.projects.set(data.projectPath, data);
       }
     } catch {
       // Store dir may not be readable
