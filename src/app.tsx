@@ -123,8 +123,10 @@ export function App() {
 
   const [bottomScrollY, setBottomScrollY] = useState(0);
 
-  // Roadmap .md file switching (when roadmap panel is focused)
+  // Roadmap panel state (when focused via hotkey 3)
   const [roadmapDocIdx, setRoadmapDocIdx] = useState(0);
+  const [roadmapSectionIdx, setRoadmapSectionIdx] = useState(0);
+  const [expandedSection, setExpandedSection] = useState<number | null>(null);
 
   // Kanban state (shared across agent/swimlane views)
   const [kanbanHideDone, setKanbanHideDone] = useState(true);
@@ -274,12 +276,30 @@ export function App() {
 
     if (focusedPanel === "roadmap") {
       if (current) {
-        const roadmapCount = current.roadmap.length;
-        if ((input === "j" || key.downArrow) && roadmapDocIdx < roadmapCount - 1) {
-          setRoadmapDocIdx((i) => i + 1);
-        }
-        if ((input === "k" || key.upArrow) && roadmapDocIdx > 0) {
+        const roadmaps = current.roadmap;
+        const safeDocIdx = Math.min(roadmapDocIdx, roadmaps.length - 1);
+        const sections = roadmaps[safeDocIdx]?.sections ?? [];
+        // h/l switches .md files
+        if ((input === "h" || key.leftArrow) && roadmapDocIdx > 0) {
           setRoadmapDocIdx((i) => i - 1);
+          setRoadmapSectionIdx(0);
+          setExpandedSection(null);
+        }
+        if ((input === "l" || key.rightArrow) && roadmapDocIdx < roadmaps.length - 1) {
+          setRoadmapDocIdx((i) => i + 1);
+          setRoadmapSectionIdx(0);
+          setExpandedSection(null);
+        }
+        // j/k navigates sections
+        if ((input === "j" || key.downArrow) && roadmapSectionIdx < sections.length - 1) {
+          setRoadmapSectionIdx((i) => i + 1);
+        }
+        if ((input === "k" || key.upArrow) && roadmapSectionIdx > 0) {
+          setRoadmapSectionIdx((i) => i - 1);
+        }
+        // Enter/Space toggles expand (accordion)
+        if (key.return || input === " ") {
+          setExpandedSection((prev) => prev === roadmapSectionIdx ? null : roadmapSectionIdx);
         }
       }
       return;
@@ -292,6 +312,8 @@ export function App() {
       setScrollOffset(ensureVisible(next));
       setTaskIdx(0);
       setRoadmapDocIdx(0);
+      setRoadmapSectionIdx(0);
+      setExpandedSection(null);
     }
     if ((input === "k" || key.upArrow) && projectIdx > 0) {
       const next = projectIdx - 1;
@@ -299,6 +321,8 @@ export function App() {
       setScrollOffset(ensureVisible(next));
       setTaskIdx(0);
       setRoadmapDocIdx(0);
+      setRoadmapSectionIdx(0);
+      setExpandedSection(null);
     }
 
     // Space → toggle multi-select for kanban
@@ -381,7 +405,7 @@ export function App() {
   return (
     <Box flexDirection="column" height={termRows}>
       {/* Row A: Minimal status — "● N active" + compaction marquee */}
-      <Box paddingX={1} flexShrink={0}>
+      <Box paddingX={1} flexShrink={0} height={1}>
         <Text wrap="truncate">
           {totalActive > 0 ? (
             <>
@@ -402,11 +426,11 @@ export function App() {
         </Text>
       </Box>
 
-      {/* Row B: Projects + Tasks — parent clips overflow, children flex within */}
+      {/* Row B: Projects + Tasks — explicit heights prevent Yoga cross-axis overflow */}
       <Box height={rowBHeight} overflow="hidden">
         {/* Left column: Project list + Roadmap panel */}
-        <Box flexDirection="column" width={34} flexShrink={0}>
-          <Panel title={`PROJECTS (${sorted.length})`} flexGrow={1} hotkey="1" focused={focusedPanel === "projects"}>
+        <Box flexDirection="column" width={34} flexShrink={0} height={rowBHeight}>
+          <Panel title={`PROJECTS (${sorted.length})`} hotkey="1" focused={focusedPanel === "projects"} height={showRoadmap ? rowBHeight - roadmapHeight : rowBHeight}>
             {aboveCount > 0 && (
               <Text color={C.dim}>  ▲ {aboveCount} more</Text>
             )}
@@ -459,16 +483,17 @@ export function App() {
               <Text color={C.dim}>  ▼ {belowCount} more</Text>
             )}
           </Panel>
-          {showRoadmap && <RoadmapPanel project={current} height={roadmapHeight} focused={focusedPanel === "roadmap"} selectedIdx={roadmapDocIdx} hotkey="3" />}
+          {showRoadmap && <RoadmapPanel project={current} height={roadmapHeight} focused={focusedPanel === "roadmap"} selectedIdx={roadmapDocIdx} sectionIdx={roadmapSectionIdx} expandedSection={expandedSection} hotkey="3" />}
         </Box>
 
-        {/* Right: Tasks only — maxLines prevents layout overflow */}
+        {/* Right: Tasks only — explicit height + maxLines prevents layout overflow */}
         <RightPanel
           project={current}
           focused={focusedPanel === "tasks"}
           taskIdx={taskIdx}
           hotkey="2"
           maxLines={rowBHeight - panelChrome}
+          height={rowBHeight}
         />
       </Box>
 
@@ -500,16 +525,18 @@ function RightPanel({
   taskIdx,
   hotkey,
   maxLines,
+  height,
 }: {
   project: ViewProject;
   focused: boolean;
   taskIdx: number;
   hotkey?: string;
   maxLines?: number;
+  height?: number;
 }) {
   if (!project) {
     return (
-      <Panel title="TASKS" flexGrow={1} hotkey={hotkey}>
+      <Panel title="TASKS" flexGrow={1} hotkey={hotkey} height={height}>
         <Text color={C.dim}>Select a project</Text>
       </Panel>
     );
@@ -669,7 +696,7 @@ function RightPanel({
   }
 
   return (
-    <Panel title={title} flexGrow={1} focused={focused} hotkey={hotkey}>
+    <Panel title={title} flexGrow={1} focused={focused} hotkey={hotkey} height={height}>
       {lines}
     </Panel>
   );
@@ -867,7 +894,7 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
     : `${String(Math.round(metrics.netDown)).padStart(4)}K`;
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={2}>
       {/* Metrics line */}
       <Box>
         <Text color={C.warning}> {mascotFrame} </Text>
@@ -915,7 +942,9 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
           </>
         ) : focusedPanel === "roadmap" ? (
           <>
-            <Text color={C.success}>↑↓</Text><Text color={C.subtext}> switch .md  </Text>
+            <Text color={C.success}>↑↓</Text><Text color={C.subtext}> sections  </Text>
+            <Text color={C.success}>←→</Text><Text color={C.subtext}> files  </Text>
+            <Text color={C.success}>⏎</Text><Text color={C.subtext}> expand  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> back  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
