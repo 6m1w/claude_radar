@@ -177,7 +177,7 @@ export function App() {
   // Ink flex handles borders internally — only count truly fixed-height elements
   const termRows = rows;
   const ROADMAP_HEIGHT = 7;
-  const overhead = 1 + 2 + 2; // paddingBottom(1) + rowA(2) + statusBar(2)
+  const overhead = 1 + 2; // rowA(1) + statusBar(2)
   const panelChrome = 3;       // each Panel eats: border(2) + title line(1)
 
   // Bottom panel: always 1/4 of terminal (min 6)
@@ -326,7 +326,7 @@ export function App() {
         ? sorted.filter((p) => p.roadmap.length > 0)
         : sorted.filter((p) => p.tasks.length > 0);
     return (
-      <Box flexDirection="column" height={termRows} paddingBottom={1}>
+      <Box flexDirection="column" height={termRows}>
         <KanbanView
           projects={kanbanProjects}
           selectedCount={selectedNames.size}
@@ -347,9 +347,9 @@ export function App() {
   const activeProjects = sorted.filter((p) => p.isActive);
 
   return (
-    <Box flexDirection="column" height={termRows} paddingBottom={1}>
+    <Box flexDirection="column" height={termRows}>
       {/* Row A: Compressed overview bar */}
-      <Box paddingX={1} height={2}>
+      <Box paddingX={1}>
         <Text wrap="truncate">
           <Text color={C.text} bold>{String(totalProjects)}</Text>
           <Text color={C.subtext}> projects  </Text>
