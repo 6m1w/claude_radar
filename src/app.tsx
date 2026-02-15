@@ -341,6 +341,11 @@ export function App() {
   const totalDone = sorted.reduce((s, p) => s + taskStats(p).done, 0);
   const totalActive = sorted.filter((p) => p.isActive).length;
 
+  // Compacting projects for StatusBar marquee
+  const compactingProjects = sorted.filter((p) =>
+    p.activityAlerts.some((a) => a.type === "context_compact")
+  );
+
   const viewLabel = view === "agent" ? "TASKS"
     : view === "swimlane" ? "SWIMLANE"
     : focusedPanel === "bottom" ? "BOTTOM"
@@ -367,7 +372,7 @@ export function App() {
           hideDone={kanbanHideDone}
           cursorIdx={kanbanCursorIdx}
         />
-        <StatusBar view={view} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} focusedPanel="projects" hideDone={kanbanHideDone} />
+        <StatusBar view={view} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} focusedPanel="projects" hideDone={kanbanHideDone} compactingProjects={compactingProjects} />
       </Box>
     );
   }
@@ -483,6 +488,7 @@ export function App() {
         hasActive={totalActive > 0}
         allDone={totalTasks > 0 && totalDone === totalTasks}
         focusedPanel={focusedPanel}
+        compactingProjects={compactingProjects}
       />
     </Box>
   );
@@ -559,22 +565,26 @@ function RightPanel({
           : <Text color={C.subtext}>{stats.total - stats.done} remaining</Text>
       )}
 
-      {/* Alerts — pattern-detected issues */}
-      {project.activityAlerts.length > 0 && (
-        <>
-          {project.activityAlerts.map((alert, i) => {
-            const icon = alert.severity === "error" ? "▲" : "△";
-            const color = alert.severity === "error" ? C.error : C.warning;
-            return (
-              <Text key={`alert-${i}`} wrap="truncate">
-                <Text color={color}> {icon} </Text>
-                <Text color={color}>{alert.message}</Text>
-                <Text color={C.dim}> {formatRelativeTime(alert.ts)}</Text>
-              </Text>
-            );
-          })}
-        </>
-      )}
+      {/* Alerts — pattern-detected issues (exclude compaction — shown in StatusBar) */}
+      {(() => {
+        const taskAlerts = project.activityAlerts.filter((a) => a.type !== "context_compact");
+        if (taskAlerts.length === 0) return null;
+        return (
+          <>
+            {taskAlerts.map((alert, i) => {
+              const icon = alert.severity === "error" ? "▲" : "△";
+              const color = alert.severity === "error" ? C.error : C.warning;
+              return (
+                <Text key={`alert-${i}`} wrap="truncate">
+                  <Text color={color}> {icon} </Text>
+                  <Text color={color}>{alert.message}</Text>
+                  <Text color={C.dim}> {formatRelativeTime(alert.ts)}</Text>
+                </Text>
+              );
+            })}
+          </>
+        );
+      })()}
 
       {/* Task list — grouped by agent for multi-agent projects, flat for single-agent */}
       {(() => {
@@ -708,19 +718,36 @@ function RightPanel({
         </>
       )}
 
-      {/* Planning log (L2) — agent planning events */}
-      {project.planningLog.length > 0 && (
-        <>
-          <Text> </Text>
-          <Text color={C.dim}>─── Planning ─────────────────────</Text>
-          {project.planningLog.slice().reverse().slice(0, 4).map((evt, i) => (
-            <Text key={`p-${i}`} wrap="truncate">
-              <Text color={C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text>
-              <Text color={C.primary}>  {evt.summary}</Text>
-            </Text>
-          ))}
-        </>
-      )}
+      {/* Planning log (L2) — agent planning events, compact events capped */}
+      {project.planningLog.length > 0 && (() => {
+        const reversed = project.planningLog.slice().reverse();
+        // Cap _compact to most recent 1, collapse older
+        let compactSeen = 0;
+        const compactTotal = reversed.filter((e) => e.toolName === "_compact").length;
+        const filtered = reversed.filter((evt) => {
+          if (evt.toolName === "_compact") {
+            compactSeen++;
+            return compactSeen <= 1;
+          }
+          return true;
+        }).slice(0, 4);
+        const collapsedCompact = compactTotal > 1 ? compactTotal - 1 : 0;
+        return (
+          <>
+            <Text> </Text>
+            <Text color={C.dim}>─── Planning ─────────────────────</Text>
+            {filtered.map((evt, i) => (
+              <Text key={`p-${i}`} wrap="truncate">
+                <Text color={C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text>
+                <Text color={C.primary}>  {evt.summary}</Text>
+              </Text>
+            ))}
+            {collapsedCompact > 0 && (
+              <Text wrap="truncate" color={C.dim}>      +{collapsedCompact} earlier compaction{collapsedCompact > 1 ? "s" : ""}</Text>
+            )}
+          </>
+        );
+      })()}
 
       {/* Activity feed (L3) — recent tool calls from hook events */}
       {project.activityLog.length > 0 && (
@@ -1020,8 +1047,8 @@ function sparkline(values: number[], max = 100): string {
     .join("");
 }
 
-function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: {
-  view: View; label: string; hasActive: boolean; allDone: boolean; focusedPanel: FocusedPanel; hideDone?: boolean;
+function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone, compactingProjects = [] }: {
+  view: View; label: string; hasActive: boolean; allDone: boolean; focusedPanel: FocusedPanel; hideDone?: boolean; compactingProjects?: ViewProject[];
 }) {
   const metrics = useMetrics();
   const tick = metrics.tick;
@@ -1057,6 +1084,12 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
         <Text color={C.subtext}>{netUp} </Text>
         <Text color={C.primary}>↓</Text>
         <Text color={C.subtext}>{netDown}</Text>
+        {compactingProjects.length > 0 && (
+          <>
+            <Text color={C.dim}> │ </Text>
+            <Text color={C.warning}>⚡ {truncateToWidth(compactingProjects[tick % compactingProjects.length].name, 16)} compacting{compactingProjects.length > 1 ? ` (+${compactingProjects.length - 1})` : ""}</Text>
+          </>
+        )}
         <Text color={C.dim}> │ </Text>
         <Text color={C.primary}>{spinnerChar}</Text>
       </Box>
