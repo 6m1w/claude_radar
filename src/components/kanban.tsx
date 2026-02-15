@@ -14,7 +14,7 @@ import React from "react";
 import { Box, Text, useStdout } from "ink";
 import { C } from "../theme.js";
 import { Panel } from "./panel.js";
-import { Progress } from "./progress.js";
+
 import { formatDwell } from "../utils.js";
 import type { DisplayTask, ViewProject } from "../types.js";
 
@@ -252,18 +252,14 @@ function AgentTaskCard({ task, column }: {
 
 function ByAgentLayout({
   projects,
-  contentW,
   hideDone,
 }: {
   projects: ViewProject[];
-  contentW: number;
   hideDone: boolean;
 }) {
   if (projects.length === 0) {
     return <Text color={C.dim}>No active agents</Text>;
   }
-
-  const sepW = Math.min(contentW, 60);
 
   return (
     <Box flexDirection="column">
@@ -281,10 +277,8 @@ function ByAgentLayout({
         const primaryAgent = project.agentDetails[0];
         const processState = primaryAgent?.processState
           ?? (project.isActive ? "running" : project.activeSessions > 0 ? "idle" : undefined);
-        const stateIcon = processState === "running" ? "●"
-          : processState === "idle" ? "○" : "✕";
-        const stateColor = processState === "running" ? C.warning
-          : processState === "idle" ? C.dim : C.error;
+        const stateIcon = processState === "running" ? "●" : "○";
+        const stateColor = processState === "running" ? C.warning : C.dim;
 
         // Task counts
         const total = buckets.todo.length + buckets.needs_input.length + buckets.doing.length + buckets.done.length;
@@ -297,10 +291,10 @@ function ByAgentLayout({
 
         return (
           <Box key={project.projectPath} flexDirection="column">
-            {/* Separator between projects */}
-            {pi > 0 && <Text color={C.dim}>{"─".repeat(sepW)}</Text>}
+            {/* Blank line between projects for consistent spacing */}
+            {pi > 0 && <Text>{" "}</Text>}
 
-            {/* Project header: state + name + branch + progress */}
+            {/* Project header: state + name + branch + count */}
             <Text wrap="truncate">
               <Text color={stateColor}>{stateIcon} </Text>
               <Text color={project.isActive ? C.warning : C.text} bold>{project.name}</Text>
@@ -308,13 +302,13 @@ function ByAgentLayout({
               {total > 0 && (
                 <>
                   <Text color={C.dim}>  </Text>
-                  <Progress done={done} total={total} width={8} />
+                  <Text color={C.subtext}>{done}/{total}</Text>
                 </>
               )}
               {/* Multi-agent indicator */}
               {project.agentDetails.length > 1 && (
                 <Text color={C.dim}>  {project.agentDetails.map((a) =>
-                  a.processState === "running" ? "●" : a.processState === "idle" ? "○" : "✕"
+                  a.processState === "running" ? "●" : "○"
                 ).join("")}</Text>
               )}
             </Text>
@@ -322,13 +316,10 @@ function ByAgentLayout({
             {/* Tasks — flat list with indentation */}
             {ordered.map(({ task, col }, ti) => (
               <Text key={`${task.id}-${ti}`} wrap="truncate">
-                <Text>  </Text>
+                <Text>    </Text>
                 <AgentTaskCard task={task} column={col} />
               </Text>
             ))}
-            {ordered.length === 0 && (
-              <Text color={C.dim}>  {project.isActive ? "— active, no tasks" : "— no tasks"}</Text>
-            )}
           </Box>
         );
       })}
@@ -365,7 +356,7 @@ export function KanbanView({
         title={`KANBAN ${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
         flexGrow={1}
       >
-        <ByAgentLayout projects={projects} contentW={contentW} hideDone={hideDone} />
+        <ByAgentLayout projects={projects} hideDone={hideDone} />
       </Panel>
     );
   }
