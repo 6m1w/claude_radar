@@ -411,8 +411,8 @@ export function App() {
         </Text>
       </Box>
 
-      {/* Row B: Projects + Tasks — explicit height prevents content overflow */}
-      <Box height={rowBHeight}>
+      {/* Row B: Projects + Tasks — explicit height + overflow clip prevents pushing Row A off-screen */}
+      <Box height={rowBHeight} overflow="hidden">
         {/* Left column: Project list + Roadmap panel */}
         <Box flexDirection="column" width={34} flexShrink={0}>
           <Panel title={`PROJECTS (${sorted.length})`} flexGrow={1} hotkey="1" focused={focusedPanel === "projects"}>
