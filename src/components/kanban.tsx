@@ -256,9 +256,13 @@ function AgentTaskCard({ task, column }: {
 function ByAgentLayout({
   projects,
   hideDone,
+  cursorIdx = 0,
+  viewportHeight,
 }: {
   projects: ViewProject[];
   hideDone: boolean;
+  cursorIdx?: number;
+  viewportHeight?: number;
 }) {
   if (projects.length === 0) {
     return <Text color={C.dim}>No active agents</Text>;
@@ -279,9 +283,59 @@ function ByAgentLayout({
     }
   }
 
+  const safeCursor = Math.max(0, Math.min(cursorIdx, activeProjects.length - 1));
+
+  // Pre-compute line height per project for scroll math
+  const MAX_TASKS = 5;
+  type ProjectBlock = {
+    project: ViewProject;
+    height: number; // lines this project occupies (excl. separator)
+  };
+  const blocks: ProjectBlock[] = activeProjects.map((project) => {
+    const buckets = buildBuckets(project);
+    const allGroups = [buckets.needs_input, buckets.doing, buckets.todo];
+    if (!hideDone) allGroups.push(buckets.done.slice(0, 5));
+    const taskCount = allGroups.reduce((s, b) => s + b.length, 0);
+    const visible = Math.min(taskCount, MAX_TASKS);
+    const overflow = taskCount > MAX_TASKS ? 1 : 0;
+    return { project, height: 1 + visible + overflow }; // header + tasks + overflow
+  });
+
+  // Compute visible range: ensure safeCursor is in viewport
+  let scrollStart = 0;
+  if (viewportHeight) {
+    // Scroll forward until cursor fits in viewport
+    while (scrollStart < safeCursor) {
+      let h = 0;
+      for (let i = scrollStart; i <= safeCursor; i++) {
+        h += blocks[i].height + (i > scrollStart ? 1 : 0); // +1 separator
+      }
+      if (h <= viewportHeight) break;
+      scrollStart++;
+    }
+  }
+
+  // Determine how many projects fit from scrollStart
+  let visibleEnd = blocks.length;
+  if (viewportHeight) {
+    let h = 0;
+    for (let i = scrollStart; i < blocks.length; i++) {
+      const projH = blocks[i].height + (i > scrollStart ? 1 : 0);
+      if (h + projH > viewportHeight) { visibleEnd = i; break; }
+      h += projH;
+    }
+  }
+
+  const aboveCount = scrollStart;
+  const belowCount = blocks.length - visibleEnd;
+
   return (
     <Box flexDirection="column">
-      {activeProjects.map((project, pi) => {
+      {aboveCount > 0 && <Text color={C.dim}>  ▲ {aboveCount} above</Text>}
+
+      {blocks.slice(scrollStart, visibleEnd).map(({ project }, vi) => {
+        const pi = scrollStart + vi;
+        const isCursor = pi === safeCursor;
         const buckets = buildBuckets(project);
 
         // Agent process state
@@ -291,80 +345,61 @@ function ByAgentLayout({
         const stateIcon = processState === "running" ? "\u25CF" : "\u25CB";
         const stateColor = processState === "running" ? C.warning : C.dim;
 
-        // Progress: "N remaining" or "N remaining · N!"
+        // Progress
         const remaining = buckets.todo.length + buckets.needs_input.length + buckets.doing.length;
         const attention = buckets.needs_input.length;
         const progressStr = remaining > 0
           ? `${remaining} remaining${attention > 0 ? ` \u00b7 ${attention}!` : ""}`
           : "all done";
-
-        // Branch display
         const branchStr = truncateToWidth(project.branch, 18);
 
-        // Status groups: ! ATTENTION → ◍ DOING → ○ TODO → ✓ DONE
-        type StatusGroup = { label: string; icon: string; color: string; tasks: DisplayTask[]; col: KanbanColumn };
-        const groups: StatusGroup[] = [
-          { label: "!", icon: "!", color: C.error, tasks: buckets.needs_input, col: "needs_input" },
-          { label: "\u25CD", icon: "\u25CD", color: C.warning, tasks: buckets.doing, col: "doing" },
-          { label: "\u25CB", icon: "\u25CB", color: C.dim, tasks: buckets.todo, col: "todo" },
-        ];
-        if (!hideDone && buckets.done.length > 0) {
-          // DONE: max 5 shown
-          const doneTasks = buckets.done.slice(0, 5);
-          groups.push({ label: `\u2713 ${buckets.done.length > 5 ? `${doneTasks.length} of ${buckets.done.length}` : `${buckets.done.length}/${buckets.done.length + remaining}`}`, icon: "\u2713", color: C.success, tasks: doneTasks, col: "done" });
+        // Collect all tasks in priority order, cap at MAX_TASKS
+        type TaggedTask = { task: DisplayTask; col: KanbanColumn };
+        const allTasks: TaggedTask[] = [];
+        for (const [col, tasks] of [
+          ["needs_input", buckets.needs_input],
+          ["doing", buckets.doing],
+          ["todo", buckets.todo],
+          ...(!hideDone && buckets.done.length > 0 ? [["done", buckets.done.slice(0, 5)]] : []),
+        ] as [KanbanColumn, DisplayTask[]][]) {
+          for (const task of tasks) allTasks.push({ task, col });
         }
+        const visibleTasks = allTasks.slice(0, MAX_TASKS);
+        const overflow = Math.max(0, allTasks.length - MAX_TASKS);
 
         return (
           <Box key={project.projectPath} flexDirection="column">
-            {pi > 0 && <Text>{" "}</Text>}
+            {vi > 0 && <Text>{" "}</Text>}
 
-            {/* Project header */}
+            {/* Project header with cursor */}
             <Text wrap="truncate">
-              <Text color={stateColor}>{stateIcon} </Text>
-              <Text color={project.isActive ? C.warning : C.text} bold>{project.name}</Text>
+              <Text color={isCursor ? C.primary : stateColor}>{isCursor ? "\u25b8" : stateIcon} </Text>
+              <Text color={project.isActive ? C.warning : C.text} bold={isCursor}>{project.name}</Text>
               <Text color={C.accent}>  ⎇{branchStr}</Text>
               <Text color={C.dim}>  </Text>
               <Text color={attention > 0 ? C.error : C.subtext}>{progressStr}</Text>
             </Text>
 
-            {/* Status-grouped tasks — capped at ~5 per project */}
-            {(() => {
-              if (remaining === 0 && hideDone) return null;
-              const MAX_VISIBLE = 5;
-              let budget = MAX_VISIBLE;
-              const totalTasks = groups.reduce((s, g) => s + g.tasks.length, 0);
-              const visibleGroups = groups.filter((g) => g.tasks.length > 0).map((group) => {
-                if (budget <= 0) return { ...group, tasks: [] as DisplayTask[] };
-                const visible = group.tasks.slice(0, budget);
-                budget -= visible.length;
-                return { ...group, tasks: visible };
-              }).filter((g) => g.tasks.length > 0);
-              const overflow = Math.max(0, totalTasks - MAX_VISIBLE);
-              return (
-                <>
-                  {visibleGroups.map((group) => (
-                    <Box key={group.label} flexDirection="column">
-                      <Text color={group.color}>  {group.label}</Text>
-                      {group.tasks.map((task, ti) => (
-                        <Text key={`${task.id}-${ti}`} wrap="truncate">
-                          <Text>    </Text>
-                          <AgentTaskCard task={task} column={group.col} />
-                        </Text>
-                      ))}
-                    </Box>
-                  ))}
-                  {overflow > 0 && <Text color={C.dim}>    +{overflow} more</Text>}
-                </>
-              );
-            })()}
+            {/* Task list — flat, no group headers */}
+            {visibleTasks.map(({ task, col }, ti) => (
+              <Text key={`${task.id}-${ti}`} wrap="truncate">
+                <Text>  </Text>
+                <AgentTaskCard task={task} column={col} />
+              </Text>
+            ))}
+            {overflow > 0 && (
+              <Text wrap="truncate" color={C.dim}>  +{overflow} more</Text>
+            )}
           </Box>
         );
       })}
 
+      {belowCount > 0 && <Text color={C.dim}>  ▼ {belowCount} below</Text>}
+
       {/* Collapsed all-done projects */}
       {allDoneProjects.length > 0 && (
         <>
-          {activeProjects.length > 0 && <Text>{" "}</Text>}
+          {(scrollStart < blocks.length || aboveCount > 0) && <Text>{" "}</Text>}
           <Text color={C.dim}>  + {allDoneProjects.length} project{allDoneProjects.length > 1 ? "s" : ""} (all done)</Text>
         </>
       )}
@@ -379,17 +414,22 @@ export function KanbanView({
   selectedCount,
   layout,
   hideDone,
+  cursorIdx = 0,
 }: {
   projects: ViewProject[];
   selectedCount: number;
   layout: "swimlane" | "by_agent";
   hideDone: boolean;
+  cursorIdx?: number;
 }) {
   const stdout = useStdout();
   const cols = stdout.stdout?.columns ?? 120;
+  const rows = stdout.stdout?.rows ?? 40;
 
   // Panel takes 4 chars (2 borders + 2 paddingX)
   const contentW = cols - 4;
+  // Viewport: terminal rows - statusBar(2) - panelChrome(3)
+  const viewportHeight = rows - 5;
 
   const filterLabel = selectedCount > 0 ? ` (${selectedCount} selected)` : "";
   const layoutLabel = layout === "swimlane" ? "ROADMAP" : "TASKS";
@@ -401,7 +441,7 @@ export function KanbanView({
         title={`${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
         flexGrow={1}
       >
-        <ByAgentLayout projects={projects} hideDone={hideDone} />
+        <ByAgentLayout projects={projects} hideDone={hideDone} cursorIdx={cursorIdx} viewportHeight={viewportHeight} />
       </Panel>
     );
   }

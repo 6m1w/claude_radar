@@ -128,6 +128,7 @@ export function App() {
 
   // Kanban state (shared across agent/swimlane views)
   const [kanbanHideDone, setKanbanHideDone] = useState(true);
+  const [kanbanCursorIdx, setKanbanCursorIdx] = useState(0);
 
   // Derived focus boolean for component compatibility
   const bottomFocused = focusedPanel === "bottom";
@@ -231,8 +232,10 @@ export function App() {
 
     // Agent / Swimlane views
     if (view === "agent" || view === "swimlane") {
-      if (key.escape) { setView("dashboard"); return; }
+      if (key.escape) { setView("dashboard"); setKanbanCursorIdx(0); return; }
       if (input === "h") setKanbanHideDone((h) => !h);
+      if (input === "j" || key.downArrow) setKanbanCursorIdx((i) => i + 1);
+      if (input === "k" || key.upArrow) setKanbanCursorIdx((i) => Math.max(0, i - 1));
       return;
     }
 
@@ -362,6 +365,7 @@ export function App() {
           selectedCount={selectedNames.size}
           layout={view === "agent" ? "by_agent" : "swimlane"}
           hideDone={kanbanHideDone}
+          cursorIdx={kanbanCursorIdx}
         />
         <StatusBar view={view} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} focusedPanel="projects" hideDone={kanbanHideDone} />
       </Box>
