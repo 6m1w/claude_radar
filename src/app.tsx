@@ -406,20 +406,50 @@ export function App() {
   });
 
   // Aggregate stats (cached until sorted changes)
-  const { totalProjects, totalTasks, totalDone, totalActive, compactingProjects } = useMemo(() => {
+  const { totalProjects, totalTasks, totalDone, totalActive, rowAAlerts } = useMemo(() => {
     const oneMinAgo = Date.now() - 60 * 1000;
+    // Collect all recent alerts across projects, tagged with project name
+    const alertPriority: Record<string, number> = {
+      repeated_failure: 1, long_turn: 2, context_compact: 3,
+    };
+    const alertIcon: Record<string, string> = {
+      repeated_failure: "✖", long_turn: "◑", context_compact: "⚡",
+    };
+    const alertColor: Record<string, string> = {
+      repeated_failure: C.error, long_turn: C.warning, context_compact: C.error,
+    };
+    const alertLabel: Record<string, string> = {
+      repeated_failure: "failing", long_turn: "slow turn", context_compact: "compacted",
+    };
+    type RowAAlert = { icon: string; color: string; label: string; project: string; priority: number };
+    const alerts: RowAAlert[] = [];
+    for (const p of sorted) {
+      for (const a of p.activityAlerts) {
+        if (new Date(a.ts).getTime() <= oneMinAgo) continue;
+        if (!alertPriority[a.type]) continue;
+        alerts.push({
+          icon: alertIcon[a.type],
+          color: alertColor[a.type],
+          label: alertLabel[a.type],
+          project: p.name,
+          priority: alertPriority[a.type],
+        });
+      }
+    }
+    // Sort by priority (lowest number = highest priority)
+    alerts.sort((a, b) => a.priority - b.priority);
+    // Keep only highest-priority alerts
+    const topPriority = alerts.length > 0 ? alerts[0].priority : 0;
+    const topAlerts = alerts.filter((a) => a.priority === topPriority);
     return {
       totalProjects: sorted.length,
       totalTasks: sorted.reduce((s, p) => s + p.tasks.length, 0),
       totalDone: sorted.reduce((s, p) => s + taskStats(p).done, 0),
-      // Unified active: scanner isActive OR hook sessions (more reliable than JSONL mtime)
       totalActive: sorted.filter((p) => p.isActive || p.hookSessionCount > 0).length,
-      compactingProjects: sorted.filter((p) =>
-        p.activityAlerts.some((a) => a.type === "context_compact" && new Date(a.ts).getTime() > oneMinAgo)
-      ),
+      rowAAlerts: topAlerts,
     };
   }, [sorted]);
-  const compactTick = Math.floor(Date.now() / 3000); // rotate every 3s
+  const alertTick = Math.floor(Date.now() / 3000); // marquee rotation for same-priority alerts
 
   const viewLabel = view === "agent" ? "TASKS"
     : view === "swimlane" ? "SWIMLANE"
@@ -455,20 +485,19 @@ export function App() {
 
   return (
     <Box flexDirection="column" height={termRows} width={cols} overflow="hidden">
-      {/* Row A: plain string, no child <Text> nodes */}
-      {(() => {
-        const rowAText = totalActive > 0
-          ? `${I.working} ${totalActive} active`
-          : "all idle";
-        const compact = compactingProjects.length > 0
-          ? ` · ⚡ ${truncateToWidth(compactingProjects[compactTick % compactingProjects.length].name, 16)} compacted${compactingProjects.length > 1 ? ` (+${compactingProjects.length - 1})` : ""}`
-          : "";
-        return (
-          <Box paddingX={1} flexShrink={0} height={1} width={cols} overflow="hidden">
-            <Text wrap="truncate" color={totalActive > 0 ? C.warning : C.dim}>{rowAText}{compact}</Text>
-          </Box>
-        );
-      })()}
+      {/* Row A: status + alert (separate <Text> for independent colors) */}
+      <Box paddingX={1} flexShrink={0} height={1} width={cols} overflow="hidden">
+        <Text color={totalActive > 0 ? C.warning : C.dim}>
+          {totalActive > 0 ? `${I.working} ${totalActive} active` : "all idle"}
+        </Text>
+        {rowAAlerts.length > 0 && (() => {
+          const a = rowAAlerts[alertTick % rowAAlerts.length];
+          const suffix = rowAAlerts.length > 1 ? ` (+${rowAAlerts.length - 1})` : "";
+          return (
+            <Text color={a.color}>{` · ${a.icon} ${truncateToWidth(a.project, 16)} ${a.label}${suffix}`}</Text>
+          );
+        })()}
+      </Box>
 
       {/* Row B: Projects + Tasks — explicit heights prevent Yoga cross-axis overflow */}
       <Box height={rowBHeight} overflow="hidden">
