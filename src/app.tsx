@@ -198,9 +198,11 @@ export function App() {
   const roadmapHeight = Math.floor(rowBHeight / 2);
   // Need at least 3 visible project lines in each half
   const showRoadmap = roadmapHeight - panelChrome >= 3;
+  // Reserve 2 lines for scroll indicators (▲ above / ▼ below) in worst case
+  const scrollIndicatorLines = 2;
   const visibleProjects = showRoadmap
-    ? Math.max(3, rowBHeight - roadmapHeight - panelChrome)
-    : Math.max(3, rowBHeight - panelChrome);
+    ? Math.max(3, rowBHeight - roadmapHeight - panelChrome - scrollIndicatorLines)
+    : Math.max(3, rowBHeight - panelChrome - scrollIndicatorLines);
 
   // Viewport scrolling
   const safeProjectIdx = Math.min(projectIdx, Math.max(0, sorted.length - 1));
@@ -411,10 +413,10 @@ export function App() {
         </Text>
       </Box>
 
-      {/* Row B: Projects + Tasks — explicit height + overflow clip prevents pushing Row A off-screen */}
-      <Box height={rowBHeight} overflow="hidden">
+      {/* Row B: Projects + Tasks — each column clips independently */}
+      <Box height={rowBHeight}>
         {/* Left column: Project list + Roadmap panel */}
-        <Box flexDirection="column" width={34} flexShrink={0}>
+        <Box flexDirection="column" width={34} flexShrink={0} height={rowBHeight} overflow="hidden">
           <Panel title={`PROJECTS (${sorted.length})`} flexGrow={1} hotkey="1" focused={focusedPanel === "projects"}>
             {aboveCount > 0 && (
               <Text color={C.dim}>  ▲ {aboveCount} more</Text>
@@ -471,13 +473,15 @@ export function App() {
           {showRoadmap && <RoadmapPanel project={current} height={roadmapHeight} focused={focusedPanel === "roadmap"} selectedIdx={roadmapDocIdx} hotkey="3" />}
         </Box>
 
-        {/* Right: Tasks only (simplified — no tab switching) */}
-        <RightPanel
-          project={current}
-          focused={focusedPanel === "tasks"}
-          taskIdx={taskIdx}
-          hotkey="2"
-        />
+        {/* Right: Tasks only — clip overflow independently */}
+        <Box flexDirection="column" flexGrow={1} height={rowBHeight} overflow="hidden">
+          <RightPanel
+            project={current}
+            focused={focusedPanel === "tasks"}
+            taskIdx={taskIdx}
+            hotkey="2"
+          />
+        </Box>
       </Box>
 
       {/* Row C: Bottom tabbed panel */}
