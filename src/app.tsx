@@ -607,7 +607,7 @@ function RightPanel({
                 color={isGone ? C.dim : t.status === "completed" ? C.dim : isCursor ? C.text : C.subtext}
                 bold={!isGone && isCursor}
                 dimColor={isGone}
-                strikethrough={isGone || t.status === "completed"}
+                strikethrough={t.status === "completed"}
               >
                 {t.subject}
               </Text>
