@@ -4,7 +4,7 @@
  * Connected to real data via useWatchSessions() hook.
  * Shows actual projects, tasks, and sessions from ~/.claude/
  */
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { Box, Text, useInput, useApp, useStdout } from "ink";
 import { C, I } from "./theme.js";
 import { Panel } from "./components/panel.js";
@@ -133,9 +133,11 @@ export function App() {
   // Derived focus boolean for component compatibility
   const bottomFocused = focusedPanel === "bottom";
 
-  // Convert real data → view model, group worktrees with their main repo
-  const viewProjects = rawProjects.map(toViewProject);
-  const sorted = (() => {
+  // Convert real data → view model (cached until rawProjects changes)
+  const viewProjects = useMemo(() => rawProjects.map(toViewProject), [rawProjects]);
+
+  // Group worktrees with their main repo, sort by activity tier (cached)
+  const sorted = useMemo(() => {
     // Phase 1: Group projects — main repo + its worktrees share a group key
     const groupMap = new Map<string, ViewProject[]>();
     for (const p of viewProjects) {
@@ -179,7 +181,7 @@ export function App() {
     });
 
     return groupEntries.flatMap(([, group]) => group);
-  })();
+  }, [viewProjects]);
 
   const current = sorted[projectIdx];
   const currentTasks = current?.tasks ?? [];
@@ -322,17 +324,19 @@ export function App() {
     }
   });
 
-  // Aggregate stats
-  const totalProjects = sorted.length;
-  const totalTasks = sorted.reduce((s, p) => s + p.tasks.length, 0);
-  const totalDone = sorted.reduce((s, p) => s + taskStats(p).done, 0);
-  const totalActive = sorted.filter((p) => p.isActive).length;
-
-  // Compacting projects for Row A marquee (5-min window)
-  const fiveMinAgo = Date.now() - 5 * 60 * 1000;
-  const compactingProjects = sorted.filter((p) =>
-    p.activityAlerts.some((a) => a.type === "context_compact" && new Date(a.ts).getTime() > fiveMinAgo)
-  );
+  // Aggregate stats (cached until sorted changes)
+  const { totalProjects, totalTasks, totalDone, totalActive, compactingProjects } = useMemo(() => {
+    const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+    return {
+      totalProjects: sorted.length,
+      totalTasks: sorted.reduce((s, p) => s + p.tasks.length, 0),
+      totalDone: sorted.reduce((s, p) => s + taskStats(p).done, 0),
+      totalActive: sorted.filter((p) => p.isActive).length,
+      compactingProjects: sorted.filter((p) =>
+        p.activityAlerts.some((a) => a.type === "context_compact" && new Date(a.ts).getTime() > fiveMinAgo)
+      ),
+    };
+  }, [sorted]);
   const compactTick = Math.floor(Date.now() / 3000); // rotate every 3s
 
   const viewLabel = view === "agent" ? "TASKS"

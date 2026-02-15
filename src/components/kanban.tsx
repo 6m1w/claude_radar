@@ -149,13 +149,15 @@ function RoadmapSwimLane({
   colWidths: number[];
   labelW: number;
 }) {
-  // Only show projects with roadmap data, sorted by completion % (lowest first)
+  // Only show projects with roadmap data, sorted by activity (active first, then recent)
   const withRoadmap = projects
     .filter((p) => p.roadmap.length > 0 && p.roadmap.some((r) => r.totalItems > 0))
     .sort((a, b) => {
-      const aPct = a.roadmap.reduce((s, r) => s + r.totalDone, 0) / Math.max(1, a.roadmap.reduce((s, r) => s + r.totalItems, 0));
-      const bPct = b.roadmap.reduce((s, r) => s + r.totalDone, 0) / Math.max(1, b.roadmap.reduce((s, r) => s + r.totalItems, 0));
-      return aPct - bPct;
+      // Active projects first
+      if (a.isActive && !b.isActive) return -1;
+      if (!a.isActive && b.isActive) return 1;
+      // Then by most recent activity
+      return b.lastActivity.getTime() - a.lastActivity.getTime();
     });
 
   if (withRoadmap.length === 0) {
