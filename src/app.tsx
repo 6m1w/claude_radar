@@ -578,6 +578,9 @@ function RightPanel({
   maxLines?: number;
   height?: number;
 }) {
+  const stdout = useStdout();
+  const panelContentW = (stdout.stdout?.columns ?? 80) - 34 - 4; // cols - left column - panel chrome
+
   if (!project) {
     return (
       <Panel title="TASKS" flexGrow={1} hotkey={hotkey} height={height}>
@@ -588,6 +591,14 @@ function RightPanel({
 
   const stats = taskStats(project);
   const title = project.name.toUpperCase();
+
+  // Centered divider helper
+  const divider = (label: string) => {
+    const w = Math.max(label.length + 4, Math.min(panelContentW, 40));
+    const left = Math.floor((w - label.length - 2) / 2);
+    const right = w - label.length - 2 - left;
+    return "─".repeat(left) + " " + label + " " + "─".repeat(right);
+  };
 
   // Collect content lines — each item is forced to height={1} to prevent multi-line overflow.
   // Per-section caps prevent any single section from exhausting the budget.
@@ -699,7 +710,7 @@ function RightPanel({
   if (focused && project.tasks[taskIdx] && !project.tasks[taskIdx].gone) {
     const t = project.tasks[taskIdx];
     push("td-sep", <Text> </Text>);
-    push("td-hdr", <Text color={C.dim}>──────── Task Detail ────────</Text>);
+    push("td-hdr", <Text color={C.dim}>{divider("Task Detail")}</Text>);
     push("td-info", <Text wrap="truncate">
       <Text color={C.subtext}>status: </Text>
       <Text color={t.status === "in_progress" ? C.warning : t.status === "completed" ? C.success : C.dim}>{t.status}</Text>
@@ -718,9 +729,9 @@ function RightPanel({
     .slice(0, CAP_RECENT);
   if (recentEvents.length > 0) {
     push("rc-sep", <Text> </Text>);
-    push("rc-hdr", <Text color={C.dim}>────────── Recent ──────────</Text>);
+    push("rc-hdr", <Text color={C.dim}>{divider("Recent")}</Text>);
     recentEvents.forEach((evt, i) =>
-      push(`rc-${i}`, <Text wrap="truncate"><Text color={evt.isError ? C.error : C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text><Text color={C.dim}>  </Text><Text color={activityColor(evt.toolName, !!evt.isError)}>{evt.summary}</Text></Text>)
+      push(`rc-${i}`, <Text wrap="truncate"><Text color={evt.isError ? C.error : C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text><Text color={C.dim}> </Text><Text color={activityColor(evt.toolName, !!evt.isError)}>{evt.summary}</Text></Text>)
     );
   }
 
