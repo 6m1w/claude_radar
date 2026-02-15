@@ -749,16 +749,16 @@ function detectPatterns(events: ActivityEvent[]): ActivityAlert[] {
       }
     }
 
-    // 4. Context compaction: _compact events indicate context window pressure
+    // 4. Context compaction: _compact events indicate session hit context limits
     const compactEvents = sessionEvents.filter((ev) => ev.toolName === "_compact");
     if (compactEvents.length > 0) {
       const latest = compactEvents[compactEvents.length - 1];
       alerts.push({
         type: "context_compact",
         severity: compactEvents.length >= 3 ? "error" : "warning",
-        message: compactEvents.length === 1
-          ? "Context compacted"
-          : `Context compacted ${compactEvents.length} times`,
+        message: compactEvents.length > 1
+          ? `Context compacted ${compactEvents.length}× — session nearing limits`
+          : "Context compacted — session history compressed",
         count: compactEvents.length,
         sessionId,
         projectPath: latest.projectPath,
