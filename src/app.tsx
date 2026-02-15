@@ -319,12 +319,10 @@ export function App() {
     : "DASHBOARD";
 
   if (view === "agent" || view === "swimlane") {
-    // Filter: selected projects, or projects with tasks (+ active projects in agent view)
-    const hasContent = (p: ViewProject) =>
-      p.tasks.length > 0 || (view === "agent" && p.isActive);
+    // Both views filter the same way — must have tasks
     const kanbanProjects = selectedNames.size > 0
-      ? sorted.filter((p) => selectedNames.has(p.projectPath) && hasContent(p))
-      : sorted.filter(hasContent);
+      ? sorted.filter((p) => selectedNames.has(p.projectPath) && p.tasks.length > 0)
+      : sorted.filter((p) => p.tasks.length > 0);
     return (
       <Box flexDirection="column" height={termRows}>
         <KanbanView
