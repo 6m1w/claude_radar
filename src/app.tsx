@@ -398,25 +398,29 @@ export function App() {
 
   return (
     <Box flexDirection="column" height={termRows} overflow="hidden">
-      {/* Row A: Minimal status — "● N active" + compaction marquee */}
+      {/* Row A: Minimal status — stable child structure (no Fragment branching) */}
       <Box paddingX={1} flexShrink={0} height={1} overflow="hidden">
         <Text wrap="truncate">
-          {totalActive > 0 ? (
-            <>
-              <Text color={C.warning}>{I.working} </Text>
-              <Text color={C.text} bold>{totalActive}</Text>
-              <Text color={C.subtext}> active</Text>
-            </>
-          ) : (
-            <Text color={C.dim}>all idle</Text>
-          )}
-          {compactingProjects.length > 0 && (
-            <>
-              <Text color={C.dim}> · </Text>
-              <Text color={C.warning}>⚡ {truncateToWidth(compactingProjects[compactTick % compactingProjects.length].name, 16)} compacted</Text>
-              {compactingProjects.length > 1 && <Text color={C.dim}> (+{compactingProjects.length - 1})</Text>}
-            </>
-          )}
+          <Text color={totalActive > 0 ? C.warning : C.dim}>
+            {totalActive > 0 ? `${I.working} ` : "all idle"}
+          </Text>
+          <Text color={C.text} bold={totalActive > 0}>
+            {totalActive > 0 ? String(totalActive) : ""}
+          </Text>
+          <Text color={C.subtext}>
+            {totalActive > 0 ? " active" : ""}
+          </Text>
+          <Text color={C.dim}>
+            {compactingProjects.length > 0 ? " · " : ""}
+          </Text>
+          <Text color={C.warning}>
+            {compactingProjects.length > 0
+              ? `⚡ ${truncateToWidth(compactingProjects[compactTick % compactingProjects.length].name, 16)} compacted`
+              : ""}
+          </Text>
+          <Text color={C.dim}>
+            {compactingProjects.length > 1 ? ` (+${compactingProjects.length - 1})` : ""}
+          </Text>
         </Text>
       </Box>
 
