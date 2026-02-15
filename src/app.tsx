@@ -226,7 +226,15 @@ export function App() {
     setBottomScrollY(0);
   };
 
+  // Track bracket paste state to ignore pasted text
+  const [isPasting, setIsPasting] = useState(false);
+
   useInput((input, key) => {
+    // Bracket paste detection: ignore all input between \x1b[200~ and \x1b[201~
+    if (input.includes("\x1b[200~") || input.includes("[200~")) { setIsPasting(true); return; }
+    if (input.includes("\x1b[201~") || input.includes("[201~")) { setIsPasting(false); return; }
+    if (isPasting) return;
+
     if (input === "q") exit();
 
     // Tab → cycle views: dashboard → agent → swimlane → dashboard
@@ -399,7 +407,7 @@ export function App() {
 
   // Aggregate stats (cached until sorted changes)
   const { totalProjects, totalTasks, totalDone, totalActive, compactingProjects } = useMemo(() => {
-    const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+    const oneMinAgo = Date.now() - 60 * 1000;
     return {
       totalProjects: sorted.length,
       totalTasks: sorted.reduce((s, p) => s + p.tasks.length, 0),
@@ -407,7 +415,7 @@ export function App() {
       // Unified active: scanner isActive OR hook sessions (more reliable than JSONL mtime)
       totalActive: sorted.filter((p) => p.isActive || p.hookSessionCount > 0).length,
       compactingProjects: sorted.filter((p) =>
-        p.activityAlerts.some((a) => a.type === "context_compact" && new Date(a.ts).getTime() > fiveMinAgo)
+        p.activityAlerts.some((a) => a.type === "context_compact" && new Date(a.ts).getTime() > oneMinAgo)
       ),
     };
   }, [sorted]);
