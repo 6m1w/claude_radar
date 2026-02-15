@@ -94,7 +94,7 @@ export function RoadmapPanel({
   return (
     <Panel title="ROADMAP" height={height} hotkey={hotkey} focused={focused}>
       {/* Source header with right-aligned total */}
-      <Box>
+      <Box height={1} overflow="hidden">
         <Text wrap="truncate" color={C.accent}>{sourceLabel}</Text>
         <Box flexGrow={1} />
         <Text color={selected.totalDone === selected.totalItems ? C.success : C.text}>
@@ -112,7 +112,7 @@ export function RoadmapPanel({
           const titleColor = isCursor ? C.text : C.subtext;
           const countColor = section.done === section.total ? C.success : C.subtext;
           return (
-            <Box key={`s-${line.idx}`}>
+            <Box key={`s-${line.idx}`} height={1} overflow="hidden">
               <Text color={isCursor ? C.primary : C.dim}>{isCursor ? icon : "▸"} </Text>
               <Text wrap="truncate" color={titleColor}>{truncateToWidth(section.title, 20)}</Text>
               <Box flexGrow={1} />

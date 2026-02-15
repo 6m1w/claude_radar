@@ -382,7 +382,7 @@ export function App() {
       ? sorted.filter((p) => selectedNames.has(p.projectPath) && hasActivity(p))
       : sorted.filter(hasActivity);
     return (
-      <Box flexDirection="column" height={termRows}>
+      <Box flexDirection="column" height={termRows} overflow="hidden">
         <KanbanView
           projects={kanbanProjects}
           selectedCount={selectedNames.size}
@@ -405,7 +405,7 @@ export function App() {
   const dbgHook = sorted.reduce((s, p) => s + p.hookSessionCount, 0);
 
   return (
-    <Box flexDirection="column" height={termRows}>
+    <Box flexDirection="column" height={termRows} overflow="hidden">
       {/* Row A: Minimal status — "● N active" + compaction marquee */}
       <Box paddingX={1} flexShrink={0} height={1} overflow="hidden">
         <Text wrap="truncate">
@@ -433,7 +433,7 @@ export function App() {
       {/* Row B: Projects + Tasks — explicit heights prevent Yoga cross-axis overflow */}
       <Box height={rowBHeight} overflow="hidden">
         {/* Left column: Project list + Roadmap panel */}
-        <Box flexDirection="column" width={34} flexShrink={0} height={rowBHeight}>
+        <Box flexDirection="column" width={34} flexShrink={0} height={rowBHeight} overflow="hidden">
           <Panel title={`PROJECTS (${sorted.length})`} hotkey="1" focused={focusedPanel === "projects"} height={showRoadmap ? rowBHeight - roadmapHeight : rowBHeight}>
             {aboveCount > 0 && (
               <Text color={C.dim}>  ▲ {aboveCount} more</Text>
@@ -861,10 +861,10 @@ function SessionsContent({
     <>
       <Text color={C.subtext}>⎇ {project.branch}  │  {sessions.length} session{sessions.length !== 1 ? "s" : ""}</Text>
       {visible.map((s, i) => (
-        <Box key={scrollY + i}>
+        <Box key={scrollY + i} height={1} overflow="hidden">
           <Text color={C.accent}>● </Text>
           <Text color={C.dim}>{truncateToWidth(s.sessionId, 8)}  </Text>
-          <Text color={C.text}>{s.summary ?? (s.firstPrompt ? truncateToWidth(s.firstPrompt, 50) : "—")}</Text>
+          <Text color={C.text}>{s.summary ? truncateToWidth(s.summary.replace(/[\r\n\t]+/g, " "), 50) : (s.firstPrompt ? truncateToWidth(s.firstPrompt.replace(/[\r\n\t]+/g, " "), 50) : "—")}</Text>
           {s.gitBranch && <Text color={C.dim}> ⎇{s.gitBranch}</Text>}
         </Box>
       ))}
