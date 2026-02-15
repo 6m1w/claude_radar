@@ -281,21 +281,28 @@ function readGitInfo(projectPath: string): { branch: string; worktreeOf?: string
 // ─── Phase 3: Detect docs in project directory ──────────────────
 // Merge priority candidates + recursive discovery into a single deduped list.
 // Priority docs come first (stable ordering for UI), then any extras found by discovery.
-function detectDocs(projectPath: string): string[] {
+function detectDocs(projectPath: string, fallbackPath?: string): string[] {
   const found: string[] = [];
   const seen = new Set<string>();
+  const searchPaths = fallbackPath ? [projectPath, fallbackPath] : [projectPath];
+
   // Priority candidates first (stable ordering)
   for (const candidate of DOC_PRIORITY) {
-    if (existsSync(join(projectPath, candidate))) {
-      found.push(candidate);
-      seen.add(candidate);
+    for (const base of searchPaths) {
+      if (!seen.has(candidate) && existsSync(join(base, candidate))) {
+        found.push(candidate);
+        seen.add(candidate);
+        break;
+      }
     }
   }
   // Add any .md files found by recursive discovery that aren't already listed
-  for (const md of discoverMarkdownFiles(projectPath)) {
-    if (!seen.has(md)) {
-      found.push(md);
-      seen.add(md);
+  for (const base of searchPaths) {
+    for (const md of discoverMarkdownFiles(base)) {
+      if (!seen.has(md)) {
+        found.push(md);
+        seen.add(md);
+      }
     }
   }
   return found;
@@ -349,6 +356,16 @@ function detectRoadmap(projectPath: string): RoadmapData[] {
   return results;
 }
 
+// Deduplicate roadmap entries by source file (worktree + main repo may find same .md)
+function dedupeRoadmap(entries: RoadmapData[]): RoadmapData[] {
+  const seen = new Set<string>();
+  return entries.filter((r) => {
+    if (seen.has(r.source)) return false;
+    seen.add(r.source);
+    return true;
+  });
+}
+
 // ─── Phase 3c: Read git log from project directory ───────────────
 function readGitLog(projectPath: string): GitCommit[] {
   try {
@@ -368,15 +385,21 @@ function readGitLog(projectPath: string): GitCommit[] {
 // ─── Phase 3c: Read doc file contents ────────────────────────────
 const MAX_DOC_SIZE = 50 * 1024;
 
-function readDocContents(projectPath: string, docFiles: string[]): Record<string, string> {
+function readDocContents(projectPath: string, docFiles: string[], fallbackPath?: string): Record<string, string> {
   const contents: Record<string, string> = {};
   for (const doc of docFiles) {
-    try {
-      const fullPath = join(projectPath, doc);
-      const s = statSync(fullPath);
-      if (s.size > MAX_DOC_SIZE) { contents[doc] = `[File too large: ${Math.round(s.size / 1024)}KB]`; continue; }
-      contents[doc] = readFileSync(fullPath, "utf-8");
-    } catch {}
+    // Try primary path first, then fallback (for worktrees)
+    const candidates = fallbackPath
+      ? [join(projectPath, doc), join(fallbackPath, doc)]
+      : [join(projectPath, doc)];
+    for (const fullPath of candidates) {
+      try {
+        const s = statSync(fullPath);
+        if (s.size > MAX_DOC_SIZE) { contents[doc] = `[File too large: ${Math.round(s.size / 1024)}KB]`; break; }
+        contents[doc] = readFileSync(fullPath, "utf-8");
+        break;
+      } catch { /* try next candidate */ }
+    }
   }
   return contents;
 }
@@ -667,10 +690,16 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
 
     // Read git info from actual project directory
     const git = readGitInfo(disc.projectPath);
-    const docs = detectDocs(disc.projectPath);
-    const roadmap = detectRoadmap(disc.projectPath);
+
+    // For worktrees, also search the main repo for docs and roadmap
+    // (worktrees may not have untracked/gitignored dirs like docs/)
+    const mdSearchPaths = git?.worktreeOf
+      ? [disc.projectPath, git.worktreeOf]
+      : [disc.projectPath];
+    const docs = detectDocs(disc.projectPath, git?.worktreeOf);
+    const roadmap = dedupeRoadmap(mdSearchPaths.flatMap(detectRoadmap));
     const gitLog = readGitLog(disc.projectPath);
-    const docContents = readDocContents(disc.projectPath, docs);
+    const docContents = readDocContents(disc.projectPath, docs, git?.worktreeOf);
 
     // Determine last activity: max of session file activity and task data
     const taskActivity = sessions.length > 0
