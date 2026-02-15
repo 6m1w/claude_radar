@@ -28,7 +28,7 @@ export function Panel({
       height={height}
       flexGrow={flexGrow}
       flexShrink={width ? 0 : undefined}
-      paddingX={1}
+      padding={1}
       overflowX="hidden"
     >
       <Text>

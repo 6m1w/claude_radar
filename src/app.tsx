@@ -8,7 +8,7 @@ import React, { useState } from "react";
 import { Box, Text, useInput, useApp, useStdout } from "ink";
 import { C, I } from "./theme.js";
 import { Panel } from "./components/panel.js";
-import { Progress } from "./components/progress.js";
+
 import { useWatchSessions } from "./watchers/use-watch.js";
 import { useMetrics } from "./hooks/use-metrics.js";
 import type { MergedProjectData, TaskItem, TodoItem, SessionHistoryEntry, AgentInfo, TeamConfig, ActivityEvent, DisplayTask, ViewProject } from "./types.js";
@@ -176,12 +176,12 @@ export function App() {
   // Layout calculation
   // Ink flex handles borders internally — only count truly fixed-height elements
   const termRows = rows;
-  const ROADMAP_HEIGHT = 7;
+  const ROADMAP_HEIGHT = 8;
   const overhead = 1 + 2; // rowA(1) + statusBar(2)
-  const panelChrome = 3;       // each Panel eats: border(2) + title line(1)
+  const panelChrome = 5;       // each Panel eats: border(2) + paddingY(2) + title line(1)
 
-  // Bottom panel: always 1/4 of terminal (min 6)
-  const bottomHeight = Math.max(6, Math.floor(termRows / 4));
+  // Bottom panel: always 1/4 of terminal (min 8)
+  const bottomHeight = Math.max(8, Math.floor(termRows / 4));
   // Row B (middle section) gets everything else
   const rowBHeight = termRows - overhead - bottomHeight;
   // Try fitting roadmap: need at least 3 visible projects
@@ -347,7 +347,7 @@ export function App() {
   return (
     <Box flexDirection="column" height={termRows}>
       {/* Row A: Compressed overview bar */}
-      <Box paddingX={1}>
+      <Box paddingX={1} flexShrink={0}>
         <Text wrap="truncate">
           <Text color={C.text} bold>{String(totalProjects)}</Text>
           <Text color={C.subtext}> projects  </Text>
@@ -355,7 +355,7 @@ export function App() {
           <Text color={C.subtext}> active  </Text>
           <Text color={C.text} bold>{String(totalTasks)}</Text>
           <Text color={C.subtext}> tasks  </Text>
-          {totalTasks > 0 && <Progress done={totalDone} total={totalTasks} width={12} />}
+          {totalTasks > 0 && <Text color={C.subtext}>{totalDone}/{totalTasks}</Text>}
           {/* Active project summaries */}
           {activeProjects.length > 0 && (
             <>
@@ -383,8 +383,8 @@ export function App() {
         </Text>
       </Box>
 
-      {/* Row B: Projects + Tasks — fills remaining space */}
-      <Box flexGrow={1}>
+      {/* Row B: Projects + Tasks — explicit height prevents content overflow */}
+      <Box height={rowBHeight}>
         {/* Left column: Project list + Roadmap panel */}
         <Box flexDirection="column" width={34}>
           <Panel title={`PROJECTS (${sorted.length})`} flexGrow={1}>
@@ -537,10 +537,7 @@ function RightPanel({
         </Box>
       )}
       {stats.total > 0 && (
-        <Box>
-          <Text color={C.subtext}>tasks: </Text>
-          <Progress done={stats.done} total={stats.total} width={14} />
-        </Box>
+        <Text color={C.subtext}>tasks: {stats.done}/{stats.total}</Text>
       )}
 
       {/* Alerts — pattern-detected issues */}
@@ -793,8 +790,8 @@ function BottomPanel({
     );
   });
 
-  // Content area: panel border(2) + tab header row(1) = 3 lines of chrome
-  const contentHeight = Math.max(3, height - 3);
+  // Content area: panel border(2) + paddingY(2) + title(1) + tab header(1) = 6 lines of chrome
+  const contentHeight = Math.max(2, height - 6);
 
   return (
     <Panel title="" focused={focused} height={height}>
