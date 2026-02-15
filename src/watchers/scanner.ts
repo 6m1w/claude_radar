@@ -143,6 +143,10 @@ function discoverProjects(): DiscoveredProject[] {
       // Skip root/home directories (too generic)
       if (projectPath === "/" || projectPath === homedir()) continue;
 
+      // Skip phantom projects where resolved path doesn't exist on disk
+      // (lossy resolveSegments can produce non-existent paths)
+      if (!existsSync(projectPath)) continue;
+
       results.push({
         claudeDir: dirPath,
         projectPath,
