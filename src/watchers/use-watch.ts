@@ -79,7 +79,10 @@ function snapshotKey(projects: MergedProjectData[]): string {
       const gitHead = p.gitLog?.[0]?.hash ?? "";
       const actLen = p.activityLog?.length ?? 0;
       const actLast = p.activityLog?.[actLen - 1]?.ts ?? "";
-      return `${p.projectPath}|s=${p.totalSessions}|a=${p.activeSessions}|b=${p.gitBranch ?? ""}|gl=${gitHead}|h=${p.hasHistory}|g=${p.goneSessionCount}|act=${actLen}:${actLast}|t=${taskKey}`;
+      const planLen = p.planningLog?.length ?? 0;
+      const planLast = p.planningLog?.[planLen - 1]?.ts ?? "";
+      const alertKey = p.activityAlerts?.map((a) => `${a.type}:${a.count}`).join(",") ?? "";
+      return `${p.projectPath}|s=${p.totalSessions}|a=${p.activeSessions}|b=${p.gitBranch ?? ""}|gl=${gitHead}|h=${p.hasHistory}|g=${p.goneSessionCount}|act=${actLen}:${actLast}|plan=${planLen}:${planLast}|alerts=${alertKey}|t=${taskKey}`;
     })
     .join("||");
 }

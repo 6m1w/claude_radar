@@ -495,6 +495,15 @@ export class Store {
     return sessions ? [...sessions.values()] : [];
   }
 
+  // Reverse-lookup: find which project owns a session ID (from hook-tracked sessions)
+  // Used as fallback when cwd is missing from hook events (e.g., PreCompact)
+  lookupProjectBySession(sessionId: string): string | undefined {
+    for (const [projectPath, sessions] of this._hookActiveSessions) {
+      if (sessions.has(sessionId)) return projectPath;
+    }
+    return undefined;
+  }
+
   // Add an activity event to the project's ring buffer
   addActivity(projectPath: string, event: ActivityEvent): void {
     let buf = this._activityBuffers.get(projectPath);
@@ -1018,8 +1027,12 @@ export function ingestHookEvents(store: Store, events: HookEvent[]): void {
     }
 
     // Subagent/notification/compact events → activity log only
-    if ((event.event === "subagent_stop" || event.event === "notification" || event.event === "compact") && cwd) {
-      const projectPath = cwdToProjectPath(cwd);
+    if (event.event === "subagent_stop" || event.event === "notification" || event.event === "compact") {
+      // For compact events, fall back to session-based lookup when cwd is missing
+      const projectPath = cwd
+        ? cwdToProjectPath(cwd)
+        : (event.event === "compact" ? store.lookupProjectBySession(sessionId) : undefined);
+      if (!projectPath) continue;
       let summary: string;
       if (event.event === "subagent_stop") {
         summary = `SubagentStop: ${data.tool_name ? `${data.tool_name} ` : ""}${data.reason ?? "completed"}`;
