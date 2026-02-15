@@ -1082,7 +1082,7 @@ describe("activity summary enrichment", () => {
 // ─── PreCompact (compact) events ──────────────────────────────
 
 describe("compact events", () => {
-  it("should record compact as planning activity", () => {
+  it("should record compact as activity (not planning)", () => {
     const store = new Store();
 
     ingestHookEvents(store, [{
@@ -1095,10 +1095,10 @@ describe("compact events", () => {
     }]);
 
     const { planningLog, activityLog } = store.getActivitySplit("/test/project");
-    expect(planningLog).toHaveLength(1);
-    expect(planningLog[0].toolName).toBe("_compact");
-    expect(planningLog[0].summary).toContain("Context compacted");
-    expect(activityLog).toHaveLength(0);
+    expect(activityLog).toHaveLength(1);
+    expect(activityLog[0].toolName).toBe("_compact");
+    expect(activityLog[0].summary).toContain("Context compacted");
+    expect(planningLog).toHaveLength(0);
   });
 });
 
