@@ -121,12 +121,11 @@ export function RoadmapPanel({
           const isSectionCursor = focused && line.idx === safeSectionIdx && itemIdx < 0;
           const isExpanded = focused && expandedSection === line.idx;
           const icon = isExpanded ? "▾" : "▸";
-          const titleColor = isSectionCursor ? C.text : C.subtext;
           const countColor = section.done === section.total ? C.success : C.subtext;
           return (
             <Box key={`s-${line.idx}`} height={1} overflow="hidden">
               <Text color={isSectionCursor ? C.primary : C.dim}>{isSectionCursor || isExpanded ? icon : "▸"} </Text>
-              <Text wrap="truncate" color={titleColor}>{truncateToWidth(section.title, 20)}</Text>
+              <Text wrap="truncate" color={C.subtext}>{truncateToWidth(section.title, 20)}</Text>
               <Box flexGrow={1} />
               <Text color={countColor}>{section.done}/{section.total}</Text>
             </Box>
@@ -136,7 +135,7 @@ export function RoadmapPanel({
         const item = sections[line.sectionIdx].items[line.itemIdx];
         const isItemCursor = focused && line.sectionIdx === safeSectionIdx && line.itemIdx === itemIdx;
         const doneIcon = item.done ? "✓" : "○";
-        const color = isItemCursor ? C.text : item.done ? C.success : C.subtext;
+        const color = item.done ? C.success : C.subtext;
         return (
           <Text key={`i-${line.sectionIdx}-${line.itemIdx}`} wrap="truncate">
             <Text color={isItemCursor ? C.primary : C.dim}>{isItemCursor ? "▸" : " "} </Text>

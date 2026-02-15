@@ -201,8 +201,8 @@ export function App() {
   const bottomHeight = Math.max(8, Math.floor(termRows / 4));
   // Row B (middle section) gets everything else
   const rowBHeight = termRows - overhead - bottomHeight;
-  // 50/50 split: roadmap panel gets half of left column height
-  const roadmapHeight = Math.floor(rowBHeight / 2);
+  // 50/50 split: roadmap gets ceil, projects gets floor (remainder goes to roadmap)
+  const roadmapHeight = Math.ceil(rowBHeight / 2);
   // Need at least 3 visible project lines in each half
   const showRoadmap = roadmapHeight - panelChrome >= 3;
   // Reserve 2 lines for scroll indicators (▲ above / ▼ below) in worst case
@@ -691,7 +691,7 @@ function RightPanel({
   if (focused && project.tasks[taskIdx] && !project.tasks[taskIdx].gone) {
     const t = project.tasks[taskIdx];
     push("td-sep", <Text> </Text>);
-    push("td-hdr", <Text color={C.dim}>─── Task Detail ─────────────────────</Text>);
+    push("td-hdr", <Text color={C.dim}>──────── Task Detail ────────</Text>);
     push("td-info", <Text wrap="truncate">
       <Text color={C.subtext}>status: </Text>
       <Text color={t.status === "in_progress" ? C.warning : t.status === "completed" ? C.success : C.dim}>{t.status}</Text>
@@ -710,7 +710,7 @@ function RightPanel({
     .slice(0, CAP_RECENT);
   if (recentEvents.length > 0) {
     push("rc-sep", <Text> </Text>);
-    push("rc-hdr", <Text color={C.dim}>─── Recent ───────────────────────</Text>);
+    push("rc-hdr", <Text color={C.dim}>────────── Recent ──────────</Text>);
     recentEvents.forEach((evt, i) =>
       push(`rc-${i}`, <Text wrap="truncate"><Text color={evt.isError ? C.error : C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text><Text color={C.dim}>  </Text><Text color={activityColor(evt.toolName, !!evt.isError)}>{evt.summary}</Text></Text>)
     );
@@ -813,7 +813,7 @@ function GitLogContent({
         const typeColor = commit.type ? (COMMIT_TYPE_COLORS[commit.type] ?? C.subtext) : C.subtext;
         // Format date as relative
         const dateStr = formatCommitDate(commit.authorDate);
-        const typeStr = padEndToWidth(commit.type ? truncateToWidth(commit.type, 9) : "", 9);
+        const typeStr = padEndToWidth(commit.type ? truncateToWidth(commit.type, 8) : "", 9);
 
         return (
           <Text key={`${commit.hash}-${idx}`} wrap="truncate">
@@ -825,7 +825,7 @@ function GitLogContent({
         );
       })}
       {hasMore && (
-        <Text color={C.dim}>  ▼ {commits.length - scrollY - maxVisible} more commits</Text>
+        <Text color={C.dim}>▼ {commits.length - scrollY - maxVisible} more commits</Text>
       )}
     </>
   );
