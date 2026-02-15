@@ -87,7 +87,7 @@ function CompactCard({ task, column }: {
         color={isDone || isGone ? C.dim : C.text}
         bold={column === "doing"}
         dimColor={isGone}
-        strikethrough={isDone || isGone}
+        strikethrough={isDone}
       >
         {idPrefix}{task.subject}
       </Text>
@@ -242,7 +242,7 @@ function AgentTaskCard({ task, column }: {
       <Text color={iconColor}>{icon} </Text>
       <Text
         color={column === "done" || task.gone ? C.dim : C.text}
-        strikethrough={column === "done" || !!task.gone}
+        strikethrough={column === "done"}
       >
         {idPrefix}{task.subject}
       </Text>
@@ -264,10 +264,12 @@ function ByAgentLayout({
     return <Text color={C.dim}>No active agents</Text>;
   }
 
-  // Separate all-done projects for collapsed display
+  // Separate projects: skip worktree-no-task, collapse all-done
   const activeProjects: ViewProject[] = [];
   const allDoneProjects: ViewProject[] = [];
   for (const p of projects) {
+    // Hide worktree projects with no tasks (noise in task-focused view)
+    if (p.worktreeOf && p.tasks.length === 0) continue;
     const buckets = buildBuckets(p);
     const remaining = buckets.todo.length + buckets.needs_input.length + buckets.doing.length;
     if (remaining === 0 && buckets.done.length > 0) {
@@ -325,23 +327,36 @@ function ByAgentLayout({
               <Text color={attention > 0 ? C.error : C.subtext}>{progressStr}</Text>
             </Text>
 
-            {/* Status-grouped tasks */}
-            {remaining > 0 || !hideDone ? groups.filter((g) => g.tasks.length > 0).map((group) => (
-              <Box key={group.label} flexDirection="column">
-                <Text color={group.color}>  {group.label}</Text>
-                {group.tasks.map((task, ti) => (
-                  <Text key={`${task.id}-${ti}`} wrap="truncate">
-                    <Text>    </Text>
-                    <AgentTaskCard task={task} column={group.col} />
-                  </Text>
-                ))}
-              </Box>
-            )) : null}
-
-            {/* No tasks but has activity */}
-            {project.tasks.length === 0 && (
-              <Text wrap="truncate" color={C.dim}>    {project.activeSessions > 0 ? `${project.activeSessions} active session${project.activeSessions > 1 ? "s" : ""} \u00b7 no tasks` : "no tasks"}</Text>
-            )}
+            {/* Status-grouped tasks — capped at ~5 per project */}
+            {(() => {
+              if (remaining === 0 && hideDone) return null;
+              const MAX_VISIBLE = 5;
+              let budget = MAX_VISIBLE;
+              const totalTasks = groups.reduce((s, g) => s + g.tasks.length, 0);
+              const visibleGroups = groups.filter((g) => g.tasks.length > 0).map((group) => {
+                if (budget <= 0) return { ...group, tasks: [] as DisplayTask[] };
+                const visible = group.tasks.slice(0, budget);
+                budget -= visible.length;
+                return { ...group, tasks: visible };
+              }).filter((g) => g.tasks.length > 0);
+              const overflow = Math.max(0, totalTasks - MAX_VISIBLE);
+              return (
+                <>
+                  {visibleGroups.map((group) => (
+                    <Box key={group.label} flexDirection="column">
+                      <Text color={group.color}>  {group.label}</Text>
+                      {group.tasks.map((task, ti) => (
+                        <Text key={`${task.id}-${ti}`} wrap="truncate">
+                          <Text>    </Text>
+                          <AgentTaskCard task={task} column={group.col} />
+                        </Text>
+                      ))}
+                    </Box>
+                  ))}
+                  {overflow > 0 && <Text color={C.dim}>    +{overflow} more</Text>}
+                </>
+              );
+            })()}
           </Box>
         );
       })}
