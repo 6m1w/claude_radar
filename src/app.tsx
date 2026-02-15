@@ -20,6 +20,9 @@ import { RoadmapPanel } from "./components/roadmap-panel.js";
 function toViewProject(p: MergedProjectData): ViewProject {
   const allItems = p.sessions.flatMap((s) => s.items);
 
+  // Infer owner for unowned tasks: if single agent, assign to it
+  const inferredOwner = p.agentDetails.length === 1 ? p.agentDetails[0].name : undefined;
+
   const tasks = allItems.map((item, i): DisplayTask => {
     const gone = !!item._gone;
     if ("subject" in item) {
@@ -34,7 +37,7 @@ function toViewProject(p: MergedProjectData): ViewProject {
         id: t.id,
         subject: t.subject,
         status: t.status,
-        owner: t.owner,
+        owner: t.owner || inferredOwner,
         blockedBy: unresolved?.length ? unresolved[0] : undefined,
         description: t.description,
         gone,
@@ -47,6 +50,7 @@ function toViewProject(p: MergedProjectData): ViewProject {
       id: String(i + 1),
       subject: todo.content,
       status: todo.status,
+      owner: inferredOwner,
       gone,
       statusChangedAt: item._statusChangedAt,
     };
@@ -342,10 +346,15 @@ export function App() {
     : "DASHBOARD";
 
   if (view === "agent" || view === "swimlane") {
-    // Both views filter the same way — must have tasks
+    // Show projects with tasks OR active agent activity (sessions, hook events, agent processes)
+    const hasActivity = (p: ViewProject) =>
+      p.tasks.length > 0 ||
+      p.activeSessions > 0 ||
+      p.hookSessionCount > 0 ||
+      p.agentDetails.length > 0;
     const kanbanProjects = selectedNames.size > 0
-      ? sorted.filter((p) => selectedNames.has(p.projectPath) && p.tasks.length > 0)
-      : sorted.filter((p) => p.tasks.length > 0);
+      ? sorted.filter((p) => selectedNames.has(p.projectPath) && hasActivity(p))
+      : sorted.filter(hasActivity);
     return (
       <Box flexDirection="column" height={termRows}>
         <KanbanView

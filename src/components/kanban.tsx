@@ -314,12 +314,14 @@ function ByAgentLayout({
             </Text>
 
             {/* Tasks — flat list with indentation */}
-            {ordered.map(({ task, col }, ti) => (
+            {ordered.length > 0 ? ordered.map(({ task, col }, ti) => (
               <Text key={`${task.id}-${ti}`} wrap="truncate">
                 <Text>    </Text>
                 <AgentTaskCard task={task} column={col} />
               </Text>
-            ))}
+            )) : (
+              <Text color={C.dim}>    {project.activeSessions > 0 ? `${project.activeSessions} active session${project.activeSessions > 1 ? "s" : ""} · no tasks` : "no tasks"}</Text>
+            )}
           </Box>
         );
       })}
