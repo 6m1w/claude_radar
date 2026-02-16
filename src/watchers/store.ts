@@ -220,6 +220,22 @@ export class Store {
           continue;
         }
 
+        // Prune gone sessions older than 1 hour
+        const GONE_TTL_MS = 60 * 60 * 1000;
+        const now = Date.now();
+        let pruned = false;
+        for (const [sid, session] of Object.entries(data.sessions ?? {})) {
+          if (session.gone && session.goneAt && (now - new Date(session.goneAt).getTime()) > GONE_TTL_MS) {
+            delete data.sessions[sid];
+            pruned = true;
+          }
+        }
+        // If all sessions pruned, remove the project file entirely
+        if (pruned && Object.keys(data.sessions ?? {}).length === 0) {
+          try { unlinkSync(filePath); } catch { /* ignore */ }
+          continue;
+        }
+
         this.projects.set(data.projectPath, data);
       }
     } catch {
