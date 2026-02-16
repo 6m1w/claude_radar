@@ -52,7 +52,7 @@ export const catppuccin: Theme = {
     done: "✓",
     blocked: "!",
     cursor: "▸",
-    selected: "☑",
+    selected: "■",
     unselected: "☐",
   },
   progress: {

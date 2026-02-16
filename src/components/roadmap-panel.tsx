@@ -96,7 +96,7 @@ export function RoadmapPanel({
   // Header: file navigation with arrows when focused
   let sourceLabel: string;
   if (focused && roadmaps.length > 1) {
-    sourceLabel = `◀ ${selected.source} ▶`;
+    sourceLabel = `◁ ${selected.source} ▷`;
   } else if (roadmaps.length > 1) {
     sourceLabel = `${selected.source} +${roadmaps.length - 1}`;
   } else {

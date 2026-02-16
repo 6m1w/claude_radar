@@ -417,7 +417,7 @@ export function App() {
       repeated_failure: 1, long_turn: 2, context_compact: 3,
     };
     const alertIcon: Record<string, string> = {
-      repeated_failure: "✖", long_turn: "◑", context_compact: "⚡",
+      repeated_failure: "✗", long_turn: "◑", context_compact: "⚡",
     };
     const alertColor: Record<string, string> = {
       repeated_failure: C.error, long_turn: C.warning, context_compact: C.error,
@@ -980,7 +980,7 @@ function SessionsContent({
 // ─── Status bar: system metrics + keyboard hints ────────────
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const SPARK = "▁▂▃▄▅▆▇█";
-const MASCOT = { idle: "☻ zzZ", working: "☻⌨", done: "☻♪" };
+const MASCOT = { idle: "☻ zzZ", working: "☻⊞", done: "☻♪" };
 
 function sparkline(values: number[], max = 100): string {
   return values

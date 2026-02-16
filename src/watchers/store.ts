@@ -1100,7 +1100,7 @@ export function ingestHookEvents(store: Store, events: HookEvent[]): void {
 
       // Activity log: ALL tool calls get recorded
       const summary = isFailure
-        ? `❌ ${buildActivitySummary(data)}`
+        ? `✗ ${buildActivitySummary(data)}`
         : buildActivitySummary(data);
       store.addActivity(projectPath, {
         ts: event.ts || now,
@@ -1256,7 +1256,7 @@ export function mergeAndPersist(
               ts: new Date().toISOString(),
               sessionId: "_system",
               toolName: "_warning",
-              summary: `⚠ events.jsonl is ${sizeMB}MB — consider restarting TUI`,
+              summary: `△ events.jsonl is ${sizeMB}MB — consider restarting TUI`,
               projectPath: project.projectPath,
             });
           }
