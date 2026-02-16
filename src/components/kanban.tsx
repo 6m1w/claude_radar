@@ -406,7 +406,7 @@ function ByAgentLayout({
           : "all done";
 
         // Naming fallback: /rename summary → feature branch → worktree name → folder name
-        const activeSession = project.recentSessions[0];
+        const activeSession = [...project.recentSessions].reverse().find((s) => s.summary) ?? project.recentSessions.at(-1);
         const renameSummary = activeSession?.summary;
         const featureBranch = project.branch.startsWith("feature/")
           ? project.branch.slice("feature/".length) : undefined;

@@ -664,7 +664,7 @@ function RightPanel({
   ) : (() => {
     const isRunning = project.isActive || project.activeSessions > 0;
     if (!isRunning) return null;
-    const active = project.recentSessions[0];
+    const active = [...project.recentSessions].reverse().find((s) => s.summary) ?? project.recentSessions.at(-1);
     const label = active?.summary ?? active?.firstPrompt?.slice(0, 20) ?? "Agent";
     return <Text color={C.success}>⌖ {label} running</Text>;
   })();
