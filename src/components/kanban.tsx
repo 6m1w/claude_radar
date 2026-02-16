@@ -13,7 +13,6 @@
 import React from "react";
 import { Box, Text, useStdout } from "ink";
 import { C, I } from "../theme.js";
-import { Panel } from "./panel.js";
 
 import { formatDwell, truncateToWidth } from "../utils.js";
 import type { DisplayTask, ViewProject } from "../types.js";
@@ -485,10 +484,10 @@ export function KanbanView({
   const cols = stdout.stdout?.columns ?? 120;
   const rows = stdout.stdout?.rows ?? 40;
 
-  // Panel takes 4 chars (2 borders + 2 paddingX)
-  const contentW = cols - 4;
-  // Viewport: terminal rows - statusBar(2) - panelChrome(3)
-  const viewportHeight = rows - 5;
+  // No outer border (Rule 8) — only paddingX(1) each side
+  const contentW = cols - 2;
+  // Viewport: terminal rows - statusBar(2) - title(1)
+  const viewportHeight = rows - 3;
 
   const filterLabel = selectedCount > 0 ? ` (${selectedCount} selected)` : "";
   const layoutLabel = layout === "swimlane" ? "ROADMAP" : "TASKS";
@@ -496,12 +495,12 @@ export function KanbanView({
 
   if (layout === "by_agent") {
     return (
-      <Panel
-        title={`${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
-        flexGrow={1}
-      >
+      <Box flexDirection="column" flexGrow={1} paddingX={1}>
+        <Text color={C.primary} bold>
+          {`${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
+        </Text>
         <ByAgentLayout projects={projects} hideDone={hideDone} cursorIdx={cursorIdx} viewportHeight={viewportHeight} />
-      </Panel>
+      </Box>
     );
   }
 
@@ -524,10 +523,10 @@ export function KanbanView({
   }
 
   return (
-    <Panel
-      title={`${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
-      flexGrow={1}
-    >
+    <Box flexDirection="column" flexGrow={1} paddingX={1}>
+      <Text color={C.primary} bold>
+        {`${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
+      </Text>
       {/* Header row */}
       <Box>
         <Box width={labelW} flexShrink={0}>
@@ -559,6 +558,6 @@ export function KanbanView({
         colWidths={colWidths}
         labelW={labelW}
       />
-    </Panel>
+    </Box>
   );
 }
