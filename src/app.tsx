@@ -998,27 +998,31 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
     ? `${(metrics.netDown / 1024).toFixed(1)}M`
     : `${String(Math.round(metrics.netDown)).padStart(4)}K`;
 
+  const showMetrics = view !== "agent";
+
   return (
-    <Box flexDirection="column" height={2} overflow="hidden">
-      {/* Metrics line */}
-      <Box height={1} overflow="hidden">
-        <Text color={C.warning}> {mascotFrame} </Text>
-        <Text color={C.dim}>│ </Text>
-        <Text color={C.subtext}>CPU </Text>
-        <Text color={C.success}>{cpuSpark}</Text>
-        <Text color={C.text}> {String(metrics.cpuPercent).padStart(3)}%</Text>
-        <Text color={C.dim}> │ </Text>
-        <Text color={C.subtext}>MEM </Text>
-        <Text color={C.primary}>{memBar}</Text>
-        <Text color={C.text}> {metrics.memUsedGB}/{metrics.memTotalGB}G</Text>
-        <Text color={C.dim}> │ </Text>
-        <Text color={C.success}>↑</Text>
-        <Text color={C.subtext}>{netUp} </Text>
-        <Text color={C.primary}>↓</Text>
-        <Text color={C.subtext}>{netDown}</Text>
-        <Text color={C.dim}> │ </Text>
-        <Text color={C.primary}>{spinnerChar}</Text>
-      </Box>
+    <Box flexDirection="column" height={showMetrics ? 2 : 1} overflow="hidden">
+      {/* Metrics line — hidden on TASKS view (task-focused, metrics are noise) */}
+      {showMetrics && (
+        <Box height={1} overflow="hidden">
+          <Text color={C.warning}> {mascotFrame} </Text>
+          <Text color={C.dim}>│ </Text>
+          <Text color={C.subtext}>CPU </Text>
+          <Text color={C.success}>{cpuSpark}</Text>
+          <Text color={C.text}> {String(metrics.cpuPercent).padStart(3)}%</Text>
+          <Text color={C.dim}> │ </Text>
+          <Text color={C.subtext}>MEM </Text>
+          <Text color={C.primary}>{memBar}</Text>
+          <Text color={C.text}> {metrics.memUsedGB}/{metrics.memTotalGB}G</Text>
+          <Text color={C.dim}> │ </Text>
+          <Text color={C.success}>↑</Text>
+          <Text color={C.subtext}>{netUp} </Text>
+          <Text color={C.primary}>↓</Text>
+          <Text color={C.subtext}>{netDown}</Text>
+          <Text color={C.dim}> │ </Text>
+          <Text color={C.primary}>{spinnerChar}</Text>
+        </Box>
+      )}
 
       {/* Keyboard hints — context-aware */}
       <Box height={1} overflow="hidden">
