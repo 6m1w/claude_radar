@@ -197,8 +197,11 @@ export function App() {
   const overhead = 1 + 2; // rowA(1) + statusBar(2)
   const panelChrome = 3;       // each Panel eats: border(2) + title line(1). paddingY=0
 
-  // Bottom panel: always 1/4 of terminal (min 8)
-  const bottomHeight = Math.max(8, Math.floor(termRows / 4));
+  // Bottom panel: 1/4 of terminal, capped at 30% (Rule 7: PROJECTS > ROADMAP > bottom)
+  const bottomHeight = Math.min(
+    Math.max(8, Math.floor(termRows / 4)),
+    Math.floor(termRows * 0.3),
+  );
   // Row B (middle section) gets everything else
   const rowBHeight = termRows - overhead - bottomHeight;
   // 50/50 split: roadmap gets ceil, projects gets floor (remainder goes to roadmap)
