@@ -701,6 +701,12 @@ function scanTasks(sessionIndex: Map<string, SessionMeta>): SessionData[] {
         }
 
         if (items.length > 0) {
+          // Skip abandoned task dirs: old mtime + no active session + no in-progress items
+          const hasActiveSession = sessionIndex.has(dir);
+          const hasInProgress = items.some((i) => i.status === "in_progress");
+          const isStale = (Date.now() - latestMod.getTime()) > STALE_TASK_THRESHOLD_MS;
+          if (isStale && !hasActiveSession && !hasInProgress) continue;
+
           items.sort((a, b) => Number(a.id) - Number(b.id));
           results.push({
             id: dir,
