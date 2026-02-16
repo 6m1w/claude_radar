@@ -31,14 +31,21 @@ const COLUMN_CONFIG: Record<KanbanColumn, { label: string; color: string; bold: 
 };
 
 // Classify a task into a kanban column based on priority rules
+// Idle agent downgrade: in_progress + idle/dead agent → "todo" (not "doing")
 function classifyTask(task: DisplayTask, project: ViewProject): KanbanColumn {
   if (task.status === "completed") return "done";
   if (task.blockedBy) return "needs_input";
-  if (task.status === "in_progress" && task.owner) {
-    const agent = project.agentDetails.find((a) => a.name === task.owner);
-    if (agent && agent.processState !== "running") return "needs_input";
+  if (task.status === "in_progress") {
+    // Check if owner's agent is actually running
+    if (task.owner) {
+      const agent = project.agentDetails.find((a) => a.name === task.owner);
+      if (agent && agent.processState !== "running") return "todo";
+    } else if (!project.isActive && project.activeSessions === 0) {
+      // No running agent at all → downgrade
+      return "todo";
+    }
+    return "doing";
   }
-  if (task.status === "in_progress") return "doing";
   return "todo";
 }
 
@@ -328,9 +335,10 @@ function ByAgentLayout({
     height: number; // lines this project occupies (excl. separator)
   };
   const blocks: ProjectBlock[] = activeProjects.map((project) => {
+    const headerLines = 2; // two-line header (name + folder/branch)
     if (project.tasks.length === 0) {
       // Active session but no tasks — header only (+ 1 "active, no tasks" line)
-      return { project, height: 2 };
+      return { project, height: headerLines + 1 };
     }
     const buckets = buildBuckets(project);
     const allGroups = [buckets.needs_input, buckets.doing, buckets.todo];
@@ -343,7 +351,7 @@ function ByAgentLayout({
     const visible = Math.min(liveCount, MAX_TASKS);
     const overflow = liveCount > MAX_TASKS ? 1 : 0;
     const archivedLine = goneN > 0 ? 1 : 0;
-    return { project, height: 1 + visible + overflow + archivedLine };
+    return { project, height: headerLines + visible + overflow + archivedLine };
   });
 
   // Compute visible range: ensure safeCursor is in viewport
@@ -396,6 +404,20 @@ function ByAgentLayout({
         const progressStr = remaining > 0
           ? `${remaining} remaining${attention > 0 ? ` \u00b7 ${attention}!` : ""}`
           : "all done";
+
+        // Naming fallback: /rename summary → feature branch → worktree name → folder name
+        const activeSession = project.recentSessions[0];
+        const renameSummary = activeSession?.summary;
+        const featureBranch = project.branch.startsWith("feature/")
+          ? project.branch.slice("feature/".length) : undefined;
+        const bestName = renameSummary
+          ?? featureBranch
+          ?? (project.worktreeOf ? project.name : undefined)
+          ?? project.name;
+        const hasRename = !!renameSummary;
+        const emoji = hasRename ? "\uD83E\uDD8A " : ""; // 🦊 only when /rename exists
+        // Line 2: show folder+branch, or just branch when bestName = folder name
+        const showFolderOnLine2 = bestName !== project.name;
         const branchStr = truncateToWidth(project.branch, 18);
 
         // Collect live tasks in priority order (exclude gone), cap at MAX_TASKS
@@ -418,33 +440,36 @@ function ByAgentLayout({
 
         return (
           <Box key={project.projectPath} flexDirection="column">
-            {vi > 0 && <Text>{" "}</Text>}
+            {/* Consistent 1 blank line between project blocks */}
+            {vi > 0 && <Box height={1} />}
 
-            {/* Project header with cursor */}
+            {/* Line 1: {icon} {emoji} {bestName}  {remaining} */}
             <Text wrap="truncate">
               <Text color={isCursor ? C.primary : stateColor}>{isCursor ? "\u25b8" : stateIcon} </Text>
-              <Text color={project.isActive ? C.warning : C.text} bold={isCursor}>{project.name}</Text>
-              <Text color={C.accent}>  ⎇{branchStr}</Text>
+              <Text color={project.isActive ? C.warning : C.text} bold={isCursor}>{emoji}{bestName}</Text>
               <Text color={C.dim}>  </Text>
               <Text color={attention > 0 ? C.error : C.subtext}>{progressStr}</Text>
+            </Text>
+            {/* Line 2: folder + branch (dim) */}
+            <Text wrap="truncate" color={C.dim}>
+              {"  "}{showFolderOnLine2 ? `${project.name}  ` : ""}⎇{branchStr}
             </Text>
 
             {/* Task list or active-no-tasks message */}
             {project.tasks.length === 0 ? (
-              <Text wrap="truncate" color={C.dim}>  active, no tasks</Text>
+              <Text wrap="truncate" color={C.dim}>{"  "}active, no tasks</Text>
             ) : (
               <>
                 {visibleTasks.map(({ task, col }, ti) => (
                   <Text key={`${task.id}-${ti}`} wrap="truncate">
-                    <Text>  </Text>
-                    <AgentTaskCard task={task} column={col} />
+                    {"  "}<AgentTaskCard task={task} column={col} />
                   </Text>
                 ))}
                 {overflow > 0 && (
-                  <Text wrap="truncate" color={C.dim}>  +{overflow} more</Text>
+                  <Text wrap="truncate" color={C.dim}>{"  "}+{overflow} more</Text>
                 )}
                 {goneCount > 0 && (
-                  <Text wrap="truncate" color={C.dim}>  ▸ {goneCount} archived</Text>
+                  <Text wrap="truncate" color={C.dim}>{"  "}▸ {goneCount} archived</Text>
                 )}
               </>
             )}
