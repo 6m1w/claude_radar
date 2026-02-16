@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { extractSessionMetaFromJsonl } from "../scanner.js";
 
 // ─── Test helpers ────────────────────────────────────────────
 
@@ -212,5 +213,85 @@ describe("phase interval gating", () => {
     const shouldRun = now - last >= intervalMs;
 
     expect(shouldRun).toBe(true);
+  });
+});
+
+// ─── JSONL metadata extraction tests ─────────────────────────
+
+describe("extractSessionMetaFromJsonl", () => {
+  it("should extract firstPrompt from first user message", () => {
+    const jsonlPath = join(testDir, "test-session.jsonl");
+    const lines = [
+      JSON.stringify({ type: "system", sessionId: "abc", message: { role: "system", content: "init" } }),
+      JSON.stringify({ type: "user", sessionId: "abc", gitBranch: "main", message: { role: "user", content: "Help me fix the login bug" } }),
+      JSON.stringify({ type: "assistant", sessionId: "abc", message: { role: "assistant", content: "Sure" } }),
+    ];
+    writeFileSync(jsonlPath, lines.join("\n") + "\n");
+
+    const meta = extractSessionMetaFromJsonl(jsonlPath);
+    expect(meta).not.toBeNull();
+    expect(meta!.firstPrompt).toBe("Help me fix the login bug");
+    expect(meta!.gitBranch).toBe("main");
+    expect(meta!.summary).toBeUndefined();
+  });
+
+  it("should extract /rename summary", () => {
+    const jsonlPath = join(testDir, "renamed-session.jsonl");
+    const lines = [
+      JSON.stringify({ type: "user", gitBranch: "feature/auth", message: { role: "user", content: "Start working on auth" } }),
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: "OK" } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: "<local-command-stdout>Session and agent renamed to: auth refactor</local-command-stdout>" } }),
+    ];
+    writeFileSync(jsonlPath, lines.join("\n") + "\n");
+
+    const meta = extractSessionMetaFromJsonl(jsonlPath);
+    expect(meta!.summary).toBe("auth refactor");
+    expect(meta!.firstPrompt).toBe("Start working on auth");
+    expect(meta!.gitBranch).toBe("feature/auth");
+  });
+
+  it("should skip command messages for firstPrompt", () => {
+    const jsonlPath = join(testDir, "command-session.jsonl");
+    const lines = [
+      JSON.stringify({ type: "user", message: { role: "user", content: "<command-name>/rename</command-name>\n<command-args>my session</command-args>" } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: "<local-command-stdout>Session and agent renamed to: my session</local-command-stdout>" } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: "Now fix the bug" } }),
+    ];
+    writeFileSync(jsonlPath, lines.join("\n") + "\n");
+
+    const meta = extractSessionMetaFromJsonl(jsonlPath);
+    // First non-command user message
+    expect(meta!.firstPrompt).toBe("Now fix the bug");
+    expect(meta!.summary).toBe("my session");
+  });
+
+  it("should use latest /rename if renamed multiple times", () => {
+    const jsonlPath = join(testDir, "multi-rename.jsonl");
+    const lines = [
+      JSON.stringify({ type: "user", message: { role: "user", content: "hello" } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: "<local-command-stdout>Session and agent renamed to: first name</local-command-stdout>" } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: "<local-command-stdout>Session and agent renamed to: final name</local-command-stdout>" } }),
+    ];
+    writeFileSync(jsonlPath, lines.join("\n") + "\n");
+
+    const meta = extractSessionMetaFromJsonl(jsonlPath);
+    expect(meta!.summary).toBe("final name");
+  });
+
+  it("should return null for non-existent file", () => {
+    const meta = extractSessionMetaFromJsonl(join(testDir, "nonexistent.jsonl"));
+    expect(meta).toBeNull();
+  });
+
+  it("should cache results by mtime", () => {
+    const jsonlPath = join(testDir, "cached-session.jsonl");
+    writeFileSync(jsonlPath, JSON.stringify({ type: "user", message: { role: "user", content: "first call" } }) + "\n");
+
+    const meta1 = extractSessionMetaFromJsonl(jsonlPath);
+    expect(meta1!.firstPrompt).toBe("first call");
+
+    // Second call with same mtime should return cached result
+    const meta2 = extractSessionMetaFromJsonl(jsonlPath);
+    expect(meta2!.firstPrompt).toBe("first call");
   });
 });

@@ -63,6 +63,91 @@ const MIN_SESSION_SIZE_BYTES = 1024;
 // Priority doc files (always checked first, preserved ordering)
 const DOC_PRIORITY = ["CLAUDE.md", "PRD.md", "docs/PRD.md", "TDD.md", "docs/TDD.md", "README.md"];
 
+// ─── JSONL metadata extraction (fallback when sessions-index.json absent) ───
+// Cache: path → { mtimeMs, meta }
+const jsonlMetaCache = new Map<string, { mtimeMs: number; meta: { summary?: string; firstPrompt?: string; gitBranch?: string } }>();
+
+// Max bytes to read per JSONL for metadata extraction (avoids reading 19MB+ files fully)
+const JSONL_META_READ_LIMIT = 256 * 1024; // 256KB from start for firstPrompt + gitBranch
+const JSONL_META_TAIL_LIMIT = 128 * 1024; // 128KB from end for /rename (may appear late)
+
+export function extractSessionMetaFromJsonl(
+  jsonlPath: string,
+): { summary?: string; firstPrompt?: string; gitBranch?: string } | null {
+  try {
+    const st = statSync(jsonlPath);
+    const cached = jsonlMetaCache.get(jsonlPath);
+    if (cached && cached.mtimeMs >= st.mtimeMs) return cached.meta;
+
+    const fd = require("node:fs").openSync(jsonlPath, "r");
+    const fileSize = st.size;
+
+    let firstPrompt: string | undefined;
+    let summary: string | undefined;
+    let gitBranch: string | undefined;
+
+    // Read head chunk for firstPrompt + gitBranch
+    const headSize = Math.min(fileSize, JSONL_META_READ_LIMIT);
+    const headBuf = Buffer.alloc(headSize);
+    require("node:fs").readSync(fd, headBuf, 0, headSize, 0);
+    const headLines = headBuf.toString("utf-8").split("\n");
+
+    for (const line of headLines) {
+      if (!line) continue;
+      try {
+        const obj = JSON.parse(line);
+        if (!gitBranch && obj.gitBranch) gitBranch = obj.gitBranch;
+
+        // First user message that isn't a command or tool result
+        if (!firstPrompt && obj.type === "user" && obj.message?.role === "user") {
+          const c = obj.message.content;
+          if (typeof c === "string" && !c.startsWith("<command") && !c.startsWith("<local-command")) {
+            firstPrompt = c.slice(0, 80);
+          }
+        }
+
+        // Check for /rename in head too
+        if (obj.type === "user" && typeof obj.message?.content === "string") {
+          const m = obj.message.content.match(
+            /<local-command-stdout>Session and agent renamed to: (.+?)<\/local-command-stdout>/,
+          );
+          if (m) summary = m[1];
+        }
+      } catch { /* incomplete JSON line at chunk boundary */ }
+    }
+
+    // Read tail chunk for /rename (may appear late in session)
+    if (!summary && fileSize > JSONL_META_READ_LIMIT) {
+      const tailStart = Math.max(0, fileSize - JSONL_META_TAIL_LIMIT);
+      const tailSize = fileSize - tailStart;
+      const tailBuf = Buffer.alloc(tailSize);
+      require("node:fs").readSync(fd, tailBuf, 0, tailSize, tailStart);
+      const tailLines = tailBuf.toString("utf-8").split("\n");
+
+      for (const line of tailLines) {
+        if (!line) continue;
+        try {
+          const obj = JSON.parse(line);
+          if (obj.type === "user" && typeof obj.message?.content === "string") {
+            const m = obj.message.content.match(
+              /<local-command-stdout>Session and agent renamed to: (.+?)<\/local-command-stdout>/,
+            );
+            if (m) summary = m[1];
+          }
+        } catch { /* incomplete line at chunk boundary */ }
+      }
+    }
+
+    require("node:fs").closeSync(fd);
+
+    const meta = { summary, firstPrompt, gitBranch };
+    jsonlMetaCache.set(jsonlPath, { mtimeMs: st.mtimeMs, meta });
+    return meta;
+  } catch {
+    return null;
+  }
+}
+
 function readJson<T>(path: string): T | null {
   try {
     return JSON.parse(readFileSync(path, "utf-8"));
@@ -177,9 +262,36 @@ function discoverProjects(): DiscoveredProject[] {
           });
         }
       } else {
-        // No sessions-index — derive from directory name
+        // No sessions-index — derive from directory name, extract metadata from JSONL
         projectPath = derivePathFromDir(dir);
         projectName = basename(projectPath);
+
+        // Build recentSessions from JSONL files (sorted by mtime, last 8)
+        try {
+          const jsonlFiles = readdirSync(dirPath).filter((f) => f.endsWith(".jsonl"));
+          const withMtime: { file: string; mtimeMs: number }[] = [];
+          for (const f of jsonlFiles) {
+            try {
+              const s = statSync(join(dirPath, f));
+              if (s.size >= MIN_SESSION_SIZE_BYTES) {
+                withMtime.push({ file: f, mtimeMs: s.mtimeMs });
+              }
+            } catch { /* skip */ }
+          }
+          withMtime.sort((a, b) => a.mtimeMs - b.mtimeMs); // oldest first
+          for (const { file } of withMtime.slice(-8)) {
+            const sid = file.replace(".jsonl", "");
+            sessionIds.push(sid);
+            const meta = extractSessionMetaFromJsonl(join(dirPath, file));
+            if (meta?.gitBranch && !gitBranch) gitBranch = meta.gitBranch;
+            recentSessions.push({
+              sessionId: sid,
+              summary: meta?.summary,
+              firstPrompt: meta?.firstPrompt,
+              gitBranch: meta?.gitBranch,
+            });
+          }
+        } catch { /* skip */ }
       }
 
       // Skip root/home directories (too generic)
