@@ -66,6 +66,7 @@ function toViewProject(p: MergedProjectData): ViewProject {
     docs: p.docs,
     tasks,
     recentSessions: p.recentSessions,
+    bestSessionName: p.bestSessionName,
     goneSessionCount: p.goneSessionCount,
     agentDetails: p.agentDetails,
     worktreeOf: p.git?.worktreeOf,
@@ -664,8 +665,7 @@ function RightPanel({
   ) : (() => {
     const isRunning = project.isActive || project.activeSessions > 0;
     if (!isRunning) return null;
-    const active = [...project.recentSessions].reverse().find((s) => s.summary) ?? project.recentSessions.at(-1);
-    const label = active?.summary ?? active?.firstPrompt?.slice(0, 20) ?? "Agent";
+    const label = project.bestSessionName ?? "Agent";
     return <Text color={C.success}>⌖ {label} running</Text>;
   })();
 

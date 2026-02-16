@@ -248,6 +248,7 @@ export type ViewProject = {
   recentSessions: SessionHistoryEntry[];
   goneSessionCount: number;
   agentDetails: AgentInfo[];
+  bestSessionName?: string; // computed: most recent summary ?? cleaned firstPrompt
   worktreeOf?: string; // main repo path if this is a worktree
   team?: TeamConfig;
   gitLog: GitCommit[];
