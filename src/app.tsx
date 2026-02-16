@@ -197,8 +197,11 @@ export function App() {
   const overhead = 1 + 2; // rowA(1) + statusBar(2)
   const panelChrome = 3;       // each Panel eats: border(2) + title line(1). paddingY=0
 
-  // Bottom panel: always 1/4 of terminal (min 8)
-  const bottomHeight = Math.max(8, Math.floor(termRows / 4));
+  // Bottom panel: 1/4 of terminal, capped at 30% (Rule 7: PROJECTS > ROADMAP > bottom)
+  const bottomHeight = Math.min(
+    Math.max(8, Math.floor(termRows / 4)),
+    Math.floor(termRows * 0.3),
+  );
   // Row B (middle section) gets everything else
   const rowBHeight = termRows - overhead - bottomHeight;
   // 50/50 split: roadmap gets ceil, projects gets floor (remainder goes to roadmap)
@@ -648,32 +651,41 @@ function RightPanel({
   const CAP_TEAM = 3;
   const CAP_DETAIL = 4;
 
-  // Worktree lineage
+  // Agent status fragment (shared by worktree and non-worktree headers)
+  const agentStatusFragment = project.agentDetails.length > 0 ? (
+    <Text color={C.dim}>
+      {project.agentDetails.map((a) => {
+        const icon = a.processState === "running" ? I.active : a.processState === "idle" ? I.idle : "✕";
+        return `${icon}${a.name}`;
+      }).join(" ")}
+    </Text>
+  ) : project.agents.length > 1 ? (
+    <Text color={C.dim}>{project.agents.length} agents</Text>
+  ) : (() => {
+    const isRunning = project.isActive || project.activeSessions > 0;
+    if (!isRunning) return null;
+    const active = project.recentSessions[0];
+    const label = active?.summary ?? active?.firstPrompt?.slice(0, 20) ?? "Agent";
+    return <Text color={C.success}>⌖ {label} running</Text>;
+  })();
+
+  // Worktree: `↳ parent · agent status` (branch omitted — folder name ≈ branch)
+  // Non-worktree: `⎇ branch · agent status`
   if (project.worktreeOf) {
-    push("wt", <Text wrap="truncate"><Text color={C.dim}>↳ </Text><Text color={C.subtext}>{project.worktreeOf.split("/").pop()}</Text></Text>);
+    push("info", <Text wrap="truncate">
+      <Text color={C.dim}>↳ </Text>
+      <Text color={C.subtext}>{project.worktreeOf.split("/").pop()}</Text>
+      {project.team ? <Text color={C.warning}> ⚑ {project.team.teamName}</Text> : null}
+      {agentStatusFragment ? <Text color={C.dim}> · </Text> : null}
+      {agentStatusFragment}
+    </Text>);
+  } else {
+    push("info", <Text wrap="truncate">
+      <Text color={C.accent}>⎇ {project.branch} </Text>
+      {project.team ? <Text color={C.warning}>⚑ {project.team.teamName} </Text> : null}
+      {agentStatusFragment}
+    </Text>);
   }
-  // Project info header
-  push("info", <Text wrap="truncate">
-    <Text color={C.accent}>⎇ {project.branch} </Text>
-    {project.team ? <Text color={C.warning}>⚑ {project.team.teamName} </Text> : null}
-    {project.agentDetails.length > 0 ? (
-      <Text color={C.dim}>
-        {project.agentDetails.map((a) => {
-          const icon = a.processState === "running" ? I.active : a.processState === "idle" ? I.idle : "✕";
-          return `${icon}${a.name}`;
-        }).join(" ")}
-      </Text>
-    ) : project.agents.length > 1 ? (
-      <Text color={C.dim}>{project.agents.length} agents</Text>
-    ) : (() => {
-      const isRunning = project.isActive || project.activeSessions > 0;
-      if (!isRunning) return null;
-      // Show session name if available (from /rename or first prompt)
-      const active = project.recentSessions[0];
-      const label = active?.summary ?? active?.firstPrompt?.slice(0, 20) ?? "Agent";
-      return <Text color={C.success}>⌖ {label} running</Text>;
-    })()}
-  </Text>);
 
   // Team member list (cap to prevent long team lists eating space)
   if (project.team && project.agentDetails.length > 0) {
@@ -995,27 +1007,31 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
     ? `${(metrics.netDown / 1024).toFixed(1)}M`
     : `${String(Math.round(metrics.netDown)).padStart(4)}K`;
 
+  const showMetrics = view !== "agent";
+
   return (
-    <Box flexDirection="column" height={2} overflow="hidden">
-      {/* Metrics line */}
-      <Box height={1} overflow="hidden">
-        <Text color={C.warning}> {mascotFrame} </Text>
-        <Text color={C.dim}>│ </Text>
-        <Text color={C.subtext}>CPU </Text>
-        <Text color={C.success}>{cpuSpark}</Text>
-        <Text color={C.text}> {String(metrics.cpuPercent).padStart(3)}%</Text>
-        <Text color={C.dim}> │ </Text>
-        <Text color={C.subtext}>MEM </Text>
-        <Text color={C.primary}>{memBar}</Text>
-        <Text color={C.text}> {metrics.memUsedGB}/{metrics.memTotalGB}G</Text>
-        <Text color={C.dim}> │ </Text>
-        <Text color={C.success}>↑</Text>
-        <Text color={C.subtext}>{netUp} </Text>
-        <Text color={C.primary}>↓</Text>
-        <Text color={C.subtext}>{netDown}</Text>
-        <Text color={C.dim}> │ </Text>
-        <Text color={C.primary}>{spinnerChar}</Text>
-      </Box>
+    <Box flexDirection="column" height={showMetrics ? 2 : 1} overflow="hidden">
+      {/* Metrics line — hidden on TASKS view (task-focused, metrics are noise) */}
+      {showMetrics && (
+        <Box height={1} overflow="hidden">
+          <Text color={C.warning}> {mascotFrame} </Text>
+          <Text color={C.dim}>│ </Text>
+          <Text color={C.subtext}>CPU </Text>
+          <Text color={C.success}>{cpuSpark}</Text>
+          <Text color={C.text}> {String(metrics.cpuPercent).padStart(3)}%</Text>
+          <Text color={C.dim}> │ </Text>
+          <Text color={C.subtext}>MEM </Text>
+          <Text color={C.primary}>{memBar}</Text>
+          <Text color={C.text}> {metrics.memUsedGB}/{metrics.memTotalGB}G</Text>
+          <Text color={C.dim}> │ </Text>
+          <Text color={C.success}>↑</Text>
+          <Text color={C.subtext}>{netUp} </Text>
+          <Text color={C.primary}>↓</Text>
+          <Text color={C.subtext}>{netDown}</Text>
+          <Text color={C.dim}> │ </Text>
+          <Text color={C.primary}>{spinnerChar}</Text>
+        </Box>
+      )}
 
       {/* Keyboard hints — context-aware */}
       <Box height={1} overflow="hidden">
