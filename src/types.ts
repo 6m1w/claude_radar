@@ -80,6 +80,8 @@ export interface ProjectData {
   roadmap: RoadmapData[];  // parsed checkboxes from PRD.md etc.
   // Session history from sessions-index.json (for detail view)
   recentSessions: SessionHistoryEntry[];
+  // Computed: best display name from recentSessions (summary ?? firstPrompt, newest first)
+  bestSessionName?: string;
   // v0.3: Team & agent enrichment
   team?: TeamConfig;       // team config if this project has team tasks
   agentDetails: AgentInfo[]; // enriched agent info (process state, current task)

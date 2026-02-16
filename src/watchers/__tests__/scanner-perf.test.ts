@@ -278,6 +278,32 @@ describe("extractSessionMetaFromJsonl", () => {
     expect(meta!.summary).toBe("final name");
   });
 
+  it("should skip compact summary as firstPrompt", () => {
+    const jsonlPath = join(testDir, "compact-session.jsonl");
+    const lines = [
+      JSON.stringify({ type: "system", message: { role: "system", content: "init" } }),
+      JSON.stringify({ type: "user", gitBranch: "main", message: { role: "user", content: "⏺ Compact summary\n  ⎿  This session is being continued..." } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: "Fix the login page" } }),
+    ];
+    writeFileSync(jsonlPath, lines.join("\n") + "\n");
+
+    const meta = extractSessionMetaFromJsonl(jsonlPath);
+    expect(meta!.firstPrompt).toBe("Fix the login page");
+    expect(meta!.gitBranch).toBe("main");
+  });
+
+  it("should skip continuation message as firstPrompt", () => {
+    const jsonlPath = join(testDir, "continuation-session.jsonl");
+    const lines = [
+      JSON.stringify({ type: "user", message: { role: "user", content: "This session is being continued from a previous conversation that ran out of context." } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: "Add error handling" } }),
+    ];
+    writeFileSync(jsonlPath, lines.join("\n") + "\n");
+
+    const meta = extractSessionMetaFromJsonl(jsonlPath);
+    expect(meta!.firstPrompt).toBe("Add error handling");
+  });
+
   it("should return null for non-existent file", () => {
     const meta = extractSessionMetaFromJsonl(join(testDir, "nonexistent.jsonl"));
     expect(meta).toBeNull();
