@@ -111,6 +111,7 @@ export function App() {
   const { exit } = useApp();
   const stdout = useStdout();
   const rows = stdout.stdout?.rows ?? 40;
+  const cols = stdout.stdout?.columns ?? 80;
   const { projects: rawProjects } = useWatchSessions();
   const [view, setView] = useState<View>("dashboard");
   const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>("projects");
@@ -128,6 +129,8 @@ export function App() {
   const [roadmapDocIdx, setRoadmapDocIdx] = useState(0);
   const [roadmapSectionIdx, setRoadmapSectionIdx] = useState(0);
   const [expandedSection, setExpandedSection] = useState<number | null>(null);
+  // -1 = cursor on section header, >= 0 = cursor on item within expanded section
+  const [roadmapItemIdx, setRoadmapItemIdx] = useState(-1);
 
   // Kanban state (shared across agent/swimlane views)
   const [kanbanHideDone, setKanbanHideDone] = useState(true);
@@ -187,7 +190,6 @@ export function App() {
   }, [viewProjects]);
 
   const current = sorted[projectIdx];
-  const currentTasks = current?.tasks ?? [];
 
   // Layout calculation
   // Ink flex handles borders internally — only count truly fixed-height elements
@@ -199,15 +201,15 @@ export function App() {
   const bottomHeight = Math.max(8, Math.floor(termRows / 4));
   // Row B (middle section) gets everything else
   const rowBHeight = termRows - overhead - bottomHeight;
-  // 50/50 split: roadmap panel gets half of left column height
-  const roadmapHeight = Math.floor(rowBHeight / 2);
+  // 50/50 split: roadmap gets ceil, projects gets floor (remainder goes to roadmap)
+  const roadmapHeight = Math.ceil(rowBHeight / 2);
   // Need at least 3 visible project lines in each half
   const showRoadmap = roadmapHeight - panelChrome >= 3;
-  // Reserve 2 lines for scroll indicators (▲ above / ▼ below) in worst case
-  const scrollIndicatorLines = 2;
-  const visibleProjects = showRoadmap
-    ? Math.max(3, rowBHeight - roadmapHeight - panelChrome - scrollIndicatorLines)
-    : Math.max(3, rowBHeight - panelChrome - scrollIndicatorLines);
+  // Content area inside Projects panel (total height minus chrome)
+  const projectsPanelHeight = showRoadmap ? rowBHeight - roadmapHeight : rowBHeight;
+  const projectsContentArea = projectsPanelHeight - panelChrome;
+  // Conservative estimate for scroll bounds (worst case: both ▲ and ▼ shown)
+  const visibleProjects = Math.max(3, projectsContentArea - 2);
 
   // Viewport scrolling
   const safeProjectIdx = Math.min(projectIdx, Math.max(0, sorted.length - 1));
@@ -224,7 +226,15 @@ export function App() {
     setBottomScrollY(0);
   };
 
+  // Track bracket paste state to ignore pasted text
+  const [isPasting, setIsPasting] = useState(false);
+
   useInput((input, key) => {
+    // Bracket paste detection: ignore all input between \x1b[200~ and \x1b[201~
+    if (input.includes("\x1b[200~") || input.includes("[200~")) { setIsPasting(true); return; }
+    if (input.includes("\x1b[201~") || input.includes("[201~")) { setIsPasting(false); return; }
+    if (isPasting) return;
+
     if (input === "q") exit();
 
     // Tab → cycle views: dashboard → agent → swimlane → dashboard
@@ -264,7 +274,7 @@ export function App() {
     }
 
     if (focusedPanel === "tasks") {
-      if ((input === "j" || key.downArrow) && taskIdx < currentTasks.length - 1) {
+      if ((input === "j" || key.downArrow) && current && taskIdx < current.tasks.length - 1) {
         setTaskIdx((i) => i + 1);
       }
       if ((input === "k" || key.upArrow) && taskIdx > 0) {
@@ -285,22 +295,66 @@ export function App() {
           setRoadmapDocIdx((i) => i - 1);
           setRoadmapSectionIdx(0);
           setExpandedSection(null);
+          setRoadmapItemIdx(-1);
         }
         if ((input === "l" || key.rightArrow) && roadmapDocIdx < roadmaps.length - 1) {
           setRoadmapDocIdx((i) => i + 1);
           setRoadmapSectionIdx(0);
           setExpandedSection(null);
+          setRoadmapItemIdx(-1);
         }
-        // j/k navigates sections
-        if ((input === "j" || key.downArrow) && roadmapSectionIdx < sections.length - 1) {
-          setRoadmapSectionIdx((i) => i + 1);
+        // j/k navigates flattened list: section headers + expanded items
+        if (input === "j" || key.downArrow) {
+          if (expandedSection === roadmapSectionIdx && roadmapItemIdx >= 0) {
+            // Inside expanded section — move to next item or next section
+            const items = sections[roadmapSectionIdx]?.items ?? [];
+            if (roadmapItemIdx < items.length - 1) {
+              setRoadmapItemIdx((i) => i + 1);
+            } else if (roadmapSectionIdx < sections.length - 1) {
+              setRoadmapSectionIdx((i) => i + 1);
+              setRoadmapItemIdx(-1);
+            }
+          } else if (expandedSection === roadmapSectionIdx && roadmapItemIdx === -1) {
+            // On expanded section header — enter items
+            const items = sections[roadmapSectionIdx]?.items ?? [];
+            if (items.length > 0) {
+              setRoadmapItemIdx(0);
+            } else if (roadmapSectionIdx < sections.length - 1) {
+              setRoadmapSectionIdx((i) => i + 1);
+            }
+          } else if (roadmapSectionIdx < sections.length - 1) {
+            setRoadmapSectionIdx((i) => i + 1);
+            setRoadmapItemIdx(-1);
+          }
         }
-        if ((input === "k" || key.upArrow) && roadmapSectionIdx > 0) {
-          setRoadmapSectionIdx((i) => i - 1);
+        if (input === "k" || key.upArrow) {
+          if (expandedSection === roadmapSectionIdx && roadmapItemIdx > 0) {
+            setRoadmapItemIdx((i) => i - 1);
+          } else if (expandedSection === roadmapSectionIdx && roadmapItemIdx === 0) {
+            // Back to section header
+            setRoadmapItemIdx(-1);
+          } else if (roadmapSectionIdx > 0) {
+            const prevIdx = roadmapSectionIdx - 1;
+            setRoadmapSectionIdx(prevIdx);
+            // If previous section is expanded, land on its last item
+            if (expandedSection === prevIdx) {
+              const items = sections[prevIdx]?.items ?? [];
+              setRoadmapItemIdx(items.length > 0 ? items.length - 1 : -1);
+            } else {
+              setRoadmapItemIdx(-1);
+            }
+          }
         }
         // Enter/Space toggles expand (accordion)
         if (key.return || input === " ") {
-          setExpandedSection((prev) => prev === roadmapSectionIdx ? null : roadmapSectionIdx);
+          if (roadmapItemIdx >= 0) {
+            // On an item — collapse parent section
+            setExpandedSection(null);
+            setRoadmapItemIdx(-1);
+          } else {
+            setExpandedSection((prev) => prev === roadmapSectionIdx ? null : roadmapSectionIdx);
+            setRoadmapItemIdx(-1);
+          }
         }
       }
       return;
@@ -315,6 +369,7 @@ export function App() {
       setRoadmapDocIdx(0);
       setRoadmapSectionIdx(0);
       setExpandedSection(null);
+      setRoadmapItemIdx(-1);
     }
     if ((input === "k" || key.upArrow) && projectIdx > 0) {
       const next = projectIdx - 1;
@@ -324,6 +379,7 @@ export function App() {
       setRoadmapDocIdx(0);
       setRoadmapSectionIdx(0);
       setExpandedSection(null);
+      setRoadmapItemIdx(-1);
     }
 
     // Space → toggle multi-select for kanban
@@ -350,19 +406,50 @@ export function App() {
   });
 
   // Aggregate stats (cached until sorted changes)
-  const { totalProjects, totalTasks, totalDone, totalActive, compactingProjects } = useMemo(() => {
-    const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+  const { totalProjects, totalTasks, totalDone, totalActive, rowAAlerts } = useMemo(() => {
+    const oneMinAgo = Date.now() - 60 * 1000;
+    // Collect all recent alerts across projects, tagged with project name
+    const alertPriority: Record<string, number> = {
+      repeated_failure: 1, long_turn: 2, context_compact: 3,
+    };
+    const alertIcon: Record<string, string> = {
+      repeated_failure: "✖", long_turn: "◑", context_compact: "⚡",
+    };
+    const alertColor: Record<string, string> = {
+      repeated_failure: C.error, long_turn: C.warning, context_compact: C.error,
+    };
+    const alertLabel: Record<string, string> = {
+      repeated_failure: "failing", long_turn: "slow turn", context_compact: "compacted",
+    };
+    type RowAAlert = { icon: string; color: string; label: string; project: string; priority: number };
+    const alerts: RowAAlert[] = [];
+    for (const p of sorted) {
+      for (const a of p.activityAlerts) {
+        if (new Date(a.ts).getTime() <= oneMinAgo) continue;
+        if (!alertPriority[a.type]) continue;
+        alerts.push({
+          icon: alertIcon[a.type],
+          color: alertColor[a.type],
+          label: alertLabel[a.type],
+          project: p.worktreeOf ? p.name : p.branch,
+          priority: alertPriority[a.type],
+        });
+      }
+    }
+    // Sort by priority (lowest number = highest priority)
+    alerts.sort((a, b) => a.priority - b.priority);
+    // Keep only highest-priority alerts
+    const topPriority = alerts.length > 0 ? alerts[0].priority : 0;
+    const topAlerts = alerts.filter((a) => a.priority === topPriority);
     return {
       totalProjects: sorted.length,
       totalTasks: sorted.reduce((s, p) => s + p.tasks.length, 0),
       totalDone: sorted.reduce((s, p) => s + taskStats(p).done, 0),
-      totalActive: sorted.filter((p) => p.isActive).length,
-      compactingProjects: sorted.filter((p) =>
-        p.activityAlerts.some((a) => a.type === "context_compact" && new Date(a.ts).getTime() > fiveMinAgo)
-      ),
+      totalActive: sorted.filter((p) => p.isActive || p.hookSessionCount > 0).length,
+      rowAAlerts: topAlerts,
     };
   }, [sorted]);
-  const compactTick = Math.floor(Date.now() / 3000); // rotate every 3s
+  const alertTick = Math.floor(Date.now() / 3000); // marquee rotation for same-priority alerts
 
   const viewLabel = view === "agent" ? "TASKS"
     : view === "swimlane" ? "SWIMLANE"
@@ -382,7 +469,7 @@ export function App() {
       ? sorted.filter((p) => selectedNames.has(p.projectPath) && hasActivity(p))
       : sorted.filter(hasActivity);
     return (
-      <Box flexDirection="column" height={termRows}>
+      <Box flexDirection="column" height={termRows} overflow="hidden">
         <KanbanView
           projects={kanbanProjects}
           selectedCount={selectedNames.size}
@@ -395,42 +482,37 @@ export function App() {
     );
   }
 
-  // Visible slice of projects
-  const visSlice = sorted.slice(scrollOffset, scrollOffset + visibleProjects);
+  // Dynamic visible count — fill all available content lines, no wasted space
+  const hasAboveIndicator = scrollOffset > 0;
+  const maxRender = projectsContentArea - (hasAboveIndicator ? 1 : 0);
+  const itemsRemaining = sorted.length - scrollOffset;
+  const needsBelowIndicator = itemsRemaining > maxRender;
+  const renderCount = needsBelowIndicator ? maxRender - 1 : Math.min(maxRender, itemsRemaining);
+  const visSlice = sorted.slice(scrollOffset, scrollOffset + renderCount);
   const aboveCount = scrollOffset;
-  const belowCount = Math.max(0, sorted.length - scrollOffset - visibleProjects);
+  const belowCount = Math.max(0, sorted.length - scrollOffset - renderCount);
 
-  // Active agents summary for Row A
-  const activeProjects = sorted.filter((p) => p.isActive);
 
   return (
-    <Box flexDirection="column" height={termRows}>
-      {/* Row A: Minimal status — "● N active" + compaction marquee */}
-      <Box paddingX={1} flexShrink={0} height={1}>
-        <Text wrap="truncate">
-          {totalActive > 0 ? (
-            <>
-              <Text color={C.warning}>{I.working} </Text>
-              <Text color={C.text} bold>{totalActive}</Text>
-              <Text color={C.subtext}> active</Text>
-            </>
-          ) : (
-            <Text color={C.dim}>all idle</Text>
-          )}
-          {compactingProjects.length > 0 && (
-            <>
-              <Text color={C.dim}> · </Text>
-              <Text color={C.warning}>⚡ {truncateToWidth(compactingProjects[compactTick % compactingProjects.length].name, 16)} compacted</Text>
-              {compactingProjects.length > 1 && <Text color={C.dim}> (+{compactingProjects.length - 1})</Text>}
-            </>
-          )}
+    <Box flexDirection="column" height={termRows} width={cols} overflow="hidden">
+      {/* Row A: status + alert (separate <Text> for independent colors) */}
+      <Box paddingX={1} flexShrink={0} height={1} width={cols} overflow="hidden">
+        <Text color={totalActive > 0 ? C.warning : C.dim}>
+          {totalActive > 0 ? `${I.working} ${totalActive} active` : "all idle"}
         </Text>
+        {rowAAlerts.length > 0 && (() => {
+          const a = rowAAlerts[alertTick % rowAAlerts.length];
+          const suffix = rowAAlerts.length > 1 ? ` (+${rowAAlerts.length - 1})` : "";
+          return (
+            <Text color={a.color}>{` · ${a.icon} ${truncateToWidth(a.project, 16)} ${a.label}${suffix}`}</Text>
+          );
+        })()}
       </Box>
 
       {/* Row B: Projects + Tasks — explicit heights prevent Yoga cross-axis overflow */}
       <Box height={rowBHeight} overflow="hidden">
         {/* Left column: Project list + Roadmap panel */}
-        <Box flexDirection="column" width={34} flexShrink={0} height={rowBHeight}>
+        <Box flexDirection="column" width={34} flexShrink={0} height={rowBHeight} overflow="hidden">
           <Panel title={`PROJECTS (${sorted.length})`} hotkey="1" focused={focusedPanel === "projects"} height={showRoadmap ? rowBHeight - roadmapHeight : rowBHeight}>
             {aboveCount > 0 && (
               <Text color={C.dim}>  ▲ {aboveCount} more</Text>
@@ -484,7 +566,7 @@ export function App() {
               <Text color={C.dim}>  ▼ {belowCount} more</Text>
             )}
           </Panel>
-          {showRoadmap && <RoadmapPanel project={current} height={roadmapHeight} focused={focusedPanel === "roadmap"} selectedIdx={roadmapDocIdx} sectionIdx={roadmapSectionIdx} expandedSection={expandedSection} hotkey="3" />}
+          {showRoadmap && <RoadmapPanel project={current} height={roadmapHeight} focused={focusedPanel === "roadmap"} selectedIdx={roadmapDocIdx} sectionIdx={roadmapSectionIdx} expandedSection={expandedSection} itemIdx={roadmapItemIdx} hotkey="3" />}
         </Box>
 
         {/* Right: Tasks only — explicit height + maxLines prevents layout overflow */}
@@ -535,6 +617,9 @@ function RightPanel({
   maxLines?: number;
   height?: number;
 }) {
+  const stdout = useStdout();
+  const panelContentW = (stdout.stdout?.columns ?? 80) - 34 - 4; // cols - left column - panel chrome
+
   if (!project) {
     return (
       <Panel title="TASKS" flexGrow={1} hotkey={hotkey} height={height}>
@@ -546,11 +631,22 @@ function RightPanel({
   const stats = taskStats(project);
   const title = project.name.toUpperCase();
 
-  // Collect content lines into array, truncate to maxLines to prevent layout overflow
-  // (Ink overflow="hidden" clips rendering but NOT layout — content still pushes siblings)
+  // Centered divider helper
+  const divider = (label: string) => {
+    const w = Math.max(label.length + 4, Math.min(panelContentW, 40));
+    const left = Math.floor((w - label.length - 2) / 2);
+    const right = w - label.length - 2 - left;
+    return "─".repeat(left) + " " + label + " " + "─".repeat(right);
+  };
+
+  // Collect content lines — each item is forced to height={1} to prevent multi-line overflow.
+  // Per-section caps prevent any single section from exhausting the budget.
   const lines: React.ReactNode[] = [];
   const cap = maxLines ?? 999;
-  const push = (key: string, node: React.ReactNode) => { if (lines.length < cap) lines.push(<Box key={key} flexShrink={0}>{node}</Box>); };
+  const push = (key: string, node: React.ReactNode) => { if (lines.length < cap) lines.push(<Box key={key} flexShrink={0} height={1} overflow="hidden">{node}</Box>); };
+  const CAP_ALERTS = 3;
+  const CAP_TEAM = 3;
+  const CAP_DETAIL = 4;
 
   // Worktree lineage
   if (project.worktreeOf) {
@@ -572,19 +668,25 @@ function RightPanel({
     ) : (() => {
       const isRunning = project.isActive || project.activeSessions > 0;
       if (!isRunning) return null;
-      return <Text color={C.warning}>● Agent running</Text>;
+      // Show session name if available (from /rename or first prompt)
+      const active = project.recentSessions[0];
+      const label = active?.summary ?? active?.firstPrompt?.slice(0, 20) ?? "Agent";
+      return <Text color={C.success}>⌖ {label} running</Text>;
     })()}
   </Text>);
 
-  // Team member list
+  // Team member list (cap to prevent long team lists eating space)
   if (project.team && project.agentDetails.length > 0) {
-    push("team", <Box>
-      {project.agentDetails.map((a, i) => {
+    const teamSlice = project.agentDetails.slice(0, CAP_TEAM);
+    const teamMore = project.agentDetails.length - teamSlice.length;
+    push("team", <Text wrap="truncate">
+      {teamSlice.map((a, i) => {
         const icon = a.processState === "running" ? I.active : a.processState === "idle" ? I.idle : "✕";
         const color = a.processState === "running" ? C.warning : a.processState === "idle" ? C.dim : C.error;
         return <Text key={i} color={color}>{i > 0 ? "  " : ""}{icon} {a.name}{a.currentTaskId ? ` #${a.currentTaskId}` : ""}</Text>;
       })}
-    </Box>);
+      {teamMore > 0 && <Text color={C.dim}> +{teamMore}</Text>}
+    </Text>);
   }
   if (stats.total > 0) {
     push("stats", stats.done === stats.total
@@ -592,8 +694,8 @@ function RightPanel({
       : <Text color={C.subtext}>{stats.total - stats.done} remaining</Text>);
   }
 
-  // Alerts (exclude compaction)
-  const taskAlerts = project.activityAlerts.filter((a) => a.type !== "context_compact");
+  // Alerts (exclude compaction, cap per section)
+  const taskAlerts = project.activityAlerts.filter((a) => a.type !== "context_compact").slice(0, CAP_ALERTS);
   for (const [i, alert] of taskAlerts.entries()) {
     const icon = alert.severity === "error" ? "▲" : "△";
     const color = alert.severity === "error" ? C.error : C.warning;
@@ -604,20 +706,15 @@ function RightPanel({
   const liveTasks = project.tasks.filter((t) => !t.gone);
   const goneTasks = project.tasks.filter((t) => t.gone);
   const isMultiAgent = project.agents.length > 1;
-  const liveIdLen = liveTasks.length > 0 ? Math.min(4, Math.max(...liveTasks.map((t) => t.id.length), 1)) : 1;
-
   const renderTask = (t: DisplayTask, idx: number) => {
     const isCursor = focused && idx === taskIdx;
     const isGone = !!t.gone;
     const icon = t.status === "completed" ? I.done : t.status === "in_progress" ? I.working : I.idle;
     const iconColor = isGone ? C.dim : t.status === "completed" ? C.success : t.status === "in_progress" ? C.warning : C.dim;
-    const showId = t.id.length <= 5;
-    const displayId = showId ? padStartToWidth(t.id, liveIdLen) : "";
     return (
       <Text wrap="truncate">
         <Text color={isCursor ? C.primary : C.dim}>{isCursor ? I.cursor : " "}{" "}</Text>
         <Text color={iconColor} dimColor={isGone}>{icon} </Text>
-        {showId && <Text color={isGone ? C.dim : C.subtext} dimColor={isGone}>#{displayId} </Text>}
         <Text color={isGone ? C.dim : t.status === "completed" ? C.dim : isCursor ? C.text : C.subtext} bold={!isGone && isCursor} dimColor={isGone} strikethrough={t.status === "completed"}>{t.subject}</Text>
         {!isGone && t.owner && <Text color={C.accent}> ({t.owner})</Text>}
         {!isGone && t.blockedBy && <Text color={C.error}> {I.blocked}#{t.blockedBy}</Text>}
@@ -626,10 +723,20 @@ function RightPanel({
     );
   };
 
+  // Task list — budget-aware rendering with overflow indicator
+  // Reserve lines for post-task sections (gone, task detail, Recent)
+  const postTaskReserve = (goneTasks.length > 0 ? 1 : 0)
+    + (focused ? 5 : 0)  // task detail: sep + header + info + maybe description
+    + 8;                  // Recent: sep + header + up to 5 events + buffer
+  const taskBudget = Math.max(3, cap - lines.length - postTaskReserve);
+  let taskLinesUsed = 0;
+  let taskOverflow = 0;
+
   if (isMultiAgent) {
     const agents = [...new Set(liveTasks.map((t) => t.owner ?? "unassigned"))];
     let flatIdx = 0;
     for (const agent of agents) {
+      if (taskLinesUsed >= taskBudget) { taskOverflow += liveTasks.filter((t) => (t.owner ?? "unassigned") === agent).length; continue; }
       const agentTasks = liveTasks.filter((t) => (t.owner ?? "unassigned") === agent);
       const detail = project.agentDetails.find((a) => a.name === agent);
       const processState = detail?.processState;
@@ -639,23 +746,28 @@ function RightPanel({
       const agentIcon = processState === "running" ? I.active : processState === "idle" ? I.idle : processState === "dead" ? "✕" : hasBlocked ? I.blocked : hasActive ? I.working : I.idle;
       const agentColor = agentStatus === "running" || agentStatus === "active" ? C.warning : agentStatus === "blocked" || agentStatus === "dead" ? C.error : C.dim;
       push(`ah-${agent}`, <Text wrap="truncate" color={agentColor}>  ── {agentIcon} {agent} ({agentStatus}) ──────────</Text>);
-      for (const t of agentTasks) push(`t-${t.id}`, renderTask(t, flatIdx++));
+      taskLinesUsed++;
+      for (const t of agentTasks) {
+        if (taskLinesUsed >= taskBudget) { taskOverflow++; continue; }
+        push(`t-${t.id}`, renderTask(t, flatIdx++));
+        taskLinesUsed++;
+      }
     }
   } else {
-    liveTasks.forEach((t, i) => push(`t-${t.id}`, renderTask(t, i)));
+    for (let i = 0; i < liveTasks.length; i++) {
+      if (taskLinesUsed >= taskBudget) { taskOverflow = liveTasks.length - i; break; }
+      push(`t-${liveTasks[i].id}`, renderTask(liveTasks[i], i));
+      taskLinesUsed++;
+    }
   }
-  if (goneTasks.length > 0) push("gone", <Text color={C.dim}>  {"\u25b8"} {goneTasks.length} archived</Text>);
+  if (taskOverflow > 0) push("tmore", <Text color={C.dim}>  ▼ {taskOverflow} more tasks</Text>);
+  if (goneTasks.length > 0) push("gone", <Text color={C.dim}>  ▸ {goneTasks.length} archived</Text>);
 
-  // Gone sessions
-  if (project.goneSessionCount > 0 && liveTasks.length === 0) {
-    push("gsess", <Text color={C.dim}>▸ {project.goneSessionCount} archived session{project.goneSessionCount > 1 ? "s" : ""}</Text>);
-  }
-
-  // Task detail
+  // Task detail (when focused on a live task)
   if (focused && project.tasks[taskIdx] && !project.tasks[taskIdx].gone) {
     const t = project.tasks[taskIdx];
     push("td-sep", <Text> </Text>);
-    push("td-hdr", <Text color={C.dim}>─── Task Detail ─────────────────────</Text>);
+    push("td-hdr", <Text color={C.dim}>{divider("Task Detail")}</Text>);
     push("td-info", <Text wrap="truncate">
       <Text color={C.subtext}>status: </Text>
       <Text color={t.status === "in_progress" ? C.warning : t.status === "completed" ? C.success : C.dim}>{t.status}</Text>
@@ -663,31 +775,20 @@ function RightPanel({
       {t.blockedBy && <><Text color={C.subtext}> │ blocked by: </Text><Text color={C.error}>#{t.blockedBy}</Text></>}
       {t.statusChangedAt && <><Text color={C.subtext}> │ in status: </Text><Text color={C.dim}>↑{formatDwell(t.statusChangedAt)}</Text></>}
     </Text>);
-    if (t.description) push("td-desc", <Text wrap="truncate" color={C.subtext}>{t.description}</Text>);
+    if (t.description) push("td-desc", <Text wrap="truncate" color={C.subtext}>{t.description.replace(/[\r\n\t]+/g, " ")}</Text>);
   }
 
-  // Planning log (L2)
-  if (project.planningLog.length > 0) {
-    const reversed = project.planningLog.slice().reverse();
-    let compactSeen = 0;
-    const compactTotal = reversed.filter((e) => e.toolName === "_compact").length;
-    const filtered = reversed.filter((evt) => {
-      if (evt.toolName === "_compact") { compactSeen++; return compactSeen <= 1; }
-      return true;
-    }).slice(0, 4);
-    const collapsedCompact = compactTotal > 1 ? compactTotal - 1 : 0;
-    push("pl-sep", <Text> </Text>);
-    push("pl-hdr", <Text color={C.dim}>─── Planning ─────────────────────</Text>);
-    filtered.forEach((evt, i) => push(`pl-${i}`, <Text wrap="truncate"><Text color={C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text><Text color={C.primary}>  {evt.summary}</Text></Text>));
-    if (collapsedCompact > 0) push("pl-cc", <Text wrap="truncate" color={C.dim}>      +{collapsedCompact} earlier compaction{collapsedCompact > 1 ? "s" : ""}</Text>);
-  }
-
-  // Activity feed (L3)
-  if (project.activityLog.length > 0) {
-    push("al-sep", <Text> </Text>);
-    push("al-hdr", <Text color={C.dim}>─── Activity ─────────────────────</Text>);
-    project.activityLog.slice().reverse().slice(0, 5).forEach((evt, i) =>
-      push(`al-${i}`, <Text wrap="truncate"><Text color={evt.isError ? C.error : C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text><Text color={C.dim}>  </Text><Text color={activityColor(evt.toolName, !!evt.isError)}>{evt.summary}</Text></Text>)
+  // Unified "Recent" feed — merge L2 planning + L3 activity, sort by time, show last 5
+  const CAP_RECENT = 5;
+  const recentEvents = [...project.planningLog, ...project.activityLog]
+    .filter((e) => e.toolName !== "_compact")
+    .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
+    .slice(0, CAP_RECENT);
+  if (recentEvents.length > 0) {
+    push("rc-sep", <Text> </Text>);
+    push("rc-hdr", <Text color={C.dim}>{divider("Recent")}</Text>);
+    recentEvents.forEach((evt, i) =>
+      push(`rc-${i}`, <Text wrap="truncate"><Text color={evt.isError ? C.error : C.dim}>{padStartToWidth(formatRelativeTime(evt.ts), 4)}</Text><Text color={C.dim}> </Text><Text color={activityColor(evt.toolName, !!evt.isError)}>{evt.summary}</Text></Text>)
     );
   }
 
@@ -788,7 +889,7 @@ function GitLogContent({
         const typeColor = commit.type ? (COMMIT_TYPE_COLORS[commit.type] ?? C.subtext) : C.subtext;
         // Format date as relative
         const dateStr = formatCommitDate(commit.authorDate);
-        const typeStr = padEndToWidth(commit.type ? truncateToWidth(commit.type, 9) : "", 9);
+        const typeStr = padEndToWidth(commit.type ? truncateToWidth(commit.type, 8) : "", 9);
 
         return (
           <Text key={`${commit.hash}-${idx}`} wrap="truncate">
@@ -800,7 +901,7 @@ function GitLogContent({
         );
       })}
       {hasMore && (
-        <Text color={C.dim}>  ▼ {commits.length - scrollY - maxVisible} more commits</Text>
+        <Text color={C.dim}>▼ {commits.length - scrollY - maxVisible} more commits</Text>
       )}
     </>
   );
@@ -850,10 +951,10 @@ function SessionsContent({
     <>
       <Text color={C.subtext}>⎇ {project.branch}  │  {sessions.length} session{sessions.length !== 1 ? "s" : ""}</Text>
       {visible.map((s, i) => (
-        <Box key={scrollY + i}>
+        <Box key={scrollY + i} height={1} overflow="hidden">
           <Text color={C.accent}>● </Text>
           <Text color={C.dim}>{truncateToWidth(s.sessionId, 8)}  </Text>
-          <Text color={C.text}>{s.summary ?? (s.firstPrompt ? truncateToWidth(s.firstPrompt, 50) : "—")}</Text>
+          <Text color={C.text}>{s.summary ? truncateToWidth(s.summary.replace(/[\r\n\t]+/g, " "), 50) : (s.firstPrompt ? truncateToWidth(s.firstPrompt.replace(/[\r\n\t]+/g, " "), 50) : "—")}</Text>
           {s.gitBranch && <Text color={C.dim}> ⎇{s.gitBranch}</Text>}
         </Box>
       ))}
@@ -895,9 +996,9 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
     : `${String(Math.round(metrics.netDown)).padStart(4)}K`;
 
   return (
-    <Box flexDirection="column" height={2}>
+    <Box flexDirection="column" height={2} overflow="hidden">
       {/* Metrics line */}
-      <Box>
+      <Box height={1} overflow="hidden">
         <Text color={C.warning}> {mascotFrame} </Text>
         <Text color={C.dim}>│ </Text>
         <Text color={C.subtext}>CPU </Text>
@@ -917,7 +1018,7 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
       </Box>
 
       {/* Keyboard hints — context-aware */}
-      <Box>
+      <Box height={1} overflow="hidden">
         <Text color={C.primary} bold> {label} </Text>
         <Text color={C.dim}>│ </Text>
         {view === "agent" ? (

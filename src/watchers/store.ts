@@ -931,8 +931,12 @@ function cwdToProjectPath(cwd: string): string {
   return cwd;
 }
 
-// Build a human-readable summary for an activity event
+// Build a human-readable summary for an activity event (always single-line)
 function buildActivitySummary(data: HookEventData): string {
+  return normalizeSingleLine(buildActivitySummaryRaw(data));
+}
+
+function buildActivitySummaryRaw(data: HookEventData): string {
   const tool = data.tool_name ?? "unknown";
   const input = data.tool_input;
 
@@ -984,10 +988,16 @@ function shortenPath(p: string | undefined): string {
   return parts.length > 2 ? parts.slice(-2).join("/") : parts[parts.length - 1];
 }
 
-// Truncate a string with ellipsis
+// Collapse newlines/tabs into spaces so summaries are always single-line in UI
+function normalizeSingleLine(s: string): string {
+  return s.replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
+}
+
+// Truncate a string with ellipsis (normalize first to prevent multi-line rendering)
 function truncate(s: string | undefined, max: number): string {
   if (!s) return "?";
-  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+  const clean = normalizeSingleLine(s);
+  return clean.length > max ? clean.slice(0, max - 1) + "…" : clean;
 }
 
 // Task-related tool names that get ingested into the store (not just activity)
