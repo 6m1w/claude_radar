@@ -149,16 +149,28 @@ function RoadmapSwimLane({
   colWidths: number[];
   labelW: number;
 }) {
-  // Only show projects with roadmap data, sorted by activity (active first, then recent)
-  const withRoadmap = projects
-    .filter((p) => p.roadmap.length > 0 && p.roadmap.some((r) => r.totalItems > 0))
-    .sort((a, b) => {
-      // Active projects first
-      if (a.isActive && !b.isActive) return -1;
-      if (!a.isActive && b.isActive) return 1;
-      // Then by most recent activity
-      return b.lastActivity.getTime() - a.lastActivity.getTime();
-    });
+  // Deduplicate worktrees: keep one entry per repo group, propagate activity from worktrees
+  const keptByParent = new Map<string, ViewProject>();
+  const withRoadmap: ViewProject[] = [];
+  for (const p of projects) {
+    if (p.roadmap.length === 0 || !p.roadmap.some((r) => r.totalItems > 0)) continue;
+    const parentKey = p.worktreeOf ?? p.projectPath;
+    const existing = keptByParent.get(parentKey);
+    if (existing) {
+      // Propagate worktree activity to the kept entry
+      if (p.isActive && !existing.isActive) existing.isActive = true;
+      if (p.lastActivity > existing.lastActivity) existing.lastActivity = p.lastActivity;
+      if (p.activeSessions > existing.activeSessions) existing.activeSessions = p.activeSessions;
+    } else {
+      keptByParent.set(parentKey, p);
+      withRoadmap.push(p);
+    }
+  }
+  withRoadmap.sort((a, b) => {
+    if (a.isActive && !b.isActive) return -1;
+    if (!a.isActive && b.isActive) return 1;
+    return b.lastActivity.getTime() - a.lastActivity.getTime();
+  });
 
   if (withRoadmap.length === 0) {
     return <Text color={C.dim}>No roadmap data — add [ ] checkboxes to .md files</Text>;
