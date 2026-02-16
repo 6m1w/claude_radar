@@ -98,10 +98,17 @@ export function extractSessionMetaFromJsonl(
         const obj = JSON.parse(line);
         if (!gitBranch && obj.gitBranch) gitBranch = obj.gitBranch;
 
-        // First user message that isn't a command or tool result
+        // First user message that isn't a command, tool result, or system artifact
         if (!firstPrompt && obj.type === "user" && obj.message?.role === "user") {
           const c = obj.message.content;
-          if (typeof c === "string" && !c.startsWith("<command") && !c.startsWith("<local-command")) {
+          if (
+            typeof c === "string" &&
+            !c.startsWith("<command") &&
+            !c.startsWith("<local-command") &&
+            !c.startsWith("<system-reminder>") &&
+            !c.startsWith("\u23FA") && // ⏺ compact summary marker
+            !c.startsWith("This session is being continued")
+          ) {
             firstPrompt = c.slice(0, 80);
           }
         }
@@ -175,6 +182,7 @@ interface DiscoveredProject {
   activeSessions: number;   // .jsonl files modified recently
   lastSessionActivity: Date;
   recentSessions: SessionHistoryEntry[];  // from sessions-index entries
+  bestSessionName?: string; // computed: most recent summary ?? firstPrompt
 }
 
 // Cached results for gated phases (declared after interfaces)
@@ -301,6 +309,18 @@ function discoverProjects(): DiscoveredProject[] {
       // (lossy resolveSegments can produce non-existent paths)
       if (!existsSync(projectPath)) continue;
 
+      // Compute best display name: most recent session with summary, then firstPrompt
+      const trimmedRecent = recentSessions.slice(-8);
+      let bestSessionName: string | undefined;
+      for (let i = trimmedRecent.length - 1; i >= 0; i--) {
+        const s = trimmedRecent[i];
+        if (s.summary) { bestSessionName = s.summary; break; }
+        if (!bestSessionName && s.firstPrompt) {
+          // Clean up: first line only, trim whitespace, cap at 50 chars
+          bestSessionName = s.firstPrompt.split("\n")[0].trim().slice(0, 50);
+        }
+      }
+
       results.push({
         claudeDir: dirPath,
         projectPath,
@@ -310,7 +330,8 @@ function discoverProjects(): DiscoveredProject[] {
         totalSessions,
         activeSessions,
         lastSessionActivity,
-        recentSessions: recentSessions.slice(-8), // keep last 8
+        recentSessions: trimmedRecent,
+        bestSessionName,
       });
     }
   } catch {
@@ -1076,6 +1097,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       docContents,
       roadmap,
       recentSessions: disc.recentSessions.slice(-8),
+      bestSessionName: disc.bestSessionName,
       team: matchedTeam,
       agentDetails,
     });
