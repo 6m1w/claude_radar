@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, existsSync, openSync, readSync, closeSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
@@ -79,7 +79,7 @@ export function extractSessionMetaFromJsonl(
     const cached = jsonlMetaCache.get(jsonlPath);
     if (cached && cached.mtimeMs >= st.mtimeMs) return cached.meta;
 
-    const fd = require("node:fs").openSync(jsonlPath, "r");
+    const fd = openSync(jsonlPath, "r");
     const fileSize = st.size;
 
     let firstPrompt: string | undefined;
@@ -89,7 +89,7 @@ export function extractSessionMetaFromJsonl(
     // Read head chunk for firstPrompt + gitBranch
     const headSize = Math.min(fileSize, JSONL_META_READ_LIMIT);
     const headBuf = Buffer.alloc(headSize);
-    require("node:fs").readSync(fd, headBuf, 0, headSize, 0);
+    readSync(fd, headBuf, 0, headSize, 0);
     const headLines = headBuf.toString("utf-8").split("\n");
 
     for (const line of headLines) {
@@ -128,7 +128,7 @@ export function extractSessionMetaFromJsonl(
       const tailStart = Math.max(0, fileSize - JSONL_META_TAIL_LIMIT);
       const tailSize = fileSize - tailStart;
       const tailBuf = Buffer.alloc(tailSize);
-      require("node:fs").readSync(fd, tailBuf, 0, tailSize, tailStart);
+      readSync(fd, tailBuf, 0, tailSize, tailStart);
       const tailLines = tailBuf.toString("utf-8").split("\n");
 
       for (const line of tailLines) {
@@ -145,7 +145,7 @@ export function extractSessionMetaFromJsonl(
       }
     }
 
-    require("node:fs").closeSync(fd);
+    closeSync(fd);
 
     const meta = { summary, firstPrompt, gitBranch };
     jsonlMetaCache.set(jsonlPath, { mtimeMs: st.mtimeMs, meta });
