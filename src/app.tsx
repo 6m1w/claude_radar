@@ -651,32 +651,41 @@ function RightPanel({
   const CAP_TEAM = 3;
   const CAP_DETAIL = 4;
 
-  // Worktree lineage
+  // Agent status fragment (shared by worktree and non-worktree headers)
+  const agentStatusFragment = project.agentDetails.length > 0 ? (
+    <Text color={C.dim}>
+      {project.agentDetails.map((a) => {
+        const icon = a.processState === "running" ? I.active : a.processState === "idle" ? I.idle : "✕";
+        return `${icon}${a.name}`;
+      }).join(" ")}
+    </Text>
+  ) : project.agents.length > 1 ? (
+    <Text color={C.dim}>{project.agents.length} agents</Text>
+  ) : (() => {
+    const isRunning = project.isActive || project.activeSessions > 0;
+    if (!isRunning) return null;
+    const active = project.recentSessions[0];
+    const label = active?.summary ?? active?.firstPrompt?.slice(0, 20) ?? "Agent";
+    return <Text color={C.success}>⌖ {label} running</Text>;
+  })();
+
+  // Worktree: `↳ parent · agent status` (branch omitted — folder name ≈ branch)
+  // Non-worktree: `⎇ branch · agent status`
   if (project.worktreeOf) {
-    push("wt", <Text wrap="truncate"><Text color={C.dim}>↳ </Text><Text color={C.subtext}>{project.worktreeOf.split("/").pop()}</Text></Text>);
+    push("info", <Text wrap="truncate">
+      <Text color={C.dim}>↳ </Text>
+      <Text color={C.subtext}>{project.worktreeOf.split("/").pop()}</Text>
+      {project.team ? <Text color={C.warning}> ⚑ {project.team.teamName}</Text> : null}
+      {agentStatusFragment ? <Text color={C.dim}> · </Text> : null}
+      {agentStatusFragment}
+    </Text>);
+  } else {
+    push("info", <Text wrap="truncate">
+      <Text color={C.accent}>⎇ {project.branch} </Text>
+      {project.team ? <Text color={C.warning}>⚑ {project.team.teamName} </Text> : null}
+      {agentStatusFragment}
+    </Text>);
   }
-  // Project info header
-  push("info", <Text wrap="truncate">
-    <Text color={C.accent}>⎇ {project.branch} </Text>
-    {project.team ? <Text color={C.warning}>⚑ {project.team.teamName} </Text> : null}
-    {project.agentDetails.length > 0 ? (
-      <Text color={C.dim}>
-        {project.agentDetails.map((a) => {
-          const icon = a.processState === "running" ? I.active : a.processState === "idle" ? I.idle : "✕";
-          return `${icon}${a.name}`;
-        }).join(" ")}
-      </Text>
-    ) : project.agents.length > 1 ? (
-      <Text color={C.dim}>{project.agents.length} agents</Text>
-    ) : (() => {
-      const isRunning = project.isActive || project.activeSessions > 0;
-      if (!isRunning) return null;
-      // Show session name if available (from /rename or first prompt)
-      const active = project.recentSessions[0];
-      const label = active?.summary ?? active?.firstPrompt?.slice(0, 20) ?? "Agent";
-      return <Text color={C.success}>⌖ {label} running</Text>;
-    })()}
-  </Text>);
 
   // Team member list (cap to prevent long team lists eating space)
   if (project.team && project.agentDetails.length > 0) {
