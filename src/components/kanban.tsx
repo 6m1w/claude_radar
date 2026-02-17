@@ -517,10 +517,10 @@ export function KanbanView({
 
   // No outer border (Rule 8) — only paddingX(1) each side
   const contentW = cols - 2;
-  // Viewport: terminal rows - statusBar - title(1)
+  // Viewport: terminal rows - statusBar - title(1) - rowA(1)
   // TASKS view hides metrics line → statusBar is 1 row instead of 2
   const statusBarH = layout === "by_agent" ? 1 : 2;
-  const viewportHeight = rows - statusBarH - 1;
+  const viewportHeight = rows - statusBarH - 2;
 
   const filterLabel = selectedCount > 0 ? ` (${selectedCount} selected)` : "";
   const layoutLabel = layout === "swimlane" ? "ROADMAP" : "TASKS";

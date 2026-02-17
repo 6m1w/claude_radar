@@ -480,6 +480,19 @@ export function App() {
       : sorted.filter(hasActivity);
     return (
       <Box flexDirection="column" height={termRows} overflow="hidden">
+        {/* Row A: status + alert */}
+        <Box paddingX={1} flexShrink={0} height={1} width={cols} overflow="hidden">
+          <Text color={totalActive > 0 ? C.warning : C.dim}>
+            {totalActive > 0 ? `${I.working} ${totalActive} active` : "all idle"}
+          </Text>
+          {rowAAlerts.length > 0 && (() => {
+            const a = rowAAlerts[alertTick % rowAAlerts.length];
+            const suffix = rowAAlerts.length > 1 ? ` (+${rowAAlerts.length - 1})` : "";
+            return (
+              <Text color={a.color}>{` · ${a.icon} ${truncateToWidth(a.project, 16)} ${a.label}${suffix}`}</Text>
+            );
+          })()}
+        </Box>
         <KanbanView
           projects={kanbanProjects}
           selectedCount={selectedNames.size}
