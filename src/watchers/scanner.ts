@@ -65,7 +65,7 @@ const DOC_PRIORITY = ["CLAUDE.md", "PRD.md", "docs/PRD.md", "TDD.md", "docs/TDD.
 
 // ─── JSONL metadata extraction (fallback when sessions-index.json absent) ───
 // Cache: path → { mtimeMs, meta }
-const jsonlMetaCache = new Map<string, { mtimeMs: number; meta: { summary?: string; firstPrompt?: string; gitBranch?: string } }>();
+const jsonlMetaCache = new Map<string, { mtimeMs: number; meta: { summary?: string; firstPrompt?: string; gitBranch?: string; cwd?: string } }>();
 
 // Max bytes to read per JSONL for metadata extraction (avoids reading 19MB+ files fully)
 const JSONL_META_READ_LIMIT = 256 * 1024; // 256KB from start for firstPrompt + gitBranch
@@ -73,7 +73,7 @@ const JSONL_META_TAIL_LIMIT = 128 * 1024; // 128KB from end for /rename (may app
 
 export function extractSessionMetaFromJsonl(
   jsonlPath: string,
-): { summary?: string; firstPrompt?: string; gitBranch?: string } | null {
+): { summary?: string; firstPrompt?: string; gitBranch?: string; cwd?: string } | null {
   try {
     const st = statSync(jsonlPath);
     const cached = jsonlMetaCache.get(jsonlPath);
@@ -85,8 +85,9 @@ export function extractSessionMetaFromJsonl(
     let firstPrompt: string | undefined;
     let summary: string | undefined;
     let gitBranch: string | undefined;
+    let cwd: string | undefined;
 
-    // Read head chunk for firstPrompt + gitBranch
+    // Read head chunk for firstPrompt + gitBranch + cwd
     const headSize = Math.min(fileSize, JSONL_META_READ_LIMIT);
     const headBuf = Buffer.alloc(headSize);
     readSync(fd, headBuf, 0, headSize, 0);
@@ -97,6 +98,7 @@ export function extractSessionMetaFromJsonl(
       try {
         const obj = JSON.parse(line);
         if (!gitBranch && obj.gitBranch) gitBranch = obj.gitBranch;
+        if (!cwd && obj.cwd) cwd = obj.cwd;
 
         // First user message that isn't a command, tool result, or system artifact
         if (!firstPrompt && obj.type === "user" && obj.message?.role === "user") {
@@ -123,31 +125,37 @@ export function extractSessionMetaFromJsonl(
       } catch { /* incomplete JSON line at chunk boundary */ }
     }
 
-    // Read tail chunk for /rename (may appear late in session)
+    // Scan remaining file for /rename if not found in head.
+    // Uses Buffer.indexOf for efficient binary search (no JSON parsing needed).
+    // This covers /rename at any offset — the head (256KB) + tail (128KB) strategy
+    // missed renames in the "dead zone" (e.g. /rename at 3MB in a 25MB file).
     if (!summary && fileSize > JSONL_META_READ_LIMIT) {
-      const tailStart = Math.max(0, fileSize - JSONL_META_TAIL_LIMIT);
-      const tailSize = fileSize - tailStart;
-      const tailBuf = Buffer.alloc(tailSize);
-      readSync(fd, tailBuf, 0, tailSize, tailStart);
-      const tailLines = tailBuf.toString("utf-8").split("\n");
+      const renamePattern = Buffer.from("Session and agent renamed to: ");
+      const SCAN_CHUNK = 2 * 1024 * 1024; // 2MB chunks
+      const scanBuf = Buffer.alloc(Math.min(SCAN_CHUNK, fileSize));
+      let pos = headSize;
 
-      for (const line of tailLines) {
-        if (!line) continue;
-        try {
-          const obj = JSON.parse(line);
-          if (obj.type === "user" && typeof obj.message?.content === "string") {
-            const m = obj.message.content.match(
-              /<local-command-stdout>Session and agent renamed to: (.+?)<\/local-command-stdout>/,
-            );
-            if (m) summary = m[1];
+      while (pos < fileSize && !summary) {
+        const readLen = Math.min(SCAN_CHUNK, fileSize - pos);
+        readSync(fd, scanBuf, 0, readLen, pos);
+        const chunk = scanBuf.subarray(0, readLen);
+        const idx = chunk.indexOf(renamePattern);
+        if (idx >= 0) {
+          // Extract the rename value: ends at next '<' (XML close tag)
+          const nameStart = idx + renamePattern.length;
+          const nameEnd = chunk.indexOf(60, nameStart); // 60 = '<'
+          if (nameEnd > nameStart) {
+            summary = chunk.subarray(nameStart, nameEnd).toString("utf-8");
           }
-        } catch { /* incomplete line at chunk boundary */ }
+        }
+        // Overlap by pattern length to handle chunk boundaries
+        pos += readLen - renamePattern.length;
       }
     }
 
     closeSync(fd);
 
-    const meta = { summary, firstPrompt, gitBranch };
+    const meta = { summary, firstPrompt, gitBranch, cwd };
     jsonlMetaCache.set(jsonlPath, { mtimeMs: st.mtimeMs, meta });
     return meta;
   } catch {
@@ -271,8 +279,9 @@ function discoverProjects(): DiscoveredProject[] {
         }
       } else {
         // No sessions-index — derive from directory name, extract metadata from JSONL
-        projectPath = derivePathFromDir(dir);
-        projectName = basename(projectPath);
+        // Use cwd from JSONL as primary source (handles non-ASCII paths that
+        // derivePathFromDir can't reconstruct, e.g. Chinese/Japanese chars → hyphens)
+        let cwdFromJsonl: string | undefined;
 
         // Build recentSessions from JSONL files (sorted by mtime, last 8)
         try {
@@ -292,6 +301,7 @@ function discoverProjects(): DiscoveredProject[] {
             sessionIds.push(sid);
             const meta = extractSessionMetaFromJsonl(join(dirPath, file));
             if (meta?.gitBranch && !gitBranch) gitBranch = meta.gitBranch;
+            if (meta?.cwd) cwdFromJsonl = meta.cwd; // latest session's cwd wins
             recentSessions.push({
               sessionId: sid,
               summary: meta?.summary,
@@ -300,6 +310,10 @@ function discoverProjects(): DiscoveredProject[] {
             });
           }
         } catch { /* skip */ }
+
+        // Prefer cwd from JSONL (ground truth), fall back to path derivation
+        projectPath = cwdFromJsonl ?? derivePathFromDir(dir);
+        projectName = basename(projectPath);
       }
 
       // Skip root/home directories (too generic)

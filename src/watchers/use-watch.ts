@@ -101,7 +101,7 @@ function snapshotKey(projects: MergedProjectData[]): string {
       const evtLast = p.events?.[evtLen - 1]?.ts ?? "";
       const alertKey = p.activityAlerts?.map((a) => `${a.type}:${a.count}`).join(",") ?? "";
       const roadmapKey = p.roadmap?.map((r) => `${r.source}:${r.totalDone}/${r.totalItems}`).join(",") ?? "";
-      return `${p.projectPath}|s=${p.totalSessions}|a=${p.activeSessions}|b=${p.gitBranch ?? ""}|gl=${gitHead}|h=${p.hasHistory}|g=${p.goneSessionCount}|evt=${evtLen}:${evtLast}|alerts=${alertKey}|rm=${roadmapKey}|t=${taskKey}`;
+      return `${p.projectPath}|s=${p.totalSessions}|a=${p.activeSessions}|b=${p.gitBranch ?? ""}|n=${p.bestSessionName ?? ""}|gl=${gitHead}|h=${p.hasHistory}|g=${p.goneSessionCount}|evt=${evtLen}:${evtLast}|alerts=${alertKey}|rm=${roadmapKey}|t=${taskKey}`;
     })
     .join("||");
 }
