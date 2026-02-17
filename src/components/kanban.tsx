@@ -268,7 +268,7 @@ function RoadmapSwimLane({
   );
 }
 
-// ─── By Agent Layout (vertical list, grouped by project) ─────
+// ─── By Agent Layout (Agent → Project → Tasks hierarchy) ─────
 
 // Task card with status icon for list view
 function AgentTaskCard({ task, column }: {
@@ -289,12 +289,21 @@ function AgentTaskCard({ task, column }: {
       >
         {idPrefix}{task.subject}
       </Text>
-      {task.owner && <Text color={C.accent}> ({task.owner})</Text>}
       {task.blockedBy && <Text color={C.error}> {I.blocked}#{task.blockedBy}</Text>}
       {column !== "done" && dwell && <Text color={C.dim}> {dwell}</Text>}
     </Text>
   );
 }
+
+// Internal types for agent-first grouping
+type TaggedTask = { task: DisplayTask; col: KanbanColumn };
+type ProjectGroup = { project: ViewProject; tasks: TaggedTask[]; goneCount: number };
+type AgentGroup = {
+  name: string;
+  processState: string | undefined;
+  projectGroups: ProjectGroup[];
+  taskCount: number;
+};
 
 function ByAgentLayout({
   projects,
@@ -311,71 +320,110 @@ function ByAgentLayout({
     return <Text color={C.dim}>No active agents</Text>;
   }
 
-  // Separate projects: skip truly inactive no-task worktrees, collapse all-done
-  const activeProjects: ViewProject[] = [];
-  const allDoneProjects: ViewProject[] = [];
+  const MAX_TASKS = 5;
+
+  // Collect agent process states across all projects (running wins over idle)
+  const agentStateMap = new Map<string, string>();
   for (const p of projects) {
-    // Skip worktree projects with no tasks AND no active sessions
-    if (p.worktreeOf && p.tasks.length === 0 && p.activeSessions === 0 && p.hookSessionCount === 0) continue;
-    const buckets = buildBuckets(p);
-    const remaining = buckets.todo.length + buckets.needs_input.length + buckets.doing.length;
-    if (remaining === 0 && buckets.done.length > 0) {
-      allDoneProjects.push(p);
-    } else {
-      activeProjects.push(p);
+    for (const a of p.agentDetails) {
+      const existing = agentStateMap.get(a.name);
+      if (!existing || a.processState === "running") {
+        agentStateMap.set(a.name, a.processState);
+      }
     }
   }
 
-  const safeCursor = Math.max(0, Math.min(cursorIdx, activeProjects.length - 1));
+  // Group all tasks: agent → project → tasks
+  const agentProjectMap = new Map<string, Map<string, ProjectGroup>>();
+  for (const project of projects) {
+    // Skip worktree projects with no tasks AND no active sessions
+    if (project.worktreeOf && project.tasks.length === 0 && project.activeSessions === 0 && project.hookSessionCount === 0) continue;
 
-  // Pre-compute line height per project for scroll math
-  const MAX_TASKS = 5;
-  type ProjectBlock = {
-    project: ViewProject;
-    height: number; // lines this project occupies (excl. separator)
-  };
-  const blocks: ProjectBlock[] = activeProjects.map((project) => {
-    const headerLines = 2; // two-line header (name + folder/branch)
-    if (project.tasks.length === 0) {
-      // Active session but no tasks — header only (+ 1 "active, no tasks" line)
-      return { project, height: headerLines + 1 };
-    }
     const buckets = buildBuckets(project);
-    const allGroups = [buckets.needs_input, buckets.doing, buckets.todo];
-    if (!hideDone) allGroups.push(buckets.done.slice(0, 5));
-    let goneN = 0;
-    const liveCount = allGroups.reduce((s, b) => {
-      for (const t of b) { if (t.gone) goneN++; else s++; }
-      return s;
-    }, 0);
-    const visible = Math.min(liveCount, MAX_TASKS);
-    const overflow = liveCount > MAX_TASKS ? 1 : 0;
-    const archivedLine = goneN > 0 ? 1 : 0;
-    return { project, height: headerLines + visible + overflow + archivedLine };
+    const colEntries: [KanbanColumn, DisplayTask[]][] = [
+      ["needs_input", buckets.needs_input],
+      ["doing", buckets.doing],
+      ["todo", buckets.todo],
+    ];
+    if (!hideDone && buckets.done.length > 0) {
+      colEntries.push(["done", buckets.done.slice(0, 5)]);
+    }
+
+    for (const [col, tasks] of colEntries) {
+      for (const task of tasks) {
+        const owner = task.owner ?? "unassigned";
+        if (!agentProjectMap.has(owner)) agentProjectMap.set(owner, new Map());
+        const pMap = agentProjectMap.get(owner)!;
+        if (!pMap.has(project.projectPath)) {
+          pMap.set(project.projectPath, { project, tasks: [], goneCount: 0 });
+        }
+        const pg = pMap.get(project.projectPath)!;
+        if (task.gone) { pg.goneCount++; } else {
+          pg.tasks.push({ task, col });
+        }
+      }
+    }
+  }
+
+  // Build sorted agent groups
+  const groups: AgentGroup[] = [];
+  for (const [name, pMap] of agentProjectMap) {
+    const projectGroups = Array.from(pMap.values()).filter((pg) => pg.tasks.length > 0 || pg.goneCount > 0);
+    const taskCount = projectGroups.reduce((s, pg) => s + pg.tasks.length, 0);
+    if (taskCount === 0 && projectGroups.every((pg) => pg.goneCount === 0)) continue;
+    const processState = name === "unassigned" ? undefined : agentStateMap.get(name);
+    groups.push({ name, processState, projectGroups, taskCount });
+  }
+
+  // Sort: running → idle → unassigned/dead
+  const statePriority = (g: AgentGroup): number => {
+    if (g.processState === "running") return 0;
+    if (g.processState === "idle") return 1;
+    if (g.name === "unassigned") return 3;
+    return 2; // dead
+  };
+  groups.sort((a, b) => statePriority(a) - statePriority(b));
+
+  if (groups.length === 0) {
+    return <Text color={C.dim}>No active agents</Text>;
+  }
+
+  const safeCursor = Math.max(0, Math.min(cursorIdx, groups.length - 1));
+
+  // Pre-compute line height per agent group for scroll math
+  type GroupBlock = { group: AgentGroup; height: number };
+  const blocks: GroupBlock[] = groups.map((group) => {
+    let h = 1; // agent header line
+    for (const pg of group.projectGroups) {
+      h += 1; // project sub-header
+      const visibleCount = Math.min(pg.tasks.length, MAX_TASKS);
+      h += visibleCount;
+      if (pg.tasks.length > MAX_TASKS) h += 1; // overflow
+      if (pg.goneCount > 0) h += 1; // archived
+    }
+    return { group, height: h };
   });
 
   // Compute visible range: ensure safeCursor is in viewport
   let scrollStart = 0;
   if (viewportHeight) {
-    // Scroll forward until cursor fits in viewport
     while (scrollStart < safeCursor) {
       let h = 0;
       for (let i = scrollStart; i <= safeCursor; i++) {
-        h += blocks[i].height + (i > scrollStart ? 1 : 0); // +1 separator
+        h += blocks[i].height + (i > scrollStart ? 1 : 0);
       }
       if (h <= viewportHeight) break;
       scrollStart++;
     }
   }
 
-  // Determine how many projects fit from scrollStart
   let visibleEnd = blocks.length;
   if (viewportHeight) {
     let h = 0;
     for (let i = scrollStart; i < blocks.length; i++) {
-      const projH = blocks[i].height + (i > scrollStart ? 1 : 0);
-      if (h + projH > viewportHeight) { visibleEnd = i; break; }
-      h += projH;
+      const bH = blocks[i].height + (i > scrollStart ? 1 : 0);
+      if (h + bH > viewportHeight) { visibleEnd = i; break; }
+      h += bH;
     }
   }
 
@@ -386,105 +434,64 @@ function ByAgentLayout({
     <Box flexDirection="column">
       {aboveCount > 0 && <Text color={C.dim}>  ▲ {aboveCount} above</Text>}
 
-      {blocks.slice(scrollStart, visibleEnd).map(({ project }, vi) => {
-        const pi = scrollStart + vi;
-        const isCursor = pi === safeCursor;
-        const buckets = buildBuckets(project);
+      {blocks.slice(scrollStart, visibleEnd).map(({ group }, vi) => {
+        const gi = scrollStart + vi;
+        const isCursor = gi === safeCursor;
 
-        // Agent process state
-        const primaryAgent = project.agentDetails[0];
-        const processState = primaryAgent?.processState
-          ?? (project.isActive ? "running" : project.activeSessions > 0 ? "idle" : undefined);
-        const stateIcon = processState === "running" ? "\u25CF" : "\u25CB";
-        const stateColor = processState === "running" ? C.warning : C.dim;
-
-        // Progress (exclude gone tasks from counts)
-        const remaining = [...buckets.todo, ...buckets.needs_input, ...buckets.doing].filter((t) => !t.gone).length;
-        const attention = buckets.needs_input.filter((t) => !t.gone).length;
-        const progressStr = remaining > 0
-          ? `${remaining} remaining${attention > 0 ? ` \u00b7 ${attention}!` : ""}`
-          : "all done";
-
-        // Naming fallback: /rename summary → feature branch → worktree name → folder name
-        const renameSummary = project.bestSessionName;
-        const featureBranch = project.branch.startsWith("feature/")
-          ? project.branch.slice("feature/".length) : undefined;
-        const bestName = renameSummary
-          ?? featureBranch
-          ?? (project.worktreeOf ? project.name : undefined)
-          ?? project.name;
-        const hasRename = !!renameSummary;
-        const emoji = hasRename ? "\uD83E\uDD8A " : ""; // 🦊 only when /rename exists
-        // Line 2: show folder+branch, or just branch when bestName = folder name
-        const showFolderOnLine2 = bestName !== project.name;
-        const branchStr = truncateToWidth(project.branch, 18);
-
-        // Collect live tasks in priority order (exclude gone), cap at MAX_TASKS
-        type TaggedTask = { task: DisplayTask; col: KanbanColumn };
-        const allTasks: TaggedTask[] = [];
-        let goneCount = 0;
-        for (const [col, tasks] of [
-          ["needs_input", buckets.needs_input],
-          ["doing", buckets.doing],
-          ["todo", buckets.todo],
-          ...(!hideDone && buckets.done.length > 0 ? [["done", buckets.done.slice(0, 5)]] : []),
-        ] as [KanbanColumn, DisplayTask[]][]) {
-          for (const task of tasks) {
-            if (task.gone) { goneCount++; continue; }
-            allTasks.push({ task, col });
-          }
-        }
-        const visibleTasks = allTasks.slice(0, MAX_TASKS);
-        const overflow = Math.max(0, allTasks.length - MAX_TASKS);
+        // Agent icon + color: ● running (yellow), ○ idle (dim), ✕ dead/unassigned (red)
+        const icon = group.processState === "running" ? "\u25CF"
+          : group.processState === "idle" ? "\u25CB"
+          : "\u2715";
+        const iconColor = group.processState === "running" ? C.warning
+          : group.processState === "idle" ? C.dim
+          : C.error;
 
         return (
-          <Box key={project.projectPath} flexDirection="column">
-            {/* Consistent 1 blank line between project blocks */}
+          <Box key={group.name} flexDirection="column">
             {vi > 0 && <Box height={1} />}
 
-            {/* Line 1: {icon} {emoji} {bestName}  {remaining} */}
-            <Text wrap="truncate">
-              <Text color={isCursor ? C.primary : stateColor}>{isCursor ? "\u25b8" : stateIcon} </Text>
-              <Text color={project.isActive ? C.warning : C.text} bold={isCursor}>{emoji}{bestName}</Text>
-              <Text color={C.dim}>  </Text>
-              <Text color={attention > 0 ? C.error : C.subtext}>{progressStr}</Text>
-            </Text>
-            {/* Line 2: folder + branch (dim) */}
-            <Text wrap="truncate" color={C.dim}>
-              {"  "}{showFolderOnLine2 ? `${project.name}  ` : ""}⎇{branchStr}
-            </Text>
+            {/* Agent group header: {icon} {name}  ...  {count} */}
+            <Box>
+              <Text wrap="truncate">
+                <Text color={isCursor ? C.primary : iconColor}>{isCursor ? "\u25b8" : icon} </Text>
+                <Text color={isCursor ? C.primary : iconColor} bold={isCursor}>{group.name}</Text>
+              </Text>
+              <Box flexGrow={1} />
+              <Text color={C.dim}>{group.taskCount}</Text>
+            </Box>
 
-            {/* Task list or active-no-tasks message */}
-            {project.tasks.length === 0 ? (
-              <Text wrap="truncate" color={C.dim}>{"  "}active, no tasks</Text>
-            ) : (
-              <>
-                {visibleTasks.map(({ task, col }, ti) => (
-                  <Text key={`${task.id}-${ti}`} wrap="truncate">
-                    {"  "}<AgentTaskCard task={task} column={col} />
+            {/* Project sub-groups */}
+            {group.projectGroups.map((pg) => {
+              const visibleTasks = pg.tasks.slice(0, MAX_TASKS);
+              const overflow = Math.max(0, pg.tasks.length - MAX_TASKS);
+
+              return (
+                <Box key={pg.project.projectPath} flexDirection="column">
+                  {/* Project sub-header */}
+                  <Text wrap="truncate">
+                    <Text color={C.accent}>{"  "}\u25b8 {pg.project.name}</Text>
                   </Text>
-                ))}
-                {overflow > 0 && (
-                  <Text wrap="truncate" color={C.dim}>{"  "}+{overflow} more</Text>
-                )}
-                {goneCount > 0 && (
-                  <Text wrap="truncate" color={C.dim}>{"  "}▸ {goneCount} archived</Text>
-                )}
-              </>
-            )}
+
+                  {/* Tasks indented under project */}
+                  {visibleTasks.map(({ task, col }, ti) => (
+                    <Text key={`${task.id}-${ti}`} wrap="truncate">
+                      {"    "}<AgentTaskCard task={task} column={col} />
+                    </Text>
+                  ))}
+                  {overflow > 0 && (
+                    <Text wrap="truncate" color={C.dim}>{"    "}+{overflow} more</Text>
+                  )}
+                  {pg.goneCount > 0 && (
+                    <Text wrap="truncate" color={C.dim}>{"    "}\u25b8 {pg.goneCount} archived</Text>
+                  )}
+                </Box>
+              );
+            })}
           </Box>
         );
       })}
 
       {belowCount > 0 && <Text color={C.dim}>  ▼ {belowCount} below</Text>}
-
-      {/* Collapsed all-done projects */}
-      {allDoneProjects.length > 0 && (
-        <>
-          {(scrollStart < blocks.length || aboveCount > 0) && <Text>{" "}</Text>}
-          <Text color={C.dim}>  + {allDoneProjects.length} project{allDoneProjects.length > 1 ? "s" : ""} (all done)</Text>
-        </>
-      )}
     </Box>
   );
 }
