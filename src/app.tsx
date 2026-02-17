@@ -23,38 +23,44 @@ function toViewProject(p: MergedProjectData): ViewProject {
   // Infer owner for unowned tasks: if single agent, assign to it
   const inferredOwner = p.agentDetails.length === 1 ? p.agentDetails[0].name : undefined;
 
-  const tasks = allItems.map((item, i): DisplayTask => {
-    const gone = !!item._gone;
-    if ("subject" in item) {
-      // TaskItem — has id, subject, owner, blockedBy
-      const t = item as TaskItem;
-      // Dynamic dependency resolution: only show blockers that aren't completed
-      const unresolved = t.blockedBy?.filter((id) => {
-        const blocker = allItems.find((it) => "id" in it && (it as TaskItem).id === id);
-        return !blocker || blocker.status !== "completed";
-      });
-      return {
-        id: t.id,
-        subject: t.subject,
-        status: t.status,
-        owner: t.owner || inferredOwner,
-        blockedBy: unresolved?.length ? unresolved[0] : undefined,
-        description: t.description,
-        gone,
-        statusChangedAt: item._statusChangedAt,
-      };
+  // Build tasks per-session to preserve session name (/rename) as owner fallback
+  // Priority: task.owner > inferredOwner (team single-agent) > sessionName (/rename)
+  const tasks: DisplayTask[] = [];
+  let globalIdx = 0;
+  for (const session of p.sessions) {
+    const sessionName = session.meta?.summary;
+    for (const item of session.items) {
+      const gone = !!item._gone;
+      if ("subject" in item) {
+        const t = item as TaskItem;
+        const unresolved = t.blockedBy?.filter((id) => {
+          const blocker = allItems.find((it) => "id" in it && (it as TaskItem).id === id);
+          return !blocker || blocker.status !== "completed";
+        });
+        tasks.push({
+          id: t.id,
+          subject: t.subject,
+          status: t.status,
+          owner: t.owner || inferredOwner || sessionName,
+          blockedBy: unresolved?.length ? unresolved[0] : undefined,
+          description: t.description,
+          gone,
+          statusChangedAt: item._statusChangedAt,
+        });
+      } else {
+        const todo = item as TodoItem;
+        tasks.push({
+          id: String(globalIdx + 1),
+          subject: todo.content,
+          status: todo.status,
+          owner: inferredOwner || sessionName,
+          gone,
+          statusChangedAt: item._statusChangedAt,
+        });
+      }
+      globalIdx++;
     }
-    // TodoItem — synthesize id from index, use content as subject
-    const todo = item as TodoItem;
-    return {
-      id: String(i + 1),
-      subject: todo.content,
-      status: todo.status,
-      owner: inferredOwner,
-      gone,
-      statusChangedAt: item._statusChangedAt,
-    };
-  });
+  }
 
   return {
     name: p.projectName,

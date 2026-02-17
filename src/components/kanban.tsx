@@ -469,7 +469,7 @@ function ByAgentLayout({
                 <Box key={pg.project.projectPath} flexDirection="column">
                   {/* Project sub-header */}
                   <Text wrap="truncate">
-                    <Text color={C.accent}>{"  "}\u25b8 {pg.project.name}</Text>
+                    <Text color={C.accent}>{"  "}▸ {pg.project.name}</Text>
                   </Text>
 
                   {/* Tasks indented under project */}
@@ -482,7 +482,7 @@ function ByAgentLayout({
                     <Text wrap="truncate" color={C.dim}>{"    "}+{overflow} more</Text>
                   )}
                   {pg.goneCount > 0 && (
-                    <Text wrap="truncate" color={C.dim}>{"    "}\u25b8 {pg.goneCount} archived</Text>
+                    <Text wrap="truncate" color={C.dim}>{"    "}▸ {pg.goneCount} archived</Text>
                   )}
                 </Box>
               );

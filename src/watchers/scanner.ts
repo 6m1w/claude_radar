@@ -156,6 +156,13 @@ export function extractSessionMetaFromJsonl(
 
     closeSync(fd);
 
+    // Validate rename: reject false positives from code/regex patterns in JSONL.
+    // When scanner source code is discussed in a conversation, the binary scan
+    // can match the regex pattern itself (e.g. "(.+?)") as a session name.
+    if (summary && /[\\()[\]{}*+?|^$]/.test(summary)) {
+      summary = undefined;
+    }
+
     const meta = { summary, firstPrompt, gitBranch, cwd };
     jsonlMetaCache.set(jsonlPath, { mtimeMs: st.mtimeMs, meta });
     return meta;
@@ -772,11 +779,20 @@ function readDocContents(projectPath: string, docFiles: string[], fallbackPath?:
 function buildSessionIndex(projects: DiscoveredProject[]): Map<string, SessionMeta> {
   const index = new Map<string, SessionMeta>();
   for (const p of projects) {
+    // Build session name lookup from recentSessions (has /rename summaries)
+    const nameMap = new Map<string, { summary?: string; firstPrompt?: string }>();
+    for (const s of p.recentSessions) {
+      nameMap.set(s.sessionId, { summary: s.summary, firstPrompt: s.firstPrompt });
+    }
+
     for (const sessionId of p.sessionIds) {
+      const names = nameMap.get(sessionId);
       index.set(sessionId, {
         projectPath: p.projectPath,
         projectName: p.projectName,
         gitBranch: p.gitBranch,
+        summary: names?.summary,
+        firstPrompt: names?.firstPrompt,
       });
     }
     // Also index all .jsonl files in the project dir (sessions without index entries)
@@ -786,10 +802,13 @@ function buildSessionIndex(projects: DiscoveredProject[]): Map<string, SessionMe
         if (!file.endsWith(".jsonl")) continue;
         const sessionId = file.replace(".jsonl", "");
         if (!index.has(sessionId)) {
+          const names = nameMap.get(sessionId);
           index.set(sessionId, {
             projectPath: p.projectPath,
             projectName: p.projectName,
             gitBranch: p.gitBranch,
+            summary: names?.summary,
+            firstPrompt: names?.firstPrompt,
           });
         }
       }
