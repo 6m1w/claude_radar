@@ -137,6 +137,7 @@ export function extractSessionMetaFromJsonl(
 
       while (pos < fileSize && !summary) {
         const readLen = Math.min(SCAN_CHUNK, fileSize - pos);
+        if (readLen <= renamePattern.length) break; // too few bytes left to match
         readSync(fd, scanBuf, 0, readLen, pos);
         const chunk = scanBuf.subarray(0, readLen);
         const idx = chunk.indexOf(renamePattern);
