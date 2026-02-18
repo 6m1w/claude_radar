@@ -199,6 +199,7 @@ interface DiscoveredProject {
   lastSessionActivity: Date;
   recentSessions: SessionHistoryEntry[];  // from sessions-index entries
   bestSessionName?: string; // computed: most recent summary ?? firstPrompt
+  recentSessionIds: string[]; // session IDs with JSONL mtime < STALE_TASK_THRESHOLD_MS
 }
 
 // Cached results for gated phases (declared after interfaces)
@@ -225,6 +226,7 @@ function discoverProjects(): DiscoveredProject[] {
       let totalSessions = 0;
       let activeSessions = 0;
       let lastSessionActivity = new Date(0);
+      const recentSessionIds: string[] = []; // sessions with mtime < STALE_TASK_THRESHOLD
 
       try {
         const files = readdirSync(dirPath);
@@ -244,6 +246,10 @@ function discoverProjects(): DiscoveredProject[] {
               lastSessionActivity = mtime;
             }
             if (now - mtime.getTime() < ACTIVE_THRESHOLD_MS) activeSessions++;
+            // Track sessions with recent JSONL activity for stale task filtering
+            if (now - mtime.getTime() < STALE_TASK_THRESHOLD_MS) {
+              recentSessionIds.push(file.replace(".jsonl", ""));
+            }
           } catch { /* skip */ }
         }
       } catch {
@@ -354,6 +360,7 @@ function discoverProjects(): DiscoveredProject[] {
         lastSessionActivity,
         recentSessions: trimmedRecent,
         bestSessionName,
+        recentSessionIds,
       });
     }
   } catch {
@@ -844,7 +851,7 @@ function scanTodos(sessionIndex: Map<string, SessionMeta>): SessionData[] {
   return results;
 }
 
-function scanTasks(sessionIndex: Map<string, SessionMeta>): SessionData[] {
+function scanTasks(sessionIndex: Map<string, SessionMeta>, recentSessionIds: Set<string>): SessionData[] {
   const results: SessionData[] = [];
   try {
     const dirs = readdirSync(TASKS_DIR);
@@ -868,11 +875,13 @@ function scanTasks(sessionIndex: Map<string, SessionMeta>): SessionData[] {
         }
 
         if (items.length > 0) {
-          // Skip abandoned task dirs: old mtime + no active session + no in-progress items
-          const hasActiveSession = sessionIndex.has(dir);
-          const hasInProgress = items.some((i) => i.status === "in_progress");
+          // Skip stale task dirs: task files old + session JSONL has no recent activity.
+          // Previous check used sessionIndex.has() (JSONL exists — always true) and
+          // excluded in_progress tasks (letting abandoned sessions persist forever).
+          // Now: use actual JSONL mtime to determine if session is alive.
           const isStale = (Date.now() - latestMod.getTime()) > STALE_TASK_THRESHOLD_MS;
-          if (isStale && !hasActiveSession && !hasInProgress) continue;
+          const isSessionRecent = recentSessionIds.has(dir);
+          if (isStale && !isSessionRecent) continue;
 
           items.sort((a, b) => Number(a.id) - Number(b.id));
           results.push({
@@ -1034,8 +1043,13 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
 
   // Phase 2-4: Build session index, scan tasks/todos
   const sessionIndex = buildSessionIndex(discovered);
+  // Build set of session IDs with recent JSONL activity (for stale task filtering)
+  const recentSessionIds = new Set<string>();
+  for (const disc of discovered) {
+    for (const id of disc.recentSessionIds) recentSessionIds.add(id);
+  }
   const allTodos = scanTodos(sessionIndex);
-  const allTasks = scanTasks(sessionIndex);
+  const allTasks = scanTasks(sessionIndex, recentSessionIds);
   const allSessions = [...allTodos, ...allTasks].sort(
     (a, b) => b.lastModified.getTime() - a.lastModified.getTime()
   );
@@ -1062,6 +1076,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       }
       existing.sessionIds.push(...disc.sessionIds);
       existing.recentSessions.push(...disc.recentSessions);
+      existing.recentSessionIds.push(...disc.recentSessionIds);
       if (!existing.gitBranch && disc.gitBranch) existing.gitBranch = disc.gitBranch;
     } else {
       mergedDisc.set(disc.projectPath, { ...disc, sessionIds: [...disc.sessionIds] });
