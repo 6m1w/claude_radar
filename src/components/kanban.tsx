@@ -150,12 +150,18 @@ function RoadmapSwimLane({
   colWidths,
   labelW,
   hiddenProjects,
+  titleSuffix,
+  totalTodo,
+  totalDone,
 }: {
   projects: ViewProject[];
   hideDone: boolean;
   colWidths: number[];
   labelW: number;
   hiddenProjects?: Set<string>;
+  titleSuffix: string;
+  totalTodo: number;
+  totalDone: number;
 }) {
   // Deduplicate worktrees: keep one entry per repo group, propagate activity from worktrees
   const keptByParent = new Map<string, ViewProject>();
@@ -181,11 +187,41 @@ function RoadmapSwimLane({
   const noRoadmapCount = allParentKeys.size - keptByParent.size;
 
   if (withRoadmap.length === 0) {
-    return <Text color={C.dim}>No roadmap data — add [ ] checkboxes to .md files</Text>;
+    return (
+      <>
+        <Text color={C.primary} bold>{`ROADMAP — 0 projects${titleSuffix}`}</Text>
+        <Text color={C.dim}>No roadmap data — add [ ] checkboxes to .md files</Text>
+      </>
+    );
   }
 
   return (
     <>
+      <Text color={C.primary} bold>{`ROADMAP — ${withRoadmap.length} project${withRoadmap.length !== 1 ? "s" : ""}${titleSuffix}`}</Text>
+      {/* Header row */}
+      <Box>
+        <Box width={labelW} flexShrink={0}>
+          <Text color={C.primary} bold>PROJECTS</Text>
+        </Box>
+        <Sep />
+        <Box width={colWidths[0]} flexShrink={0}>
+          <Text>
+            <Text color={C.accent} bold>{"TODO \u2610"}</Text>
+            <Text color={C.dim}>{" ".repeat(Math.max(1, colWidths[0] - 7 - String(totalTodo).length))}{totalTodo}</Text>
+          </Text>
+        </Box>
+        {!hideDone && (
+          <>
+            <Sep />
+            <Box width={colWidths[1]} flexShrink={0}>
+              <Text>
+                <Text color={C.success}>{"DONE \u2611"}</Text>
+                <Text color={C.dim}>{" ".repeat(Math.max(1, colWidths[1] - 7 - String(totalDone).length))}{totalDone}</Text>
+              </Text>
+            </Box>
+          </>
+        )}
+      </Box>
       {withRoadmap.flatMap((project, pi) => {
         const isHidden = hiddenProjects?.has(project.projectPath);
         // Use primary roadmap file (most items)
@@ -325,15 +361,22 @@ function ByAgentLayout({
   cursorIdx = 0,
   viewportHeight,
   hiddenProjects,
+  titleSuffix,
 }: {
   projects: ViewProject[];
   hideDone: boolean;
   cursorIdx?: number;
   viewportHeight?: number;
   hiddenProjects?: Set<string>;
+  titleSuffix: string;
 }) {
   if (projects.length === 0) {
-    return <Text color={C.dim}>No projects</Text>;
+    return (
+      <>
+        <Text color={C.primary} bold>{`TASKS — 0 projects${titleSuffix}`}</Text>
+        <Text color={C.dim}>No projects</Text>
+      </>
+    );
   }
 
   const MAX_TASKS = 5;
@@ -426,6 +469,7 @@ function ByAgentLayout({
 
   return (
     <Box flexDirection="column">
+      <Text color={C.primary} bold>{`TASKS — ${pBlocks.length} project${pBlocks.length !== 1 ? "s" : ""}${titleSuffix}`}</Text>
       {aboveCount > 0 && <Text color={C.dim}>  ▲ {aboveCount} above</Text>}
 
       {blocks.slice(scrollStart, visibleEnd).map(({ pb }, vi) => {
@@ -520,16 +564,13 @@ export function KanbanView({
   const viewportHeight = rows - statusBarH - 2;
 
   const filterLabel = selectedCount > 0 ? ` (${selectedCount} selected)` : "";
-  const layoutLabel = layout === "swimlane" ? "ROADMAP" : "TASKS";
   const hideLabel = hideDone ? " \u229ADONE" : "";
+  const titleSuffix = `${filterLabel}${hideLabel}`;
 
   if (layout === "by_agent") {
     return (
       <Box flexDirection="column" flexGrow={1} paddingX={1}>
-        <Text color={C.primary} bold>
-          {`${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
-        </Text>
-        <ByAgentLayout projects={projects} hideDone={hideDone} cursorIdx={cursorIdx} viewportHeight={viewportHeight} hiddenProjects={hiddenProjects} />
+        <ByAgentLayout projects={projects} hideDone={hideDone} cursorIdx={cursorIdx} viewportHeight={viewportHeight} hiddenProjects={hiddenProjects} titleSuffix={titleSuffix} />
       </Box>
     );
   }
@@ -554,40 +595,15 @@ export function KanbanView({
 
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1}>
-      <Text color={C.primary} bold>
-        {`${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
-      </Text>
-      {/* Header row */}
-      <Box>
-        <Box width={labelW} flexShrink={0}>
-          <Text color={C.primary} bold>PROJECTS</Text>
-        </Box>
-        <Sep />
-        <Box width={colWidths[0]} flexShrink={0}>
-          <Text>
-            <Text color={C.accent} bold>{"TODO \u2610"}</Text>
-            <Text color={C.dim}>{" ".repeat(Math.max(1, colWidths[0] - 7 - String(totalTodo).length))}{totalTodo}</Text>
-          </Text>
-        </Box>
-        {!hideDone && (
-          <>
-            <Sep />
-            <Box width={colWidths[1]} flexShrink={0}>
-              <Text>
-                <Text color={C.success}>{"DONE \u2611"}</Text>
-                <Text color={C.dim}>{" ".repeat(Math.max(1, colWidths[1] - 7 - String(totalDone).length))}{totalDone}</Text>
-              </Text>
-            </Box>
-          </>
-        )}
-      </Box>
-
       <RoadmapSwimLane
         projects={projects}
         hideDone={hideDone}
         colWidths={colWidths}
         labelW={labelW}
         hiddenProjects={hiddenProjects}
+        titleSuffix={titleSuffix}
+        totalTodo={totalTodo}
+        totalDone={totalDone}
       />
     </Box>
   );
