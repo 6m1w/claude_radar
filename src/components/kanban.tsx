@@ -149,11 +149,13 @@ function RoadmapSwimLane({
   hideDone,
   colWidths,
   labelW,
+  hiddenProjects,
 }: {
   projects: ViewProject[];
   hideDone: boolean;
   colWidths: number[];
   labelW: number;
+  hiddenProjects?: Set<string>;
 }) {
   // Deduplicate worktrees: keep one entry per repo group, propagate activity from worktrees
   const keptByParent = new Map<string, ViewProject>();
@@ -178,6 +180,10 @@ function RoadmapSwimLane({
     return b.lastActivity.getTime() - a.lastActivity.getTime();
   });
 
+  // Count projects with no roadmap data for the summary
+  const allParentKeys = new Set(projects.map(p => p.worktreeOf ?? p.projectPath));
+  const noRoadmapCount = allParentKeys.size - keptByParent.size;
+
   if (withRoadmap.length === 0) {
     return <Text color={C.dim}>No roadmap data — add [ ] checkboxes to .md files</Text>;
   }
@@ -185,6 +191,7 @@ function RoadmapSwimLane({
   return (
     <>
       {withRoadmap.map((project) => {
+        const isHidden = hiddenProjects?.has(project.projectPath);
         // Use primary roadmap file (most items)
         const primary = project.roadmap.reduce((best, r) => r.totalItems > best.totalItems ? r : best);
         // Section-level summaries: TODO = incomplete sections, DONE = complete sections
@@ -215,7 +222,7 @@ function RoadmapSwimLane({
               let leftColor = C.text;
               if (ri === 0) {
                 leftText = project.name;
-                leftColor = project.isActive ? C.warning : C.text;
+                leftColor = isHidden ? C.dim : project.isActive ? C.warning : C.text;
               } else if (ri === 1) {
                 leftText = `${truncateToWidth(primary.source, labelW - 6)} ${primary.totalDone}/${primary.totalItems}`;
                 leftColor = C.subtext;
@@ -264,6 +271,13 @@ function RoadmapSwimLane({
           </Box>
         );
       })}
+
+      {/* No-roadmap summary */}
+      {noRoadmapCount > 0 && (
+        <Text color={C.dim}>
+          {"─".repeat(labelW)}── {noRoadmapCount} project{noRoadmapCount !== 1 ? "s" : ""} · no roadmap ──
+        </Text>
+      )}
     </>
   );
 }
@@ -310,11 +324,13 @@ function ByAgentLayout({
   hideDone,
   cursorIdx = 0,
   viewportHeight,
+  hiddenProjects,
 }: {
   projects: ViewProject[];
   hideDone: boolean;
   cursorIdx?: number;
   viewportHeight?: number;
+  hiddenProjects?: Set<string>;
 }) {
   if (projects.length === 0) {
     return <Text color={C.dim}>No active agents</Text>;
@@ -335,6 +351,7 @@ function ByAgentLayout({
 
   // Group all tasks: agent → project → tasks
   const agentProjectMap = new Map<string, Map<string, ProjectGroup>>();
+  const projectsInGroups = new Set<string>();
   for (const project of projects) {
     // Skip worktree projects with no tasks AND no active sessions
     if (project.worktreeOf && project.tasks.length === 0 && project.activeSessions === 0 && project.hookSessionCount === 0) continue;
@@ -361,18 +378,41 @@ function ByAgentLayout({
         if (task.gone) { pg.goneCount++; } else {
           pg.tasks.push({ task, col });
         }
+        projectsInGroups.add(project.projectPath);
       }
+    }
+  }
+
+  // Add active projects that have no tasks (e.g. agent doing reads/plans without TaskCreate).
+  // Use bestSessionName as the agent label, fall back to "active" group.
+  for (const project of projects) {
+    if (projectsInGroups.has(project.projectPath)) continue;
+    if (project.activeSessions === 0 && project.hookSessionCount === 0) continue;
+    const agentName = project.bestSessionName ?? "active";
+    if (!agentProjectMap.has(agentName)) agentProjectMap.set(agentName, new Map());
+    const pMap = agentProjectMap.get(agentName)!;
+    if (!pMap.has(project.projectPath)) {
+      pMap.set(project.projectPath, { project, tasks: [], goneCount: 0 });
+    }
+    // Mark this agent as running in the state map
+    if (!agentStateMap.has(agentName)) {
+      agentStateMap.set(agentName, "running");
     }
   }
 
   // Build sorted agent groups
   const groups: AgentGroup[] = [];
   for (const [name, pMap] of agentProjectMap) {
-    const projectGroups = Array.from(pMap.values()).filter((pg) => pg.tasks.length > 0 || pg.goneCount > 0);
-    const taskCount = projectGroups.reduce((s, pg) => s + pg.tasks.length, 0);
-    if (taskCount === 0 && projectGroups.every((pg) => pg.goneCount === 0)) continue;
+    const projectGroups = Array.from(pMap.values());
+    const withContent = projectGroups.filter((pg) => pg.tasks.length > 0 || pg.goneCount > 0);
+    const tasklessActive = projectGroups.filter((pg) =>
+      pg.tasks.length === 0 && pg.goneCount === 0 &&
+      (pg.project.activeSessions > 0 || pg.project.hookSessionCount > 0));
+    const visibleGroups = [...withContent, ...tasklessActive];
+    if (visibleGroups.length === 0) continue;
+    const taskCount = visibleGroups.reduce((s, pg) => s + pg.tasks.length, 0);
     const processState = name === "unassigned" ? undefined : agentStateMap.get(name);
-    groups.push({ name, processState, projectGroups, taskCount });
+    groups.push({ name, processState, projectGroups: visibleGroups, taskCount });
   }
 
   // Sort: running → idle → unassigned/dead
@@ -396,6 +436,8 @@ function ByAgentLayout({
     let h = 1; // agent header line
     for (const pg of group.projectGroups) {
       h += 1; // project sub-header
+      const isTaskless = pg.tasks.length === 0 && pg.goneCount === 0;
+      if (isTaskless) { h += 1; continue; } // "N active sessions · no tasks"
       const visibleCount = Math.min(pg.tasks.length, MAX_TASKS);
       h += visibleCount;
       if (pg.tasks.length > MAX_TASKS) h += 1; // overflow
@@ -464,13 +506,22 @@ function ByAgentLayout({
             {group.projectGroups.map((pg) => {
               const visibleTasks = pg.tasks.slice(0, MAX_TASKS);
               const overflow = Math.max(0, pg.tasks.length - MAX_TASKS);
+              const isTaskless = pg.tasks.length === 0 && pg.goneCount === 0;
+              const isHidden = hiddenProjects?.has(pg.project.projectPath);
 
               return (
                 <Box key={pg.project.projectPath} flexDirection="column">
                   {/* Project sub-header */}
                   <Text wrap="truncate">
-                    <Text color={C.accent}>{"  "}▸ {pg.project.name}</Text>
+                    <Text color={isHidden ? C.dim : C.accent}>{"  "}▸ {pg.project.name}</Text>
                   </Text>
+
+                  {/* Taskless active project indicator */}
+                  {isTaskless && (
+                    <Text wrap="truncate" color={C.dim}>
+                      {"    "}{pg.project.activeSessions} active session{pg.project.activeSessions !== 1 ? "s" : ""} · no tasks
+                    </Text>
+                  )}
 
                   {/* Tasks indented under project */}
                   {visibleTasks.map(({ task, col }, ti) => (
@@ -492,6 +543,21 @@ function ByAgentLayout({
       })}
 
       {belowCount > 0 && <Text color={C.dim}>  ▼ {belowCount} below</Text>}
+
+      {/* Empty-state summary: projects with no tasks */}
+      {(() => {
+        const consumedPaths = new Set<string>();
+        for (const g of groups) {
+          for (const pg of g.projectGroups) consumedPaths.add(pg.project.projectPath);
+        }
+        const emptyCount = projects.length - consumedPaths.size;
+        if (emptyCount <= 0) return null;
+        return (
+          <Text color={C.dim}>
+            {"  "}── {emptyCount} project{emptyCount !== 1 ? "s" : ""} · no tasks ──
+          </Text>
+        );
+      })()}
     </Box>
   );
 }
@@ -504,12 +570,14 @@ export function KanbanView({
   layout,
   hideDone,
   cursorIdx = 0,
+  hiddenProjects,
 }: {
   projects: ViewProject[];
   selectedCount: number;
   layout: "swimlane" | "by_agent";
   hideDone: boolean;
   cursorIdx?: number;
+  hiddenProjects?: Set<string>;
 }) {
   const stdout = useStdout();
   const cols = stdout.stdout?.columns ?? 120;
@@ -532,7 +600,7 @@ export function KanbanView({
         <Text color={C.primary} bold>
           {`${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
         </Text>
-        <ByAgentLayout projects={projects} hideDone={hideDone} cursorIdx={cursorIdx} viewportHeight={viewportHeight} />
+        <ByAgentLayout projects={projects} hideDone={hideDone} cursorIdx={cursorIdx} viewportHeight={viewportHeight} hiddenProjects={hiddenProjects} />
       </Box>
     );
   }
@@ -590,6 +658,7 @@ export function KanbanView({
         hideDone={hideDone}
         colWidths={colWidths}
         labelW={labelW}
+        hiddenProjects={hiddenProjects}
       />
     </Box>
   );

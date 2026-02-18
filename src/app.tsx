@@ -15,6 +15,7 @@ import type { MergedProjectData, TaskItem, TodoItem, SessionHistoryEntry, AgentI
 import { formatDwell, formatRelativeTime, truncateToWidth, padEndToWidth, padStartToWidth } from "./utils.js";
 import { KanbanView } from "./components/kanban.js";
 import { RoadmapPanel } from "./components/roadmap-panel.js";
+import { getHiddenProjects, toggleHiddenProject } from "./config.js";
 
 // ─── Adapter: MergedProjectData → ViewProject ───────────────
 function toViewProject(p: MergedProjectData): ViewProject {
@@ -143,6 +144,10 @@ export function App() {
   const [kanbanHideDone, setKanbanHideDone] = useState(true);
   const [kanbanCursorIdx, setKanbanCursorIdx] = useState(0);
 
+  // Project hiding: per-project hide/show with persistence
+  const [hiddenProjects, setHiddenProjects] = useState(() => getHiddenProjects());
+  const [showAll, setShowAll] = useState(false);
+
   // Derived focus boolean for component compatibility
   const bottomFocused = focusedPanel === "bottom";
 
@@ -196,7 +201,13 @@ export function App() {
     return groupEntries.flatMap(([, group]) => group);
   }, [viewProjects]);
 
-  const current = sorted[projectIdx];
+  // Unified visible set: all views share the same filtered project list
+  const visibleSorted = useMemo(() => {
+    if (showAll) return sorted;
+    return sorted.filter(p => !hiddenProjects.has(p.projectPath));
+  }, [sorted, hiddenProjects, showAll]);
+
+  const current = visibleSorted[projectIdx];
 
   // Layout calculation
   // Ink flex handles borders internally — only count truly fixed-height elements
@@ -222,12 +233,12 @@ export function App() {
   const visibleProjects = Math.max(3, projectsContentArea - 2);
 
   // Viewport scrolling
-  const safeProjectIdx = Math.min(projectIdx, Math.max(0, sorted.length - 1));
+  const safeProjectIdx = Math.min(projectIdx, Math.max(0, visibleSorted.length - 1));
   const ensureVisible = (idx: number) => {
     let offset = scrollOffset;
     if (idx < offset) offset = idx;
     if (idx >= offset + visibleProjects) offset = idx - visibleProjects + 1;
-    return Math.max(0, Math.min(offset, sorted.length - visibleProjects));
+    return Math.max(0, Math.min(offset, visibleSorted.length - visibleProjects));
   };
 
   // Helper: switch bottom tab with scroll reset
@@ -246,6 +257,9 @@ export function App() {
     if (isPasting) return;
 
     if (input === "q") exit();
+
+    // a → toggle show-all (reveals hidden projects, dimmed)
+    if (input === "a") { setShowAll((v) => !v); return; }
 
     // Tab → cycle views: dashboard → agent → swimlane → dashboard
     if (key.tab) {
@@ -371,7 +385,7 @@ export function App() {
     }
 
     // ─── Projects panel (outer focus) ────────────
-    if ((input === "j" || key.downArrow) && projectIdx < sorted.length - 1) {
+    if ((input === "j" || key.downArrow) && projectIdx < visibleSorted.length - 1) {
       const next = projectIdx + 1;
       setProjectIdx(next);
       setScrollOffset(ensureVisible(next));
@@ -405,6 +419,22 @@ export function App() {
       });
     }
 
+    // - → toggle hide on current project (Dashboard outer focus)
+    if (input === "-" && current) {
+      const nowHidden = toggleHiddenProject(current.projectPath);
+      const next = getHiddenProjects();
+      setHiddenProjects(next);
+      // If project disappeared from visible list, adjust cursor
+      if (nowHidden && !showAll) {
+        const newLen = visibleSorted.length - 1; // one fewer after hide
+        if (projectIdx >= newLen && newLen > 0) {
+          setProjectIdx(newLen - 1);
+          setScrollOffset(ensureVisible(newLen - 1));
+        }
+      }
+      return;
+    }
+
     // g/s → switch bottom tab + focus bottom
     if (input === "g") { switchBottomTab("git"); setFocusedPanel("bottom"); }
     if (input === "s") { switchBottomTab("sessions"); setFocusedPanel("bottom"); }
@@ -415,7 +445,7 @@ export function App() {
     }
   });
 
-  // Aggregate stats (cached until sorted changes)
+  // Aggregate stats (cached until visibleSorted changes)
   const { totalProjects, totalTasks, totalDone, totalActive, rowAAlerts } = useMemo(() => {
     const oneMinAgo = Date.now() - 60 * 1000;
     // Collect all recent alerts across projects, tagged with project name
@@ -433,7 +463,7 @@ export function App() {
     };
     type RowAAlert = { icon: string; color: string; label: string; project: string; priority: number };
     const alerts: RowAAlert[] = [];
-    for (const p of sorted) {
+    for (const p of visibleSorted) {
       for (const a of p.activityAlerts) {
         if (new Date(a.ts).getTime() <= oneMinAgo) continue;
         if (!alertPriority[a.type]) continue;
@@ -452,13 +482,13 @@ export function App() {
     const topPriority = alerts.length > 0 ? alerts[0].priority : 0;
     const topAlerts = alerts.filter((a) => a.priority === topPriority);
     return {
-      totalProjects: sorted.length,
-      totalTasks: sorted.reduce((s, p) => s + p.tasks.length, 0),
-      totalDone: sorted.reduce((s, p) => s + taskStats(p).done, 0),
-      totalActive: sorted.filter((p) => p.isActive || p.hookSessionCount > 0).length,
+      totalProjects: visibleSorted.length,
+      totalTasks: visibleSorted.reduce((s, p) => s + p.tasks.length, 0),
+      totalDone: visibleSorted.reduce((s, p) => s + taskStats(p).done, 0),
+      totalActive: visibleSorted.filter((p) => p.isActive || p.hookSessionCount > 0).length,
       rowAAlerts: topAlerts,
     };
-  }, [sorted]);
+  }, [visibleSorted]);
   const alertTick = Math.floor(Date.now() / 3000); // marquee rotation for same-priority alerts
 
   const viewLabel = view === "agent" ? "TASKS"
@@ -469,15 +499,10 @@ export function App() {
     : "DASHBOARD";
 
   if (view === "agent" || view === "swimlane") {
-    // Show projects with tasks OR active agent activity (sessions, hook events, agent processes)
-    const hasActivity = (p: ViewProject) =>
-      p.tasks.length > 0 ||
-      p.activeSessions > 0 ||
-      p.hookSessionCount > 0 ||
-      p.agentDetails.length > 0;
+    // Unified project set: same visibleSorted used across all views
     const kanbanProjects = selectedNames.size > 0
-      ? sorted.filter((p) => selectedNames.has(p.projectPath) && hasActivity(p))
-      : sorted.filter(hasActivity);
+      ? visibleSorted.filter((p) => selectedNames.has(p.projectPath))
+      : visibleSorted;
     return (
       <Box flexDirection="column" height={termRows} overflow="hidden">
         {/* Row A: status + alert */}
@@ -499,8 +524,9 @@ export function App() {
           layout={view === "agent" ? "by_agent" : "swimlane"}
           hideDone={kanbanHideDone}
           cursorIdx={kanbanCursorIdx}
+          hiddenProjects={hiddenProjects}
         />
-        <StatusBar view={view} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} focusedPanel="projects" hideDone={kanbanHideDone} />
+        <StatusBar view={view} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} focusedPanel="projects" hideDone={kanbanHideDone} showAll={showAll} />
       </Box>
     );
   }
@@ -508,12 +534,12 @@ export function App() {
   // Dynamic visible count — fill all available content lines, no wasted space
   const hasAboveIndicator = scrollOffset > 0;
   const maxRender = projectsContentArea - (hasAboveIndicator ? 1 : 0);
-  const itemsRemaining = sorted.length - scrollOffset;
+  const itemsRemaining = visibleSorted.length - scrollOffset;
   const needsBelowIndicator = itemsRemaining > maxRender;
   const renderCount = needsBelowIndicator ? maxRender - 1 : Math.min(maxRender, itemsRemaining);
-  const visSlice = sorted.slice(scrollOffset, scrollOffset + renderCount);
+  const visSlice = visibleSorted.slice(scrollOffset, scrollOffset + renderCount);
   const aboveCount = scrollOffset;
-  const belowCount = Math.max(0, sorted.length - scrollOffset - renderCount);
+  const belowCount = Math.max(0, visibleSorted.length - scrollOffset - renderCount);
 
 
   return (
@@ -536,17 +562,18 @@ export function App() {
       <Box height={rowBHeight} overflow="hidden">
         {/* Left column: Project list + Roadmap panel */}
         <Box flexDirection="column" width={34} flexShrink={0} height={rowBHeight} overflow="hidden">
-          <Panel title={`PROJECTS (${sorted.length})`} hotkey="1" focused={focusedPanel === "projects"} height={showRoadmap ? rowBHeight - roadmapHeight : rowBHeight}>
+          <Panel title={`PROJECTS${showAll ? ` (${sorted.length}) ALL` : visibleSorted.length < sorted.length ? ` (${visibleSorted.length}/${sorted.length})` : ` (${visibleSorted.length})`}`} hotkey="1" focused={focusedPanel === "projects"} height={showRoadmap ? rowBHeight - roadmapHeight : rowBHeight}>
             {aboveCount > 0 && (
               <Text color={C.dim}>  ▲ {aboveCount} more</Text>
             )}
             {visSlice.map((p, vi) => {
               const realIdx = scrollOffset + vi;
               const isCursor = realIdx === safeProjectIdx;
+              const isHidden = hiddenProjects.has(p.projectPath);
               const stats = taskStats(p);
               const isActive = p.isActive;
-              const icon = isActive ? I.working : stats.total > 0 && stats.done === stats.total ? I.done : I.idle;
-              const iconColor = isActive ? C.warning : stats.done === stats.total && stats.total > 0 ? C.success : C.dim;
+              const icon = isHidden ? "⊘" : isActive ? I.working : stats.total > 0 && stats.done === stats.total ? I.done : I.idle;
+              const iconColor = isHidden ? C.dim : isActive ? C.warning : stats.done === stats.total && stats.total > 0 ? C.success : C.dim;
               const isSelected = selectedNames.has(p.projectPath);
               const isWorktree = !!p.worktreeOf;
               // Check if this is the last worktree in a consecutive group
@@ -556,6 +583,8 @@ export function App() {
               // Truncate name to fit within panel (inner width ~30)
               const maxName = p.branch !== "main" ? 14 : 20;
               const displayName = truncateToWidth(p.name, maxName);
+              // Dim hidden projects when showing all
+              const nameColor = isHidden ? C.dim : isCursor ? C.text : C.subtext;
               return (
                 <Text key={p.projectPath} wrap="truncate">
                   <Text color={isCursor ? C.primary : C.dim}>
@@ -569,13 +598,13 @@ export function App() {
                     </Text>
                   )}
                   <Text color={iconColor}>{icon} </Text>
-                  <Text color={isCursor ? C.text : C.subtext} bold={isCursor}>
+                  <Text color={nameColor} bold={!isHidden && isCursor}>
                     {displayName}
                   </Text>
-                  {p.branch !== "main" && (
+                  {!isHidden && p.branch !== "main" && (
                     <Text color={C.accent}> ⎇{truncateToWidth(p.branch, 12)}</Text>
                   )}
-                  {p.agentDetails.length > 0 && (
+                  {!isHidden && p.agentDetails.length > 0 && (
                     <Text color={C.dim}>{" "}
                       {p.agentDetails.map((a) =>
                         a.processState === "running" ? `●` : a.processState === "idle" ? `○` : `✕`
@@ -619,6 +648,7 @@ export function App() {
         hasActive={totalActive > 0}
         allDone={totalTasks > 0 && totalDone === totalTasks}
         focusedPanel={focusedPanel}
+        showAll={showAll}
       />
     </Box>
   );
@@ -1007,8 +1037,8 @@ function sparkline(values: number[], max = 100): string {
     .join("");
 }
 
-function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: {
-  view: View; label: string; hasActive: boolean; allDone: boolean; focusedPanel: FocusedPanel; hideDone?: boolean;
+function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone, showAll }: {
+  view: View; label: string; hasActive: boolean; allDone: boolean; focusedPanel: FocusedPanel; hideDone?: boolean; showAll?: boolean;
 }) {
   const metrics = useMetrics();
   const tick = metrics.tick;
@@ -1060,6 +1090,7 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
           <>
             <Text color={C.success}>Tab</Text><Text color={C.subtext}> →swimlane  </Text>
             <Text color={C.success}>h</Text><Text color={C.subtext}> {hideDone ? "show done" : "hide done"}  </Text>
+            <Text color={C.success}>a</Text><Text color={C.subtext}> {showAll ? "active only" : "show all"}  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> dashboard  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
@@ -1067,6 +1098,7 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
           <>
             <Text color={C.success}>Tab</Text><Text color={C.subtext}> →dashboard  </Text>
             <Text color={C.success}>h</Text><Text color={C.subtext}> {hideDone ? "show done" : "hide done"}  </Text>
+            <Text color={C.success}>a</Text><Text color={C.subtext}> {showAll ? "active only" : "show all"}  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> dashboard  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
@@ -1097,6 +1129,8 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone }: 
             <Text color={C.success}>↑↓</Text><Text color={C.subtext}> nav  </Text>
             <Text color={C.success}>Enter</Text><Text color={C.subtext}> focus  </Text>
             <Text color={C.success}>Space</Text><Text color={C.subtext}> select  </Text>
+            <Text color={C.success}>-</Text><Text color={C.subtext}> hide  </Text>
+            <Text color={C.success}>a</Text><Text color={C.subtext}> {showAll ? "active only" : "show all"}  </Text>
             <Text color={C.success}>Tab</Text><Text color={C.subtext}> →agent  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
