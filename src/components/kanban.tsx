@@ -309,14 +309,14 @@ function AgentTaskCard({ task, column }: {
   );
 }
 
-// Internal types for agent-first grouping
+// Internal types for project-first grouping
 type TaggedTask = { task: DisplayTask; col: KanbanColumn };
-type ProjectGroup = { project: ViewProject; tasks: TaggedTask[]; goneCount: number };
-type AgentGroup = {
-  name: string;
-  processState: string | undefined;
-  projectGroups: ProjectGroup[];
-  taskCount: number;
+type ProjectBlock = {
+  project: ViewProject;
+  tasks: TaggedTask[];
+  goneCount: number;
+  sessionLabel: string | undefined;
+  isActive: boolean;
 };
 
 function ByAgentLayout({
@@ -333,30 +333,21 @@ function ByAgentLayout({
   hiddenProjects?: Set<string>;
 }) {
   if (projects.length === 0) {
-    return <Text color={C.dim}>No active agents</Text>;
+    return <Text color={C.dim}>No projects</Text>;
   }
 
   const MAX_TASKS = 5;
 
-  // Collect agent process states across all projects (running wins over idle)
-  const agentStateMap = new Map<string, string>();
-  for (const p of projects) {
-    for (const a of p.agentDetails) {
-      const existing = agentStateMap.get(a.name);
-      if (!existing || a.processState === "running") {
-        agentStateMap.set(a.name, a.processState);
-      }
-    }
-  }
-
-  // Group all tasks: agent → project → tasks
-  const agentProjectMap = new Map<string, Map<string, ProjectGroup>>();
-  const projectsInGroups = new Set<string>();
+  // Build flat project blocks (project-first grouping)
+  const pBlocks: ProjectBlock[] = [];
+  const includedPaths = new Set<string>();
   for (const project of projects) {
     // Skip worktree projects with no tasks AND no active sessions
     if (project.worktreeOf && project.tasks.length === 0 && project.activeSessions === 0 && project.hookSessionCount === 0) continue;
 
     const buckets = buildBuckets(project);
+    const tasks: TaggedTask[] = [];
+    let goneCount = 0;
     const colEntries: [KanbanColumn, DisplayTask[]][] = [
       ["needs_input", buckets.needs_input],
       ["doing", buckets.doing],
@@ -365,85 +356,47 @@ function ByAgentLayout({
     if (!hideDone && buckets.done.length > 0) {
       colEntries.push(["done", buckets.done.slice(0, 5)]);
     }
-
-    for (const [col, tasks] of colEntries) {
-      for (const task of tasks) {
-        const owner = task.owner ?? "unassigned";
-        if (!agentProjectMap.has(owner)) agentProjectMap.set(owner, new Map());
-        const pMap = agentProjectMap.get(owner)!;
-        if (!pMap.has(project.projectPath)) {
-          pMap.set(project.projectPath, { project, tasks: [], goneCount: 0 });
-        }
-        const pg = pMap.get(project.projectPath)!;
-        if (task.gone) { pg.goneCount++; } else {
-          pg.tasks.push({ task, col });
-        }
-        projectsInGroups.add(project.projectPath);
+    for (const [col, colTasks] of colEntries) {
+      for (const task of colTasks) {
+        if (task.gone) { goneCount++; } else { tasks.push({ task, col }); }
       }
     }
-  }
 
-  // Add active projects that have no tasks (e.g. agent doing reads/plans without TaskCreate).
-  // Use bestSessionName as the agent label, fall back to "active" group.
-  for (const project of projects) {
-    if (projectsInGroups.has(project.projectPath)) continue;
-    if (project.activeSessions === 0 && project.hookSessionCount === 0) continue;
-    const agentName = project.bestSessionName ?? "active";
-    if (!agentProjectMap.has(agentName)) agentProjectMap.set(agentName, new Map());
-    const pMap = agentProjectMap.get(agentName)!;
-    if (!pMap.has(project.projectPath)) {
-      pMap.set(project.projectPath, { project, tasks: [], goneCount: 0 });
-    }
-    // Mark this agent as running in the state map
-    if (!agentStateMap.has(agentName)) {
-      agentStateMap.set(agentName, "running");
+    const isActive = project.isActive || project.activeSessions > 0 || project.hookSessionCount > 0;
+    // Include if has tasks, archived, or active sessions
+    if (tasks.length > 0 || goneCount > 0 || isActive) {
+      pBlocks.push({ project, tasks, goneCount, sessionLabel: project.bestSessionName, isActive });
+      includedPaths.add(project.projectPath);
     }
   }
 
-  // Build sorted agent groups
-  const groups: AgentGroup[] = [];
-  for (const [name, pMap] of agentProjectMap) {
-    const projectGroups = Array.from(pMap.values());
-    const withContent = projectGroups.filter((pg) => pg.tasks.length > 0 || pg.goneCount > 0);
-    const tasklessActive = projectGroups.filter((pg) =>
-      pg.tasks.length === 0 && pg.goneCount === 0 &&
-      (pg.project.activeSessions > 0 || pg.project.hookSessionCount > 0));
-    const visibleGroups = [...withContent, ...tasklessActive];
-    if (visibleGroups.length === 0) continue;
-    const taskCount = visibleGroups.reduce((s, pg) => s + pg.tasks.length, 0);
-    const processState = name === "unassigned" ? undefined : agentStateMap.get(name);
-    groups.push({ name, processState, projectGroups: visibleGroups, taskCount });
+  // Sort: attention first, then active, then by task count
+  pBlocks.sort((a, b) => {
+    const aAttn = a.tasks.some(t => t.col === "needs_input") ? 0 : 1;
+    const bAttn = b.tasks.some(t => t.col === "needs_input") ? 0 : 1;
+    if (aAttn !== bAttn) return aAttn - bAttn;
+    if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+    return b.tasks.length - a.tasks.length;
+  });
+
+  if (pBlocks.length === 0 && projects.length === 0) {
+    return <Text color={C.dim}>No projects</Text>;
   }
 
-  // Sort: running → idle → unassigned/dead
-  const statePriority = (g: AgentGroup): number => {
-    if (g.processState === "running") return 0;
-    if (g.processState === "idle") return 1;
-    if (g.name === "unassigned") return 3;
-    return 2; // dead
-  };
-  groups.sort((a, b) => statePriority(a) - statePriority(b));
+  const safeCursor = Math.max(0, Math.min(cursorIdx, Math.max(0, pBlocks.length - 1)));
 
-  if (groups.length === 0) {
-    return <Text color={C.dim}>No active agents</Text>;
-  }
-
-  const safeCursor = Math.max(0, Math.min(cursorIdx, groups.length - 1));
-
-  // Pre-compute line height per agent group for scroll math
-  type GroupBlock = { group: AgentGroup; height: number };
-  const blocks: GroupBlock[] = groups.map((group) => {
-    let h = 1; // agent header line
-    for (const pg of group.projectGroups) {
-      h += 1; // project sub-header
-      const isTaskless = pg.tasks.length === 0 && pg.goneCount === 0;
-      if (isTaskless) { h += 1; continue; } // "N active sessions · no tasks"
-      const visibleCount = Math.min(pg.tasks.length, MAX_TASKS);
-      h += visibleCount;
-      if (pg.tasks.length > MAX_TASKS) h += 1; // overflow
-      if (pg.goneCount > 0) h += 1; // archived
+  // Pre-compute line height per project block for scroll math
+  type ScrollBlock = { pb: ProjectBlock; height: number };
+  const blocks: ScrollBlock[] = pBlocks.map((pb) => {
+    let h = 1; // project header line
+    const isTaskless = pb.tasks.length === 0 && pb.goneCount === 0;
+    if (isTaskless) { h += 1; } // "N active sessions · no tasks"
+    else {
+      h += Math.min(pb.tasks.length, MAX_TASKS);
+      if (pb.tasks.length > MAX_TASKS) h += 1; // overflow
+      if (pb.goneCount > 0) h += 1; // archived
     }
-    return { group, height: h };
+    return { pb, height: h };
   });
 
   // Compute visible range: ensure safeCursor is in viewport
@@ -472,92 +425,75 @@ function ByAgentLayout({
   const aboveCount = scrollStart;
   const belowCount = blocks.length - visibleEnd;
 
+  // Count projects not included in blocks (no tasks, no sessions)
+  const emptyCount = projects.filter(p =>
+    !includedPaths.has(p.projectPath) &&
+    !(p.worktreeOf && p.tasks.length === 0 && p.activeSessions === 0 && p.hookSessionCount === 0)
+  ).length;
+
   return (
     <Box flexDirection="column">
       {aboveCount > 0 && <Text color={C.dim}>  ▲ {aboveCount} above</Text>}
 
-      {blocks.slice(scrollStart, visibleEnd).map(({ group }, vi) => {
+      {blocks.slice(scrollStart, visibleEnd).map(({ pb }, vi) => {
         const gi = scrollStart + vi;
         const isCursor = gi === safeCursor;
+        const isHidden = hiddenProjects?.has(pb.project.projectPath);
+        const isTaskless = pb.tasks.length === 0 && pb.goneCount === 0;
 
-        // Agent icon + color: ● running (yellow), ○ idle (dim), ✕ dead/unassigned (red)
-        const icon = group.processState === "running" ? "\u25CF"
-          : group.processState === "idle" ? "\u25CB"
-          : "\u2715";
-        const iconColor = group.processState === "running" ? C.warning
-          : group.processState === "idle" ? C.dim
-          : C.error;
+        // Project icon + color based on activity state
+        const icon = pb.isActive ? "\u25CF" : "\u25CB"; // ● active, ○ idle
+        const iconColor = isHidden ? C.dim : pb.isActive ? C.warning : C.dim;
+
+        const visibleTasks = pb.tasks.slice(0, MAX_TASKS);
+        const overflow = Math.max(0, pb.tasks.length - MAX_TASKS);
 
         return (
-          <Box key={group.name} flexDirection="column">
+          <Box key={pb.project.projectPath} flexDirection="column">
             {vi > 0 && <Box height={1} />}
 
-            {/* Agent group header: {icon} {name}  ...  {count} */}
+            {/* Project header: {icon} {name}  {sessionLabel}  ...  {count} */}
             <Box>
               <Text wrap="truncate">
                 <Text color={isCursor ? C.primary : iconColor}>{isCursor ? "\u25b8" : icon} </Text>
-                <Text color={isCursor ? C.primary : iconColor} bold={isCursor}>{group.name}</Text>
+                <Text color={isHidden ? C.dim : isCursor ? C.primary : C.text} bold={isCursor}>{pb.project.name}</Text>
+                {pb.sessionLabel && <Text color={C.dim}>{"  "}{pb.sessionLabel}</Text>}
               </Text>
               <Box flexGrow={1} />
-              <Text color={C.dim}>{group.taskCount}</Text>
+              <Text color={C.dim}>{pb.tasks.length}</Text>
             </Box>
 
-            {/* Project sub-groups */}
-            {group.projectGroups.map((pg) => {
-              const visibleTasks = pg.tasks.slice(0, MAX_TASKS);
-              const overflow = Math.max(0, pg.tasks.length - MAX_TASKS);
-              const isTaskless = pg.tasks.length === 0 && pg.goneCount === 0;
-              const isHidden = hiddenProjects?.has(pg.project.projectPath);
+            {/* Taskless active project indicator */}
+            {isTaskless && pb.isActive && (
+              <Text wrap="truncate" color={C.dim}>
+                {"  "}{pb.project.activeSessions} active session{pb.project.activeSessions !== 1 ? "s" : ""} · no tasks
+              </Text>
+            )}
 
-              return (
-                <Box key={pg.project.projectPath} flexDirection="column">
-                  {/* Project sub-header */}
-                  <Text wrap="truncate">
-                    <Text color={isHidden ? C.dim : C.accent}>{"  "}▸ {pg.project.name}</Text>
-                  </Text>
-
-                  {/* Taskless active project indicator */}
-                  {isTaskless && (
-                    <Text wrap="truncate" color={C.dim}>
-                      {"    "}{pg.project.activeSessions} active session{pg.project.activeSessions !== 1 ? "s" : ""} · no tasks
-                    </Text>
-                  )}
-
-                  {/* Tasks indented under project */}
-                  {visibleTasks.map(({ task, col }, ti) => (
-                    <Text key={`${task.id}-${ti}`} wrap="truncate">
-                      {"    "}<AgentTaskCard task={task} column={col} />
-                    </Text>
-                  ))}
-                  {overflow > 0 && (
-                    <Text wrap="truncate" color={C.dim}>{"    "}+{overflow} more</Text>
-                  )}
-                  {pg.goneCount > 0 && (
-                    <Text wrap="truncate" color={C.dim}>{"    "}▸ {pg.goneCount} archived</Text>
-                  )}
-                </Box>
-              );
-            })}
+            {/* Tasks indented under project */}
+            {visibleTasks.map(({ task, col }, ti) => (
+              <Text key={`${task.id}-${ti}`} wrap="truncate">
+                {"  "}<AgentTaskCard task={task} column={col} />
+              </Text>
+            ))}
+            {overflow > 0 && (
+              <Text wrap="truncate" color={C.dim}>{"  "}+{overflow} more</Text>
+            )}
+            {pb.goneCount > 0 && (
+              <Text wrap="truncate" color={C.dim}>{"  "}▸ {pb.goneCount} archived</Text>
+            )}
           </Box>
         );
       })}
 
       {belowCount > 0 && <Text color={C.dim}>  ▼ {belowCount} below</Text>}
 
-      {/* Empty-state summary: projects with no tasks */}
-      {(() => {
-        const consumedPaths = new Set<string>();
-        for (const g of groups) {
-          for (const pg of g.projectGroups) consumedPaths.add(pg.project.projectPath);
-        }
-        const emptyCount = projects.length - consumedPaths.size;
-        if (emptyCount <= 0) return null;
-        return (
-          <Text color={C.dim}>
-            {"  "}── {emptyCount} project{emptyCount !== 1 ? "s" : ""} · no tasks ──
-          </Text>
-        );
-      })()}
+      {/* Empty-state summary: projects with no tasks and no sessions */}
+      {emptyCount > 0 && (
+        <Text color={C.dim}>
+          {"  "}── {emptyCount} project{emptyCount !== 1 ? "s" : ""} · no tasks ──
+        </Text>
+      )}
     </Box>
   );
 }
