@@ -186,7 +186,7 @@ function RoadmapSwimLane({
 
   return (
     <>
-      {withRoadmap.map((project, pi) => {
+      {withRoadmap.map((project) => {
         const isHidden = hiddenProjects?.has(project.projectPath);
         // Use primary roadmap file (most items)
         const primary = project.roadmap.reduce((best, r) => r.totalItems > best.totalItems ? r : best);
@@ -198,28 +198,32 @@ function RoadmapSwimLane({
         const doneVis = hideDone ? [] : doneSections.slice(0, MAX_SECTIONS);
         const todoOverflow = Math.max(0, todoSections.length - MAX_SECTIONS);
         const doneOverflow = hideDone ? 0 : Math.max(0, doneSections.length - MAX_SECTIONS);
-        const sectionRows = Math.max(
+        const maxRows = Math.max(1, Math.max(
           todoVis.length + (todoOverflow > 0 ? 1 : 0),
           doneVis.length + (doneOverflow > 0 ? 1 : 0),
-        );
+        ));
 
         return (
           <Box key={project.projectPath} flexDirection="column">
-            {/* Blank line between projects (not before first) */}
-            {pi > 0 && <Box height={1} />}
-
-            {/* Project header: name  file done/total */}
-            <Text wrap="truncate">
-              <Text color={isHidden ? C.dim : project.isActive ? C.warning : C.text} bold>
-                {project.name}
-              </Text>
-              <Text color={C.dim}>
-                {"  "}{truncateToWidth(primary.source, labelW - 6)} {primary.totalDone}/{primary.totalItems}
-              </Text>
+            {/* Horizontal divider */}
+            <Text color={C.dim}>
+              {"─".repeat(labelW)}
+              {"┼" + "─".repeat(colWidths[0] + 1)}
+              {!hideDone && "┼" + "─".repeat(colWidths[1] + 1)}
             </Text>
 
-            {/* Section rows: TODO | DONE */}
-            {sectionRows > 0 && Array.from({ length: sectionRows }, (_, ri) => {
+            {/* Rows: label column + TODO sections + DONE sections */}
+            {Array.from({ length: maxRows }, (_, ri) => {
+              let leftText = "";
+              let leftColor = C.text;
+              if (ri === 0) {
+                leftText = project.name;
+                leftColor = isHidden ? C.dim : project.isActive ? C.warning : C.text;
+              } else if (ri === 1) {
+                leftText = `${truncateToWidth(primary.source, labelW - 6)} ${primary.totalDone}/${primary.totalItems}`;
+                leftColor = C.subtext;
+              }
+
               const todoSec = todoVis[ri];
               const doneSec = doneVis[ri];
               const isTodoOverflow = !todoSec && ri === todoVis.length && todoOverflow > 0;
@@ -227,28 +231,35 @@ function RoadmapSwimLane({
 
               return (
                 <Box key={ri}>
+                  <Box width={labelW} flexShrink={0}>
+                    <Text wrap="truncate" color={leftColor} bold={ri === 0}>{leftText}</Text>
+                  </Box>
+                  <Sep />
                   <Box width={colWidths[0]} flexShrink={0}>
                     {todoSec ? (
                       <Text wrap="truncate">
-                        <Text color={C.subtext}>  ○ </Text>
+                        <Text color={C.subtext}>┃ </Text>
                         <Text color={C.text}>{truncateToWidth(todoSec.title, colWidths[0] - 10)}</Text>
                         <Text color={C.dim}> {todoSec.done}/{todoSec.total}</Text>
                       </Text>
                     ) : isTodoOverflow ? (
-                      <Text wrap="truncate" color={C.dim}>  +{todoOverflow} more</Text>
+                      <Text wrap="truncate" color={C.dim}>┃ +{todoOverflow} more sections</Text>
                     ) : null}
                   </Box>
                   {!hideDone && (
-                    <Box width={colWidths[1]} flexShrink={0}>
-                      {doneSec ? (
-                        <Text wrap="truncate">
-                          <Text color={C.dim}>  ✓ </Text>
-                          <Text color={C.dim}>{truncateToWidth(doneSec.title, colWidths[1] - 10)} {doneSec.done}/{doneSec.total}</Text>
-                        </Text>
-                      ) : isDoneOverflow ? (
-                        <Text wrap="truncate" color={C.dim}>  +{doneOverflow} more</Text>
-                      ) : null}
-                    </Box>
+                    <>
+                      <Sep />
+                      <Box width={colWidths[1]} flexShrink={0}>
+                        {doneSec ? (
+                          <Text wrap="truncate">
+                            <Text color={C.dim}>┃ </Text>
+                            <Text color={C.dim}>{truncateToWidth(doneSec.title, colWidths[1] - 10)} {doneSec.done}/{doneSec.total}</Text>
+                          </Text>
+                        ) : isDoneOverflow ? (
+                          <Text wrap="truncate" color={C.dim}>┃ +{doneOverflow} more sections</Text>
+                        ) : null}
+                      </Box>
+                    </>
                   )}
                 </Box>
               );
@@ -522,9 +533,9 @@ export function KanbanView({
   // ─── Swimlane layout — L1 roadmap data, 2 columns (TODO/DONE) ──
   const numCols = hideDone ? 1 : 2;
 
-  // Full width for section columns (no separate label column)
   const labelW = Math.min(24, Math.max(14, Math.floor(contentW * 0.2)));
-  const perCol = Math.max(12, Math.floor(contentW / numCols));
+  const colAvail = contentW - labelW - numCols * SEP_W;
+  const perCol = Math.max(12, Math.floor(colAvail / numCols));
   const colWidths = Array.from({ length: numCols }, () => perCol);
 
   // Count L1 items across all projects
@@ -542,6 +553,30 @@ export function KanbanView({
       <Text color={C.primary} bold>
         {`${layoutLabel} — ${projects.length} project${projects.length !== 1 ? "s" : ""}${filterLabel}${hideLabel}`}
       </Text>
+      {/* Header row */}
+      <Box>
+        <Box width={labelW} flexShrink={0}>
+          <Text color={C.primary} bold>PROJECTS</Text>
+        </Box>
+        <Sep />
+        <Box width={colWidths[0]} flexShrink={0}>
+          <Text>
+            <Text color={C.accent} bold>{"TODO \u2610"}</Text>
+            <Text color={C.dim}>{" ".repeat(Math.max(1, colWidths[0] - 7 - String(totalTodo).length))}{totalTodo}</Text>
+          </Text>
+        </Box>
+        {!hideDone && (
+          <>
+            <Sep />
+            <Box width={colWidths[1]} flexShrink={0}>
+              <Text>
+                <Text color={C.success}>{"DONE \u2611"}</Text>
+                <Text color={C.dim}>{" ".repeat(Math.max(1, colWidths[1] - 7 - String(totalDone).length))}{totalDone}</Text>
+              </Text>
+            </Box>
+          </>
+        )}
+      </Box>
 
       <RoadmapSwimLane
         projects={projects}
