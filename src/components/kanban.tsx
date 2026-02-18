@@ -370,14 +370,7 @@ function ByAgentLayout({
     }
   }
 
-  // Sort: attention first, then active, then by task count
-  pBlocks.sort((a, b) => {
-    const aAttn = a.tasks.some(t => t.col === "needs_input") ? 0 : 1;
-    const bAttn = b.tasks.some(t => t.col === "needs_input") ? 0 : 1;
-    if (aAttn !== bAttn) return aAttn - bAttn;
-    if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
-    return b.tasks.length - a.tasks.length;
-  });
+  // Preserve Dashboard sort order — projects arrive pre-sorted by tier/activity
 
   if (pBlocks.length === 0 && projects.length === 0) {
     return <Text color={C.dim}>No projects</Text>;
