@@ -186,13 +186,17 @@ function RoadmapSwimLane({
 
   return (
     <>
-      {withRoadmap.map((project) => {
+      {withRoadmap.flatMap((project, pi) => {
         const isHidden = hiddenProjects?.has(project.projectPath);
         // Use primary roadmap file (most items)
         const primary = project.roadmap.reduce((best, r) => r.totalItems > best.totalItems ? r : best);
         // Section-level summaries: TODO = incomplete sections, DONE = complete sections
         const todoSections = primary.sections.filter((s) => s.total > 0 && s.done < s.total);
         const doneSections = primary.sections.filter((s) => s.total > 0 && s.done === s.total);
+
+        // Skip projects with no visible sections (all done when hideDone is on)
+        if (todoSections.length === 0 && (hideDone || doneSections.length === 0)) return [];
+
         const MAX_SECTIONS = 5;
         const todoVis = todoSections.slice(0, MAX_SECTIONS);
         const doneVis = hideDone ? [] : doneSections.slice(0, MAX_SECTIONS);
@@ -203,7 +207,7 @@ function RoadmapSwimLane({
           doneVis.length + (doneOverflow > 0 ? 1 : 0),
         ));
 
-        return (
+        return [(
           <Box key={project.projectPath} flexDirection="column">
             {/* Horizontal divider */}
             <Text color={C.dim}>
@@ -217,10 +221,10 @@ function RoadmapSwimLane({
               let leftText = "";
               let leftColor = C.text;
               if (ri === 0) {
-                leftText = project.name;
+                leftText = truncateToWidth(project.name, labelW);
                 leftColor = isHidden ? C.dim : project.isActive ? C.warning : C.text;
               } else if (ri === 1) {
-                leftText = `${truncateToWidth(primary.source, labelW - 6)} ${primary.totalDone}/${primary.totalItems}`;
+                leftText = truncateToWidth(`${primary.source} ${primary.totalDone}/${primary.totalItems}`, labelW);
                 leftColor = C.subtext;
               }
 
@@ -265,7 +269,7 @@ function RoadmapSwimLane({
               );
             })}
           </Box>
-        );
+        )];
       })}
 
       {/* No-roadmap summary */}
