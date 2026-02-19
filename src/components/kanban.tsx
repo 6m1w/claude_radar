@@ -15,8 +15,8 @@ import { Box, Text, useStdout } from "ink";
 import { C, I } from "../theme.js";
 
 import stringWidth from "string-width";
-import { formatDwell, truncateToWidth } from "../utils.js";
-import type { DisplayTask, ViewProject } from "../types.js";
+import { formatDwell, truncateToWidth, padEndToWidth } from "../utils.js";
+import type { DisplayTask, ViewProject, RoadmapSection } from "../types.js";
 
 // ─── Column classification ──────────────────────────────────
 
@@ -134,14 +134,29 @@ function RichCard({ task, column, width }: {
   );
 }
 
-// ─── Column separator ("│ " in content, "┼─" in divider) ─────
+// ─── Column separator (ASCII "|" to avoid ambiguous-width Unicode) ────
+//
+// Box-drawing characters (│ ┃ ─ ┼) and geometric shapes (● ○) have
+// Unicode East Asian Width = "Ambiguous". CJK terminals may render them
+// as 2 columns while stringWidth() reports 1, causing layout overflow
+// that manifests as garbled text and missing rows in narrow windows.
+// ASCII "|", "-", "+" are always 1 column on every terminal.
 
-// Renders a vertical separator between columns
 function Sep() {
-  return <Text color={C.dim}>│ </Text>;
+  return <Text color={C.dim}>| </Text>;
 }
 
-const SEP_W = 2; // display width of "│ "
+const SEP_W = 2; // display width of "| "
+
+// Pre-compute a section line: "| title done/total" padded to exact width.
+// Single string avoids nested <Text> width measurement issues in Ink.
+function sectionLineStr(sec: RoadmapSection, totalW: number): string {
+  const sep = "| ";
+  const suffix = ` ${sec.done}/${sec.total}`;
+  const titleMaxW = Math.max(1, totalW - stringWidth(sep) - stringWidth(suffix));
+  const title = truncateToWidth(sec.title, titleMaxW);
+  return padEndToWidth(sep + title + suffix, totalW);
+}
 
 // ─── RoadmapSwimLane (L1 data — checkboxes from .md files) ───
 
@@ -216,16 +231,16 @@ function RoadmapSwimLane({
   return (
     <>
       <Text color={C.primary} bold>{`ROADMAP — ${filtered.length} project${filtered.length !== 1 ? "s" : ""}${fileLabel}${titleSuffix}`}</Text>
-      {/* Header row */}
+      {/* Header row — all cells padded to exact width */}
       <Box>
         <Box width={labelW} flexShrink={0}>
-          <Text color={C.primary} bold>PROJECTS</Text>
+          <Text color={C.primary} bold>{padEndToWidth("PROJECTS", labelW)}</Text>
         </Box>
         <Sep />
         <Box width={colWidths[0]} flexShrink={0}>
           <Text>
-            <Text color={C.accent} bold>{"TODO \u2610"}</Text>
-            <Text color={C.dim}>{" ".repeat(Math.max(1, colWidths[0] - 7 - String(totalTodo).length))}{totalTodo}</Text>
+            <Text color={C.accent} bold>{"TODO [ ]"}</Text>
+            <Text color={C.dim}>{padEndToWidth(" ".repeat(Math.max(1, colWidths[0] - 8 - String(totalTodo).length)) + totalTodo, colWidths[0] - 8)}</Text>
           </Text>
         </Box>
         {!hideDone && (
@@ -233,8 +248,8 @@ function RoadmapSwimLane({
             <Sep />
             <Box width={colWidths[1]} flexShrink={0}>
               <Text>
-                <Text color={C.success}>{"DONE \u2611"}</Text>
-                <Text color={C.dim}>{" ".repeat(Math.max(1, colWidths[1] - 7 - String(totalDone).length))}{totalDone}</Text>
+                <Text color={C.success}>{"DONE [x]"}</Text>
+                <Text color={C.dim}>{padEndToWidth(" ".repeat(Math.max(1, colWidths[1] - 8 - String(totalDone).length)) + totalDone, colWidths[1] - 8)}</Text>
               </Text>
             </Box>
           </>
@@ -259,88 +274,72 @@ function RoadmapSwimLane({
         const doneVis = hideDone ? [] : doneSections.slice(0, MAX_SECTIONS);
         const todoOverflow = Math.max(0, todoSections.length - MAX_SECTIONS);
         const doneOverflow = hideDone ? 0 : Math.max(0, doneSections.length - MAX_SECTIONS);
-        const maxRows = Math.max(1, Math.max(
-          todoVis.length + (todoOverflow > 0 ? 1 : 0),
-          doneVis.length + (doneOverflow > 0 ? 1 : 0),
-        ));
+        // Independent column heights — left is always 2 lines,
+        // right columns render their own section count independently
+        const todoLineCount = todoVis.length + (todoOverflow > 0 ? 1 : 0);
+        const doneLineCount = hideDone ? 0 : (doneVis.length + (doneOverflow > 0 ? 1 : 0));
+        const rowH = Math.max(2, todoLineCount, doneLineCount);
+        const todoW = SEP_W + colWidths[0];
+        const doneW = colWidths.length > 1 ? SEP_W + colWidths[1] : 0;
+
+        // Left column data
+        const icon = isCursor ? ">" : project.isActive ? "*" : "o";
+        const nameColor = isCursor ? C.primary : isHidden ? C.subtext : project.isActive ? C.warning : C.text;
+        const basename = primary.source.split("/").pop() ?? primary.source;
+        const sourceColor = isHidden ? C.dim : C.subtext;
 
         return [(
           <Box key={project.projectPath} flexDirection="column">
             {/* Horizontal divider */}
             <Text color={C.dim}>
-              {"─".repeat(labelW)}
-              {"┼" + "─".repeat(colWidths[0] + 1)}
-              {!hideDone && "┼" + "─".repeat(colWidths[1] + 1)}
+              {"-".repeat(labelW)}
+              {"+" + "-".repeat(colWidths[0] + 1)}
+              {!hideDone && "+" + "-".repeat(colWidths[1] + 1)}
             </Text>
 
-            {/* Rows: label column + TODO sections + DONE sections */}
-            {Array.from({ length: maxRows }, (_, ri) => {
-              let leftText = "";
-              let leftColor = C.text;
-              let leftBold = false;
-              if (ri === 0) {
-                // Activity icon + cursor indicator, matching TASKS view pattern
-                const icon = isCursor ? "\u25b8" : project.isActive ? "\u25CF" : "\u25CB"; // ▸ cursor, ● active, ○ idle
-                leftText = icon + " " + truncateToWidth(project.name, labelW - 2);
-                leftColor = isCursor ? C.primary : isHidden ? C.dim : project.isActive ? C.warning : C.text;
-                leftBold = true;
-              } else if (ri === 1) {
-                const basename = primary.source.split("/").pop() ?? primary.source;
-                leftText = truncateToWidth(`${basename} ${primary.totalDone}/${primary.totalItems}`, labelW);
-                leftColor = C.dim;
-              }
+            {/* Independent-column layout: left + TODO + DONE render independently */}
+            <Box flexDirection="row">
+              {/* Left: project name (line 1) + source file (line 2) + filler */}
+              <Box width={labelW} flexDirection="column" flexShrink={0} overflow="hidden">
+                <Text bold color={nameColor}>
+                  {padEndToWidth(truncateToWidth(icon + " " + project.name, labelW), labelW)}
+                </Text>
+                <Text color={sourceColor}>
+                  {padEndToWidth(truncateToWidth(`${basename} ${primary.totalDone}/${primary.totalItems}`, labelW), labelW)}
+                </Text>
+                {Array.from({ length: Math.max(0, rowH - 2) }, (_, i) => (
+                  <Text key={`lf-${i}`}>{" ".repeat(labelW)}</Text>
+                ))}
+              </Box>
 
-              const todoSec = todoVis[ri];
-              const doneSec = doneVis[ri];
-              const isTodoOverflow = !todoSec && ri === todoVis.length && todoOverflow > 0;
-              const isDoneOverflow = !doneSec && ri === doneVis.length && doneOverflow > 0;
+              {/* TODO column — separator "| " is first 2 chars of every line */}
+              <Box width={todoW} flexDirection="column" flexShrink={0} overflow="hidden">
+                {todoVis.map((sec, i) => (
+                  <Text key={i} color={C.text}>{sectionLineStr(sec, todoW)}</Text>
+                ))}
+                {todoOverflow > 0 && (
+                  <Text color={C.dim}>{padEndToWidth(`| +${todoOverflow} more sections`, todoW)}</Text>
+                )}
+                {Array.from({ length: Math.max(0, rowH - todoLineCount) }, (_, i) => (
+                  <Text key={`tf-${i}`} color={C.dim}>{padEndToWidth("| ", todoW)}</Text>
+                ))}
+              </Box>
 
-              return (
-                <Box key={ri} overflow="hidden">
-                  <Box width={labelW} flexShrink={0}>
-                    <Text wrap="truncate" color={leftColor} bold={leftBold}>{leftText}</Text>
-                  </Box>
-                  <Sep />
-                  <Box width={colWidths[0]} flexShrink={0} overflow="hidden">
-                    {todoSec ? (() => {
-                      const prefix = "\u2503 "; // ┃ (2 visual cols)
-                      const suffix = ` ${todoSec.done}/${todoSec.total}`;
-                      const titleMaxW = Math.max(4, colWidths[0] - stringWidth(prefix) - stringWidth(suffix));
-                      return (
-                        <Text wrap="truncate">
-                          <Text color={C.subtext}>{prefix}</Text>
-                          <Text color={C.text}>{truncateToWidth(todoSec.title, titleMaxW)}</Text>
-                          <Text color={C.dim}>{suffix}</Text>
-                        </Text>
-                      );
-                    })() : isTodoOverflow ? (
-                      <Text wrap="truncate" color={C.dim}>┃ +{todoOverflow} more sections</Text>
-                    ) : null}
-                  </Box>
-                  {!hideDone && (
-                    <>
-                      <Sep />
-                      <Box width={colWidths[1]} flexShrink={0} overflow="hidden">
-                        {doneSec ? (() => {
-                          const prefix = "\u2503 ";
-                          const suffix = ` ${doneSec.done}/${doneSec.total}`;
-                          const titleMaxW = Math.max(4, colWidths[1] - stringWidth(prefix) - stringWidth(suffix));
-                          return (
-                            <Text wrap="truncate">
-                              <Text color={C.dim}>{prefix}</Text>
-                              <Text color={C.dim}>{truncateToWidth(doneSec.title, titleMaxW)}</Text>
-                              <Text color={C.dim}>{suffix}</Text>
-                            </Text>
-                          );
-                        })() : isDoneOverflow ? (
-                          <Text wrap="truncate" color={C.dim}>┃ +{doneOverflow} more sections</Text>
-                        ) : null}
-                      </Box>
-                    </>
+              {/* DONE column (if visible) — same pattern, all dim */}
+              {!hideDone && (
+                <Box width={doneW} flexDirection="column" flexShrink={0} overflow="hidden">
+                  {doneVis.map((sec, i) => (
+                    <Text key={i} color={C.dim}>{sectionLineStr(sec, doneW)}</Text>
+                  ))}
+                  {doneOverflow > 0 && (
+                    <Text color={C.dim}>{padEndToWidth(`| +${doneOverflow} more sections`, doneW)}</Text>
                   )}
+                  {Array.from({ length: Math.max(0, rowH - doneLineCount) }, (_, i) => (
+                    <Text key={`df-${i}`} color={C.dim}>{padEndToWidth("| ", doneW)}</Text>
+                  ))}
                 </Box>
-              );
-            })}
+              )}
+            </Box>
           </Box>
         )];
       })}
@@ -348,7 +347,7 @@ function RoadmapSwimLane({
       {/* No-roadmap summary */}
       {noRoadmapCount > 0 && (
         <Text color={C.dim}>
-          {"─".repeat(labelW)}── {noRoadmapCount} project{noRoadmapCount !== 1 ? "s" : ""} · no roadmap ──
+          {"-".repeat(labelW)}-- {noRoadmapCount} project{noRoadmapCount !== 1 ? "s" : ""} · no roadmap --
         </Text>
       )}
     </>
@@ -520,8 +519,8 @@ function ByAgentLayout({
         const isHidden = hiddenProjects?.has(pb.project.projectPath);
         const isTaskless = pb.tasks.length === 0 && pb.goneCount === 0;
 
-        // Project icon + color based on activity state
-        const icon = pb.isActive ? "\u25CF" : "\u25CB"; // ● active, ○ idle
+        // ASCII icons to avoid ambiguous-width rendering issues
+        const icon = pb.isActive ? "*" : "o";
         const iconColor = isHidden ? C.dim : pb.isActive ? C.warning : C.dim;
 
         const visibleTasks = pb.tasks.slice(0, MAX_TASKS);
@@ -534,7 +533,7 @@ function ByAgentLayout({
             {/* Project header: {icon} {name}  {sessionLabel}  ...  {count} */}
             <Box>
               <Text wrap="truncate">
-                <Text color={isCursor ? C.primary : iconColor}>{isCursor ? "\u25b8" : icon} </Text>
+                <Text color={isCursor ? C.primary : iconColor}>{isCursor ? ">" : icon} </Text>
                 <Text color={isHidden ? C.dim : isCursor ? C.primary : C.text} bold={isCursor}>{pb.project.name}</Text>
                 {pb.sessionLabel && <Text color={C.dim}>{"  "}{pb.sessionLabel}</Text>}
               </Text>
@@ -570,7 +569,7 @@ function ByAgentLayout({
       {/* Empty-state summary: projects with no tasks and no sessions */}
       {emptyCount > 0 && (
         <Text color={C.dim}>
-          {"  "}── {emptyCount} project{emptyCount !== 1 ? "s" : ""} · no tasks ──
+          {"  "}-- {emptyCount} project{emptyCount !== 1 ? "s" : ""} · no tasks --
         </Text>
       )}
     </Box>
