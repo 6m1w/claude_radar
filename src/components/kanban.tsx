@@ -14,6 +14,7 @@ import React from "react";
 import { Box, Text, useStdout } from "ink";
 import { C, I } from "../theme.js";
 
+import stringWidth from "string-width";
 import { formatDwell, truncateToWidth } from "../utils.js";
 import type { DisplayTask, ViewProject } from "../types.js";
 
@@ -267,15 +268,15 @@ function RoadmapSwimLane({
               let leftColor = C.text;
               let leftBold = false;
               if (ri === 0) {
-                // Cursor indicator: ▸ prefix on selected project (2 chars less for name)
-                leftText = isCursor
-                  ? "\u25b8 " + truncateToWidth(project.name, labelW - 2)
-                  : truncateToWidth(project.name, labelW);
+                // Activity icon + cursor indicator, matching TASKS view pattern
+                const icon = isCursor ? "\u25b8" : project.isActive ? "\u25CF" : "\u25CB"; // ▸ cursor, ● active, ○ idle
+                leftText = icon + " " + truncateToWidth(project.name, labelW - 2);
                 leftColor = isCursor ? C.primary : isHidden ? C.dim : project.isActive ? C.warning : C.text;
-                leftBold = isCursor;
+                leftBold = true;
               } else if (ri === 1) {
-                leftText = truncateToWidth(`${primary.source} ${primary.totalDone}/${primary.totalItems}`, labelW);
-                leftColor = C.subtext;
+                const basename = primary.source.split("/").pop() ?? primary.source;
+                leftText = truncateToWidth(`${basename} ${primary.totalDone}/${primary.totalItems}`, labelW);
+                leftColor = C.dim;
               }
 
               const todoSec = todoVis[ri];
@@ -284,32 +285,43 @@ function RoadmapSwimLane({
               const isDoneOverflow = !doneSec && ri === doneVis.length && doneOverflow > 0;
 
               return (
-                <Box key={ri}>
+                <Box key={ri} overflow="hidden">
                   <Box width={labelW} flexShrink={0}>
                     <Text wrap="truncate" color={leftColor} bold={leftBold}>{leftText}</Text>
                   </Box>
                   <Sep />
-                  <Box width={colWidths[0]} flexShrink={0}>
-                    {todoSec ? (
-                      <Text wrap="truncate">
-                        <Text color={C.subtext}>┃ </Text>
-                        <Text color={C.text}>{truncateToWidth(todoSec.title, colWidths[0] - 10)}</Text>
-                        <Text color={C.dim}> {todoSec.done}/{todoSec.total}</Text>
-                      </Text>
-                    ) : isTodoOverflow ? (
+                  <Box width={colWidths[0]} flexShrink={0} overflow="hidden">
+                    {todoSec ? (() => {
+                      const prefix = "\u2503 "; // ┃ (2 visual cols)
+                      const suffix = ` ${todoSec.done}/${todoSec.total}`;
+                      const titleMaxW = Math.max(4, colWidths[0] - stringWidth(prefix) - stringWidth(suffix));
+                      return (
+                        <Text wrap="truncate">
+                          <Text color={C.subtext}>{prefix}</Text>
+                          <Text color={C.text}>{truncateToWidth(todoSec.title, titleMaxW)}</Text>
+                          <Text color={C.dim}>{suffix}</Text>
+                        </Text>
+                      );
+                    })() : isTodoOverflow ? (
                       <Text wrap="truncate" color={C.dim}>┃ +{todoOverflow} more sections</Text>
                     ) : null}
                   </Box>
                   {!hideDone && (
                     <>
                       <Sep />
-                      <Box width={colWidths[1]} flexShrink={0}>
-                        {doneSec ? (
-                          <Text wrap="truncate">
-                            <Text color={C.dim}>┃ </Text>
-                            <Text color={C.dim}>{truncateToWidth(doneSec.title, colWidths[1] - 10)} {doneSec.done}/{doneSec.total}</Text>
-                          </Text>
-                        ) : isDoneOverflow ? (
+                      <Box width={colWidths[1]} flexShrink={0} overflow="hidden">
+                        {doneSec ? (() => {
+                          const prefix = "\u2503 ";
+                          const suffix = ` ${doneSec.done}/${doneSec.total}`;
+                          const titleMaxW = Math.max(4, colWidths[1] - stringWidth(prefix) - stringWidth(suffix));
+                          return (
+                            <Text wrap="truncate">
+                              <Text color={C.dim}>{prefix}</Text>
+                              <Text color={C.dim}>{truncateToWidth(doneSec.title, titleMaxW)}</Text>
+                              <Text color={C.dim}>{suffix}</Text>
+                            </Text>
+                          );
+                        })() : isDoneOverflow ? (
                           <Text wrap="truncate" color={C.dim}>┃ +{doneOverflow} more sections</Text>
                         ) : null}
                       </Box>
@@ -599,7 +611,7 @@ export function KanbanView({
   // ─── Swimlane layout — L1 roadmap data, 2 columns (TODO/DONE) ──
   const numCols = hideDone ? 1 : 2;
 
-  const labelW = Math.min(24, Math.max(14, Math.floor(contentW * 0.2)));
+  const labelW = Math.min(26, Math.max(18, Math.floor(contentW * 0.25)));
   const colAvail = contentW - labelW - numCols * SEP_W;
   const perCol = Math.max(12, Math.floor(colAvail / numCols));
   const colWidths = Array.from({ length: numCols }, () => perCol);
