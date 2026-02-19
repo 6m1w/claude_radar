@@ -268,8 +268,8 @@ function RoadmapSwimLane({
         const doneVis = hideDone ? [] : doneSections.slice(0, MAX_SECTIONS);
         const todoOverflow = Math.max(0, todoSections.length - MAX_SECTIONS);
         const doneOverflow = hideDone ? 0 : Math.max(0, doneSections.length - MAX_SECTIONS);
-        // Independent column heights — left is always 2 lines,
-        // right columns render their own section count independently
+        // Per-row rendering with pre-computed single strings.
+        // Avoids both nested <Text> garbling AND nested flex-column layout bugs.
         const todoLineCount = todoVis.length + (todoOverflow > 0 ? 1 : 0);
         const doneLineCount = hideDone ? 0 : (doneVis.length + (doneOverflow > 0 ? 1 : 0));
         const rowH = Math.max(2, todoLineCount, doneLineCount);
@@ -281,6 +281,9 @@ function RoadmapSwimLane({
         const nameColor = isCursor ? C.primary : isHidden ? C.subtext : project.isActive ? C.warning : C.text;
         const basename = primary.source.split("/").pop() ?? primary.source;
         const sourceColor = isHidden ? C.dim : C.subtext;
+        const nameStr = padEndToWidth(truncateToWidth(icon + " " + project.name, labelW), labelW);
+        const sourceStr = padEndToWidth(truncateToWidth(`${basename} ${primary.totalDone}/${primary.totalItems}`, labelW), labelW);
+        const emptyLeft = " ".repeat(labelW);
 
         return [(
           <Box key={project.projectPath} flexDirection="column">
@@ -291,49 +294,52 @@ function RoadmapSwimLane({
               {!hideDone && "┼" + "─".repeat(colWidths[1] + 1)}
             </Text>
 
-            {/* Independent-column layout: left + TODO + DONE render independently */}
-            <Box flexDirection="row">
-              {/* Left: project name (line 1) + source file (line 2) + filler */}
-              <Box width={labelW} flexDirection="column" flexShrink={0} overflow="hidden">
-                <Text bold color={nameColor}>
-                  {padEndToWidth(truncateToWidth(icon + " " + project.name, labelW), labelW)}
-                </Text>
-                <Text color={sourceColor}>
-                  {padEndToWidth(truncateToWidth(`${basename} ${primary.totalDone}/${primary.totalItems}`, labelW), labelW)}
-                </Text>
-                {Array.from({ length: Math.max(0, rowH - 2) }, (_, i) => (
-                  <Text key={`lf-${i}`}>{" ".repeat(labelW)}</Text>
-                ))}
-              </Box>
+            {/* Rows — each row is a simple horizontal <Box>, no nested flex columns */}
+            {Array.from({ length: rowH }, (_, ri) => {
+              // Left: row 0 = name, row 1 = source, row 2+ = empty
+              const leftStr = ri === 0 ? nameStr : ri === 1 ? sourceStr : emptyLeft;
+              const leftColor = ri === 0 ? nameColor : ri === 1 ? sourceColor : C.dim;
 
-              {/* TODO column — separator "| " is first 2 chars of every line */}
-              <Box width={todoW} flexDirection="column" flexShrink={0} overflow="hidden">
-                {todoVis.map((sec, i) => (
-                  <Text key={i} color={C.text}>{sectionLineStr(sec, todoW)}</Text>
-                ))}
-                {todoOverflow > 0 && (
-                  <Text color={C.dim}>{padEndToWidth(`│ +${todoOverflow} more sections`, todoW)}</Text>
-                )}
-                {Array.from({ length: Math.max(0, rowH - todoLineCount) }, (_, i) => (
-                  <Text key={`tf-${i}`} color={C.dim}>{padEndToWidth("│ ", todoW)}</Text>
-                ))}
-              </Box>
+              // TODO column: section line or overflow or filler
+              const todoSec = todoVis[ri];
+              const isTodoOverflow = !todoSec && ri === todoVis.length && todoOverflow > 0;
+              const todoStr = todoSec
+                ? sectionLineStr(todoSec, todoW)
+                : isTodoOverflow
+                  ? padEndToWidth(`│ +${todoOverflow} more sections`, todoW)
+                  : padEndToWidth("│ ", todoW);
+              const todoColor = todoSec ? C.text : C.dim;
 
-              {/* DONE column (if visible) — same pattern, all dim */}
-              {!hideDone && (
-                <Box width={doneW} flexDirection="column" flexShrink={0} overflow="hidden">
-                  {doneVis.map((sec, i) => (
-                    <Text key={i} color={C.dim}>{sectionLineStr(sec, doneW)}</Text>
-                  ))}
-                  {doneOverflow > 0 && (
-                    <Text color={C.dim}>{padEndToWidth(`│ +${doneOverflow} more sections`, doneW)}</Text>
+              // DONE column (if visible)
+              let doneStr = "";
+              let doneColor = C.dim;
+              if (!hideDone) {
+                const doneSec = doneVis[ri];
+                const isDoneOverflow = !doneSec && ri === doneVis.length && doneOverflow > 0;
+                doneStr = doneSec
+                  ? sectionLineStr(doneSec, doneW)
+                  : isDoneOverflow
+                    ? padEndToWidth(`│ +${doneOverflow} more sections`, doneW)
+                    : padEndToWidth("│ ", doneW);
+                if (doneSec) doneColor = C.dim; // done sections are always dim
+              }
+
+              return (
+                <Box key={ri}>
+                  <Box width={labelW} flexShrink={0}>
+                    <Text bold={ri === 0} color={leftColor}>{leftStr}</Text>
+                  </Box>
+                  <Box width={todoW} flexShrink={0}>
+                    <Text color={todoColor}>{todoStr}</Text>
+                  </Box>
+                  {!hideDone && (
+                    <Box width={doneW} flexShrink={0}>
+                      <Text color={doneColor}>{doneStr}</Text>
+                    </Box>
                   )}
-                  {Array.from({ length: Math.max(0, rowH - doneLineCount) }, (_, i) => (
-                    <Text key={`df-${i}`} color={C.dim}>{padEndToWidth("│ ", doneW)}</Text>
-                  ))}
                 </Box>
-              )}
-            </Box>
+              );
+            })}
           </Box>
         )];
       })}
