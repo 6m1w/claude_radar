@@ -134,24 +134,18 @@ function RichCard({ task, column, width }: {
   );
 }
 
-// ─── Column separator (ASCII "|" to avoid ambiguous-width Unicode) ────
-//
-// Box-drawing characters (│ ┃ ─ ┼) and geometric shapes (● ○) have
-// Unicode East Asian Width = "Ambiguous". CJK terminals may render them
-// as 2 columns while stringWidth() reports 1, causing layout overflow
-// that manifests as garbled text and missing rows in narrow windows.
-// ASCII "|", "-", "+" are always 1 column on every terminal.
+// ─── Column separator ("│ " in content, "┼─" in divider) ─────
 
 function Sep() {
-  return <Text color={C.dim}>| </Text>;
+  return <Text color={C.dim}>│ </Text>;
 }
 
-const SEP_W = 2; // display width of "| "
+const SEP_W = 2; // display width of "│ "
 
-// Pre-compute a section line: "| title done/total" padded to exact width.
+// Pre-compute a section line: "│ title done/total" padded to exact width.
 // Single string avoids nested <Text> width measurement issues in Ink.
 function sectionLineStr(sec: RoadmapSection, totalW: number): string {
-  const sep = "| ";
+  const sep = "│ ";
   const suffix = ` ${sec.done}/${sec.total}`;
   const titleMaxW = Math.max(1, totalW - stringWidth(sep) - stringWidth(suffix));
   const title = truncateToWidth(sec.title, titleMaxW);
@@ -239,8 +233,8 @@ function RoadmapSwimLane({
         <Sep />
         <Box width={colWidths[0]} flexShrink={0}>
           <Text>
-            <Text color={C.accent} bold>{"TODO [ ]"}</Text>
-            <Text color={C.dim}>{padEndToWidth(" ".repeat(Math.max(1, colWidths[0] - 8 - String(totalTodo).length)) + totalTodo, colWidths[0] - 8)}</Text>
+            <Text color={C.accent} bold>{"TODO \u2610"}</Text>
+            <Text color={C.dim}>{" ".repeat(Math.max(1, colWidths[0] - 7 - String(totalTodo).length))}{totalTodo}</Text>
           </Text>
         </Box>
         {!hideDone && (
@@ -248,8 +242,8 @@ function RoadmapSwimLane({
             <Sep />
             <Box width={colWidths[1]} flexShrink={0}>
               <Text>
-                <Text color={C.success}>{"DONE [x]"}</Text>
-                <Text color={C.dim}>{padEndToWidth(" ".repeat(Math.max(1, colWidths[1] - 8 - String(totalDone).length)) + totalDone, colWidths[1] - 8)}</Text>
+                <Text color={C.success}>{"DONE \u2611"}</Text>
+                <Text color={C.dim}>{" ".repeat(Math.max(1, colWidths[1] - 7 - String(totalDone).length))}{totalDone}</Text>
               </Text>
             </Box>
           </>
@@ -283,7 +277,7 @@ function RoadmapSwimLane({
         const doneW = colWidths.length > 1 ? SEP_W + colWidths[1] : 0;
 
         // Left column data
-        const icon = isCursor ? ">" : project.isActive ? "*" : "o";
+        const icon = isCursor ? "\u25b8" : project.isActive ? "\u25cf" : "\u25cb"; // ▸ cursor, ● active, ○ idle
         const nameColor = isCursor ? C.primary : isHidden ? C.subtext : project.isActive ? C.warning : C.text;
         const basename = primary.source.split("/").pop() ?? primary.source;
         const sourceColor = isHidden ? C.dim : C.subtext;
@@ -292,9 +286,9 @@ function RoadmapSwimLane({
           <Box key={project.projectPath} flexDirection="column">
             {/* Horizontal divider */}
             <Text color={C.dim}>
-              {"-".repeat(labelW)}
-              {"+" + "-".repeat(colWidths[0] + 1)}
-              {!hideDone && "+" + "-".repeat(colWidths[1] + 1)}
+              {"─".repeat(labelW)}
+              {"┼" + "─".repeat(colWidths[0] + 1)}
+              {!hideDone && "┼" + "─".repeat(colWidths[1] + 1)}
             </Text>
 
             {/* Independent-column layout: left + TODO + DONE render independently */}
@@ -318,10 +312,10 @@ function RoadmapSwimLane({
                   <Text key={i} color={C.text}>{sectionLineStr(sec, todoW)}</Text>
                 ))}
                 {todoOverflow > 0 && (
-                  <Text color={C.dim}>{padEndToWidth(`| +${todoOverflow} more sections`, todoW)}</Text>
+                  <Text color={C.dim}>{padEndToWidth(`│ +${todoOverflow} more sections`, todoW)}</Text>
                 )}
                 {Array.from({ length: Math.max(0, rowH - todoLineCount) }, (_, i) => (
-                  <Text key={`tf-${i}`} color={C.dim}>{padEndToWidth("| ", todoW)}</Text>
+                  <Text key={`tf-${i}`} color={C.dim}>{padEndToWidth("│ ", todoW)}</Text>
                 ))}
               </Box>
 
@@ -332,10 +326,10 @@ function RoadmapSwimLane({
                     <Text key={i} color={C.dim}>{sectionLineStr(sec, doneW)}</Text>
                   ))}
                   {doneOverflow > 0 && (
-                    <Text color={C.dim}>{padEndToWidth(`| +${doneOverflow} more sections`, doneW)}</Text>
+                    <Text color={C.dim}>{padEndToWidth(`│ +${doneOverflow} more sections`, doneW)}</Text>
                   )}
                   {Array.from({ length: Math.max(0, rowH - doneLineCount) }, (_, i) => (
-                    <Text key={`df-${i}`} color={C.dim}>{padEndToWidth("| ", doneW)}</Text>
+                    <Text key={`df-${i}`} color={C.dim}>{padEndToWidth("│ ", doneW)}</Text>
                   ))}
                 </Box>
               )}
@@ -347,7 +341,7 @@ function RoadmapSwimLane({
       {/* No-roadmap summary */}
       {noRoadmapCount > 0 && (
         <Text color={C.dim}>
-          {"-".repeat(labelW)}-- {noRoadmapCount} project{noRoadmapCount !== 1 ? "s" : ""} · no roadmap --
+          {"─".repeat(labelW)}── {noRoadmapCount} project{noRoadmapCount !== 1 ? "s" : ""} · no roadmap ──
         </Text>
       )}
     </>
@@ -519,8 +513,8 @@ function ByAgentLayout({
         const isHidden = hiddenProjects?.has(pb.project.projectPath);
         const isTaskless = pb.tasks.length === 0 && pb.goneCount === 0;
 
-        // ASCII icons to avoid ambiguous-width rendering issues
-        const icon = pb.isActive ? "*" : "o";
+        // Project icon + color based on activity state
+        const icon = pb.isActive ? "\u25cf" : "\u25cb"; // ● active, ○ idle
         const iconColor = isHidden ? C.dim : pb.isActive ? C.warning : C.dim;
 
         const visibleTasks = pb.tasks.slice(0, MAX_TASKS);
@@ -533,7 +527,7 @@ function ByAgentLayout({
             {/* Project header: {icon} {name}  {sessionLabel}  ...  {count} */}
             <Box>
               <Text wrap="truncate">
-                <Text color={isCursor ? C.primary : iconColor}>{isCursor ? ">" : icon} </Text>
+                <Text color={isCursor ? C.primary : iconColor}>{isCursor ? "\u25b8" : icon} </Text>
                 <Text color={isHidden ? C.dim : isCursor ? C.primary : C.text} bold={isCursor}>{pb.project.name}</Text>
                 {pb.sessionLabel && <Text color={C.dim}>{"  "}{pb.sessionLabel}</Text>}
               </Text>
@@ -569,7 +563,7 @@ function ByAgentLayout({
       {/* Empty-state summary: projects with no tasks and no sessions */}
       {emptyCount > 0 && (
         <Text color={C.dim}>
-          {"  "}-- {emptyCount} project{emptyCount !== 1 ? "s" : ""} · no tasks --
+          {"  "}── {emptyCount} project{emptyCount !== 1 ? "s" : ""} · no tasks ──
         </Text>
       )}
     </Box>
