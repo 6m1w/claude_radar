@@ -82,6 +82,8 @@ export interface ProjectData {
   recentSessions: SessionHistoryEntry[];
   // Computed: best display name from recentSessions (summary ?? firstPrompt, newest first)
   bestSessionName?: string;
+  // Latest assistant text block from most recent active JSONL session
+  latestAssistantText?: string;
   // v0.3: Team & agent enrichment
   team?: TeamConfig;       // team config if this project has team tasks
   agentDetails: AgentInfo[]; // enriched agent info (process state, current task)
@@ -258,6 +260,8 @@ export type ViewProject = {
   events: ActivityEvent[];            // L3: all tool events (chronological, isPlanning tagged)
   activityAlerts: ActivityAlert[];
   roadmap: RoadmapData[];
+  // Latest assistant text block from most recent active session
+  latestAssistantText?: string;
   /** @deprecated Use `events` — kept temporarily for frontend migration */
   planningLog: ActivityEvent[];
   /** @deprecated Use `events` — kept temporarily for frontend migration */
