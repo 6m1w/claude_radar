@@ -153,6 +153,8 @@ function RoadmapSwimLane({
   titleSuffix,
   totalTodo,
   totalDone,
+  cursorIdx = 0,
+  projectPathsRef,
 }: {
   projects: ViewProject[];
   hideDone: boolean;
@@ -162,6 +164,8 @@ function RoadmapSwimLane({
   titleSuffix: string;
   totalTodo: number;
   totalDone: number;
+  cursorIdx?: number;
+  projectPathsRef?: React.MutableRefObject<string[]>;
 }) {
   // Deduplicate worktrees: keep one entry per repo group, propagate activity from worktrees
   const keptByParent = new Map<string, ViewProject>();
@@ -181,6 +185,10 @@ function RoadmapSwimLane({
     }
   }
   // Preserve Dashboard sort order — projects arrive pre-sorted by tier/activity
+
+  // Write effective project paths for Enter→Dashboard jump
+  if (projectPathsRef) projectPathsRef.current = withRoadmap.map(p => p.projectPath);
+  const safeCursor = Math.max(0, Math.min(cursorIdx, Math.max(0, withRoadmap.length - 1)));
 
   // Count projects with no roadmap data for the summary
   const allParentKeys = new Set(projects.map(p => p.worktreeOf ?? p.projectPath));
@@ -224,6 +232,7 @@ function RoadmapSwimLane({
       </Box>
       {withRoadmap.flatMap((project, pi) => {
         const isHidden = hiddenProjects?.has(project.projectPath);
+        const isCursor = pi === safeCursor;
         // Use primary roadmap file (most items)
         const primary = project.roadmap.reduce((best, r) => r.totalItems > best.totalItems ? r : best);
         // Section-level summaries: TODO = incomplete sections, DONE = complete sections
@@ -256,9 +265,14 @@ function RoadmapSwimLane({
             {Array.from({ length: maxRows }, (_, ri) => {
               let leftText = "";
               let leftColor = C.text;
+              let leftBold = false;
               if (ri === 0) {
-                leftText = truncateToWidth(project.name, labelW);
-                leftColor = isHidden ? C.dim : project.isActive ? C.warning : C.text;
+                // Cursor indicator: ▸ prefix on selected project (2 chars less for name)
+                leftText = isCursor
+                  ? "\u25b8 " + truncateToWidth(project.name, labelW - 2)
+                  : truncateToWidth(project.name, labelW);
+                leftColor = isCursor ? C.primary : isHidden ? C.dim : project.isActive ? C.warning : C.text;
+                leftBold = isCursor;
               } else if (ri === 1) {
                 leftText = truncateToWidth(`${primary.source} ${primary.totalDone}/${primary.totalItems}`, labelW);
                 leftColor = C.subtext;
@@ -272,7 +286,7 @@ function RoadmapSwimLane({
               return (
                 <Box key={ri}>
                   <Box width={labelW} flexShrink={0}>
-                    <Text wrap="truncate" color={leftColor} bold={ri === 0}>{leftText}</Text>
+                    <Text wrap="truncate" color={leftColor} bold={leftBold}>{leftText}</Text>
                   </Box>
                   <Sep />
                   <Box width={colWidths[0]} flexShrink={0}>
@@ -362,6 +376,7 @@ function ByAgentLayout({
   viewportHeight,
   hiddenProjects,
   titleSuffix,
+  projectPathsRef,
 }: {
   projects: ViewProject[];
   hideDone: boolean;
@@ -369,6 +384,7 @@ function ByAgentLayout({
   viewportHeight?: number;
   hiddenProjects?: Set<string>;
   titleSuffix: string;
+  projectPathsRef?: React.MutableRefObject<string[]>;
 }) {
   if (projects.length === 0) {
     return (
@@ -414,6 +430,9 @@ function ByAgentLayout({
   }
 
   // Preserve Dashboard sort order — projects arrive pre-sorted by tier/activity
+
+  // Write effective project paths for Enter→Dashboard jump
+  if (projectPathsRef) projectPathsRef.current = pBlocks.map(b => b.project.projectPath);
 
   if (pBlocks.length === 0 && projects.length === 0) {
     return <Text color={C.dim}>No projects</Text>;
@@ -544,6 +563,7 @@ export function KanbanView({
   hideDone,
   cursorIdx = 0,
   hiddenProjects,
+  projectPathsRef,
 }: {
   projects: ViewProject[];
   selectedCount: number;
@@ -551,6 +571,7 @@ export function KanbanView({
   hideDone: boolean;
   cursorIdx?: number;
   hiddenProjects?: Set<string>;
+  projectPathsRef?: React.MutableRefObject<string[]>;
 }) {
   const stdout = useStdout();
   const cols = stdout.stdout?.columns ?? 120;
@@ -570,7 +591,7 @@ export function KanbanView({
   if (layout === "by_agent") {
     return (
       <Box flexDirection="column" flexGrow={1} paddingX={1}>
-        <ByAgentLayout projects={projects} hideDone={hideDone} cursorIdx={cursorIdx} viewportHeight={viewportHeight} hiddenProjects={hiddenProjects} titleSuffix={titleSuffix} />
+        <ByAgentLayout projects={projects} hideDone={hideDone} cursorIdx={cursorIdx} viewportHeight={viewportHeight} hiddenProjects={hiddenProjects} titleSuffix={titleSuffix} projectPathsRef={projectPathsRef} />
       </Box>
     );
   }
@@ -604,6 +625,8 @@ export function KanbanView({
         titleSuffix={titleSuffix}
         totalTodo={totalTodo}
         totalDone={totalDone}
+        cursorIdx={cursorIdx}
+        projectPathsRef={projectPathsRef}
       />
     </Box>
   );

@@ -4,7 +4,7 @@
  * Connected to real data via useWatchSessions() hook.
  * Shows actual projects, tasks, and sessions from ~/.claude/
  */
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef } from "react";
 import { Box, Text, useInput, useApp, useStdout } from "ink";
 import { C, I } from "./theme.js";
 import { Panel } from "./components/panel.js";
@@ -143,6 +143,7 @@ export function App() {
   // Kanban state (shared across agent/swimlane views)
   const [kanbanHideDone, setKanbanHideDone] = useState(true);
   const [kanbanCursorIdx, setKanbanCursorIdx] = useState(0);
+  const kanbanPathsRef = useRef<string[]>([]);
 
   // Project hiding: per-project hide/show with persistence
   const [hiddenProjects, setHiddenProjects] = useState(() => getHiddenProjects());
@@ -273,6 +274,20 @@ export function App() {
     // Agent / Swimlane views
     if (view === "agent" || view === "swimlane") {
       if (key.escape) { setView("dashboard"); setKanbanCursorIdx(0); return; }
+      if (key.return) {
+        const paths = kanbanPathsRef.current;
+        const safeCursor = Math.min(kanbanCursorIdx, Math.max(0, paths.length - 1));
+        const projectPath = paths[safeCursor];
+        if (projectPath) {
+          const idx = visibleSorted.findIndex(p => p.projectPath === projectPath);
+          if (idx >= 0) {
+            setProjectIdx(idx);
+            setView("dashboard");
+            setKanbanCursorIdx(0);
+          }
+        }
+        return;
+      }
       if (input === "h") setKanbanHideDone((h) => !h);
       if (input === "j" || key.downArrow) setKanbanCursorIdx((i) => i + 1);
       if (input === "k" || key.upArrow) setKanbanCursorIdx((i) => Math.max(0, i - 1));
@@ -525,6 +540,7 @@ export function App() {
           hideDone={kanbanHideDone}
           cursorIdx={kanbanCursorIdx}
           hiddenProjects={hiddenProjects}
+          projectPathsRef={kanbanPathsRef}
         />
         <StatusBar view={view} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} focusedPanel="projects" hideDone={kanbanHideDone} showAll={showAll} />
       </Box>
@@ -1088,17 +1104,17 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone, sh
         <Text color={C.dim}>│ </Text>
         {view === "agent" ? (
           <>
+            <Text color={C.success}>Enter</Text><Text color={C.subtext}> focus  </Text>
             <Text color={C.success}>Tab</Text><Text color={C.subtext}> →swimlane  </Text>
             <Text color={C.success}>h</Text><Text color={C.subtext}> {hideDone ? "show done" : "hide done"}  </Text>
-            <Text color={C.success}>a</Text><Text color={C.subtext}> {showAll ? "active only" : "show all"}  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> dashboard  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
         ) : view === "swimlane" ? (
           <>
+            <Text color={C.success}>Enter</Text><Text color={C.subtext}> focus  </Text>
             <Text color={C.success}>Tab</Text><Text color={C.subtext}> →dashboard  </Text>
             <Text color={C.success}>h</Text><Text color={C.subtext}> {hideDone ? "show done" : "hide done"}  </Text>
-            <Text color={C.success}>a</Text><Text color={C.subtext}> {showAll ? "active only" : "show all"}  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> dashboard  </Text>
             <Text color={C.success}>q</Text><Text color={C.subtext}> quit</Text>
           </>
