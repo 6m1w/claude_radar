@@ -144,6 +144,7 @@ export function App() {
   const [kanbanHideDone, setKanbanHideDone] = useState(true);
   const [kanbanCursorIdx, setKanbanCursorIdx] = useState(0);
   const kanbanPathsRef = useRef<string[]>([]);
+  const [roadmapFileFilter, setRoadmapFileFilter] = useState<string | null>(null);
 
   // Project hiding: per-project hide/show with persistence
   const [hiddenProjects, setHiddenProjects] = useState(() => getHiddenProjects());
@@ -209,6 +210,17 @@ export function App() {
   }, [sorted, hiddenProjects, showAll]);
 
   const current = visibleSorted[projectIdx];
+
+  // Available roadmap .md files across all projects (for swimlane filter)
+  const allRoadmapFiles = useMemo(() => {
+    const files = new Set<string>();
+    for (const p of visibleSorted) {
+      for (const r of p.roadmap) {
+        files.add(r.source.split("/").pop() ?? r.source);
+      }
+    }
+    return ["all", ...Array.from(files).sort()];
+  }, [visibleSorted]);
 
   // Layout calculation
   // Ink flex handles borders internally — only count truly fixed-height elements
@@ -289,6 +301,13 @@ export function App() {
         return;
       }
       if (input === "h") setKanbanHideDone((h) => !h);
+      if (input === "f" && view === "swimlane") {
+        const currentIdx = roadmapFileFilter === null ? 0 : allRoadmapFiles.indexOf(roadmapFileFilter);
+        const nextIdx = (currentIdx + 1) % allRoadmapFiles.length;
+        setRoadmapFileFilter(allRoadmapFiles[nextIdx] === "all" ? null : allRoadmapFiles[nextIdx]);
+        setKanbanCursorIdx(0);
+        return;
+      }
       if (input === "j" || key.downArrow) setKanbanCursorIdx((i) => i + 1);
       if (input === "k" || key.upArrow) setKanbanCursorIdx((i) => Math.max(0, i - 1));
       return;
@@ -541,6 +560,7 @@ export function App() {
           cursorIdx={kanbanCursorIdx}
           hiddenProjects={hiddenProjects}
           projectPathsRef={kanbanPathsRef}
+          fileFilter={roadmapFileFilter}
         />
         <StatusBar view={view} label={viewLabel} hasActive={totalActive > 0} allDone={totalTasks > 0 && totalDone === totalTasks} focusedPanel="projects" hideDone={kanbanHideDone} showAll={showAll} />
       </Box>
@@ -1113,6 +1133,7 @@ function StatusBar({ view, label, hasActive, allDone, focusedPanel, hideDone, sh
         ) : view === "swimlane" ? (
           <>
             <Text color={C.success}>Enter</Text><Text color={C.subtext}> focus  </Text>
+            <Text color={C.success}>f</Text><Text color={C.subtext}> filter  </Text>
             <Text color={C.success}>Tab</Text><Text color={C.subtext}> →dashboard  </Text>
             <Text color={C.success}>h</Text><Text color={C.subtext}> {hideDone ? "show done" : "hide done"}  </Text>
             <Text color={C.success}>Esc</Text><Text color={C.subtext}> dashboard  </Text>

@@ -156,6 +156,7 @@ function RoadmapSwimLane({
   totalDone,
   cursorIdx = 0,
   projectPathsRef,
+  fileFilter,
 }: {
   projects: ViewProject[];
   hideDone: boolean;
@@ -167,6 +168,7 @@ function RoadmapSwimLane({
   totalDone: number;
   cursorIdx?: number;
   projectPathsRef?: React.MutableRefObject<string[]>;
+  fileFilter?: string | null;
 }) {
   // Deduplicate worktrees: keep one entry per repo group, propagate activity from worktrees
   const keptByParent = new Map<string, ViewProject>();
@@ -187,26 +189,33 @@ function RoadmapSwimLane({
   }
   // Preserve Dashboard sort order — projects arrive pre-sorted by tier/activity
 
+  // Apply file filter: keep only projects that have the selected .md file
+  const filtered = fileFilter
+    ? withRoadmap.filter(p => p.roadmap.some(r => (r.source.split("/").pop() ?? r.source) === fileFilter))
+    : withRoadmap;
+
   // Write effective project paths for Enter→Dashboard jump
-  if (projectPathsRef) projectPathsRef.current = withRoadmap.map(p => p.projectPath);
-  const safeCursor = Math.max(0, Math.min(cursorIdx, Math.max(0, withRoadmap.length - 1)));
+  if (projectPathsRef) projectPathsRef.current = filtered.map(p => p.projectPath);
+  const safeCursor = Math.max(0, Math.min(cursorIdx, Math.max(0, filtered.length - 1)));
 
   // Count projects with no roadmap data for the summary
   const allParentKeys = new Set(projects.map(p => p.worktreeOf ?? p.projectPath));
   const noRoadmapCount = allParentKeys.size - keptByParent.size;
 
-  if (withRoadmap.length === 0) {
+  const fileLabel = fileFilter ? ` · ${fileFilter}` : "";
+
+  if (filtered.length === 0) {
     return (
       <>
-        <Text color={C.primary} bold>{`ROADMAP — 0 projects${titleSuffix}`}</Text>
-        <Text color={C.dim}>No roadmap data — add [ ] checkboxes to .md files</Text>
+        <Text color={C.primary} bold>{`ROADMAP — 0 projects${fileLabel}${titleSuffix}`}</Text>
+        <Text color={C.dim}>{fileFilter ? `No projects with ${fileFilter}` : "No roadmap data — add [ ] checkboxes to .md files"}</Text>
       </>
     );
   }
 
   return (
     <>
-      <Text color={C.primary} bold>{`ROADMAP — ${withRoadmap.length} project${withRoadmap.length !== 1 ? "s" : ""}${titleSuffix}`}</Text>
+      <Text color={C.primary} bold>{`ROADMAP — ${filtered.length} project${filtered.length !== 1 ? "s" : ""}${fileLabel}${titleSuffix}`}</Text>
       {/* Header row */}
       <Box>
         <Box width={labelW} flexShrink={0}>
@@ -231,11 +240,13 @@ function RoadmapSwimLane({
           </>
         )}
       </Box>
-      {withRoadmap.flatMap((project, pi) => {
+      {filtered.flatMap((project, pi) => {
         const isHidden = hiddenProjects?.has(project.projectPath);
         const isCursor = pi === safeCursor;
-        // Use primary roadmap file (most items)
-        const primary = project.roadmap.reduce((best, r) => r.totalItems > best.totalItems ? r : best);
+        // Select roadmap file: respect filter, fall back to largest
+        const primary = fileFilter
+          ? (project.roadmap.find(r => (r.source.split("/").pop() ?? r.source) === fileFilter) ?? project.roadmap.reduce((best, r) => r.totalItems > best.totalItems ? r : best))
+          : project.roadmap.reduce((best, r) => r.totalItems > best.totalItems ? r : best);
         // Section-level summaries: TODO = incomplete sections, DONE = complete sections
         const todoSections = primary.sections.filter((s) => s.total > 0 && s.done < s.total);
         const doneSections = primary.sections.filter((s) => s.total > 0 && s.done === s.total);
@@ -576,6 +587,7 @@ export function KanbanView({
   cursorIdx = 0,
   hiddenProjects,
   projectPathsRef,
+  fileFilter,
 }: {
   projects: ViewProject[];
   selectedCount: number;
@@ -584,6 +596,7 @@ export function KanbanView({
   cursorIdx?: number;
   hiddenProjects?: Set<string>;
   projectPathsRef?: React.MutableRefObject<string[]>;
+  fileFilter?: string | null;
 }) {
   const stdout = useStdout();
   const cols = stdout.stdout?.columns ?? 120;
@@ -639,6 +652,7 @@ export function KanbanView({
         totalDone={totalDone}
         cursorIdx={cursorIdx}
         projectPathsRef={projectPathsRef}
+        fileFilter={fileFilter}
       />
     </Box>
   );
