@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, existsSync, openSync, readSync, closeSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
@@ -65,31 +65,31 @@ const DOC_PRIORITY = ["CLAUDE.md", "PRD.md", "docs/PRD.md", "TDD.md", "docs/TDD.
 
 // ─── JSONL metadata extraction (fallback when sessions-index.json absent) ───
 // Cache: path → { mtimeMs, meta }
-const jsonlMetaCache = new Map<string, { mtimeMs: number; meta: { summary?: string; firstPrompt?: string; gitBranch?: string } }>();
+const jsonlMetaCache = new Map<string, { mtimeMs: number; meta: { summary?: string; firstPrompt?: string; gitBranch?: string; latestAssistantText?: string } }>();
 
 // Max bytes to read per JSONL for metadata extraction (avoids reading 19MB+ files fully)
 const JSONL_META_READ_LIMIT = 256 * 1024; // 256KB from start for firstPrompt + gitBranch
-const JSONL_META_TAIL_LIMIT = 128 * 1024; // 128KB from end for /rename (may appear late)
 
 export function extractSessionMetaFromJsonl(
   jsonlPath: string,
-): { summary?: string; firstPrompt?: string; gitBranch?: string } | null {
+): { summary?: string; firstPrompt?: string; gitBranch?: string; latestAssistantText?: string } | null {
   try {
     const st = statSync(jsonlPath);
     const cached = jsonlMetaCache.get(jsonlPath);
     if (cached && cached.mtimeMs >= st.mtimeMs) return cached.meta;
 
-    const fd = require("node:fs").openSync(jsonlPath, "r");
+    const fd = openSync(jsonlPath, "r");
     const fileSize = st.size;
 
     let firstPrompt: string | undefined;
     let summary: string | undefined;
     let gitBranch: string | undefined;
+    let latestAssistantText: string | undefined;
 
     // Read head chunk for firstPrompt + gitBranch
     const headSize = Math.min(fileSize, JSONL_META_READ_LIMIT);
     const headBuf = Buffer.alloc(headSize);
-    require("node:fs").readSync(fd, headBuf, 0, headSize, 0);
+    readSync(fd, headBuf, 0, headSize, 0);
     const headLines = headBuf.toString("utf-8").split("\n");
 
     for (const line of headLines) {
@@ -123,31 +123,58 @@ export function extractSessionMetaFromJsonl(
       } catch { /* incomplete JSON line at chunk boundary */ }
     }
 
-    // Read tail chunk for /rename (may appear late in session)
-    if (!summary && fileSize > JSONL_META_READ_LIMIT) {
-      const tailStart = Math.max(0, fileSize - JSONL_META_TAIL_LIMIT);
-      const tailSize = fileSize - tailStart;
+    // Read tail chunk for /rename + latestAssistantText
+    const TAIL_READ = 64 * 1024; // 64KB — enough for recent messages
+    const tailStart = Math.max(0, fileSize - TAIL_READ);
+    const tailSize = fileSize - tailStart;
+    if (tailSize > 0) {
       const tailBuf = Buffer.alloc(tailSize);
-      require("node:fs").readSync(fd, tailBuf, 0, tailSize, tailStart);
+      readSync(fd, tailBuf, 0, tailSize, tailStart);
       const tailLines = tailBuf.toString("utf-8").split("\n");
 
-      for (const line of tailLines) {
-        if (!line) continue;
-        try {
-          const obj = JSON.parse(line);
-          if (obj.type === "user" && typeof obj.message?.content === "string") {
-            const m = obj.message.content.match(
-              /<local-command-stdout>Session and agent renamed to: (.+?)<\/local-command-stdout>/,
-            );
-            if (m) summary = m[1];
-          }
-        } catch { /* incomplete line at chunk boundary */ }
+      // Forward scan for /rename
+      if (!summary) {
+        for (const line of tailLines) {
+          if (!line) continue;
+          try {
+            const obj = JSON.parse(line);
+            if (obj.type === "user" && typeof obj.message?.content === "string") {
+              const m = obj.message.content.match(
+                /<local-command-stdout>Session and agent renamed to: (.+?)<\/local-command-stdout>/,
+              );
+              if (m) summary = m[1];
+            }
+          } catch { /* incomplete line at chunk boundary */ }
+        }
+      }
+
+      // Reverse scan for latest assistant text block (only for recent sessions)
+      const isRecent = (Date.now() - st.mtimeMs) < STALE_TASK_THRESHOLD_MS;
+      if (isRecent) {
+        for (let i = tailLines.length - 1; i >= 0; i--) {
+          const line = tailLines[i];
+          if (!line) continue;
+          try {
+            const obj = JSON.parse(line);
+            const msg = obj.message ?? obj;
+            if (msg.role !== "assistant") continue;
+            const content = msg.content;
+            if (!Array.isArray(content)) continue;
+            for (const block of content) {
+              if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
+                latestAssistantText = block.text.split("\n")[0].trim().slice(0, 100);
+                break;
+              }
+            }
+            if (latestAssistantText) break;
+          } catch { /* incomplete line */ }
+        }
       }
     }
 
-    require("node:fs").closeSync(fd);
+    closeSync(fd);
 
-    const meta = { summary, firstPrompt, gitBranch };
+    const meta = { summary, firstPrompt, gitBranch, latestAssistantText };
     jsonlMetaCache.set(jsonlPath, { mtimeMs: st.mtimeMs, meta });
     return meta;
   } catch {
@@ -184,6 +211,7 @@ interface DiscoveredProject {
   recentSessions: SessionHistoryEntry[];  // from sessions-index entries
   bestSessionName?: string; // computed: most recent summary ?? firstPrompt
   recentSessionIds: string[]; // session IDs with JSONL mtime < STALE_TASK_THRESHOLD_MS
+  latestAssistantText?: string; // last assistant text block from most recent active session
 }
 
 // Cached results for gated phases (declared after interfaces)
@@ -210,6 +238,7 @@ function discoverProjects(): DiscoveredProject[] {
       let totalSessions = 0;
       let activeSessions = 0;
       let lastSessionActivity = new Date(0);
+      let latestJsonlPath: string | undefined; // most recent substantial JSONL
       const recentSessionIds: string[] = []; // sessions with mtime < STALE_TASK_THRESHOLD
 
       try {
@@ -228,6 +257,7 @@ function discoverProjects(): DiscoveredProject[] {
             // push old projects to the top of the list.
             if (fileSize >= MIN_SESSION_SIZE_BYTES && mtime > lastSessionActivity) {
               lastSessionActivity = mtime;
+              latestJsonlPath = filePath;
             }
             if (now - mtime.getTime() < ACTIVE_THRESHOLD_MS) activeSessions++;
             // Track sessions with recent JSONL activity for stale task filtering
@@ -327,6 +357,13 @@ function discoverProjects(): DiscoveredProject[] {
         }
       }
 
+      // Extract latestAssistantText from the most recent JSONL (cached, cheap)
+      let latestAssistantText: string | undefined;
+      if (latestJsonlPath) {
+        const meta = extractSessionMetaFromJsonl(latestJsonlPath);
+        latestAssistantText = meta?.latestAssistantText;
+      }
+
       results.push({
         claudeDir: dirPath,
         projectPath,
@@ -339,6 +376,7 @@ function discoverProjects(): DiscoveredProject[] {
         recentSessions: trimmedRecent,
         bestSessionName,
         recentSessionIds,
+        latestAssistantText,
       });
     }
   } catch {
@@ -1044,6 +1082,10 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       existing.recentSessions.push(...disc.recentSessions);
       existing.recentSessionIds.push(...disc.recentSessionIds);
       if (!existing.gitBranch && disc.gitBranch) existing.gitBranch = disc.gitBranch;
+      // Keep latestAssistantText from whichever has more recent activity
+      if (disc.latestAssistantText && disc.lastSessionActivity >= existing.lastSessionActivity) {
+        existing.latestAssistantText = disc.latestAssistantText;
+      }
     } else {
       mergedDisc.set(disc.projectPath, { ...disc, sessionIds: [...disc.sessionIds] });
     }
@@ -1113,6 +1155,7 @@ export function scanAll(): { projects: ProjectData[]; sessions: SessionData[] } 
       roadmap,
       recentSessions: disc.recentSessions.slice(-8),
       bestSessionName: disc.bestSessionName,
+      latestAssistantText: disc.latestAssistantText,
       team: matchedTeam,
       agentDetails,
     });

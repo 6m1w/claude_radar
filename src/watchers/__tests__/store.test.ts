@@ -1126,7 +1126,7 @@ describe("tool_failure events", () => {
     expect(activity).toHaveLength(1);
     expect(activity[0].isError).toBe(true);
     expect(activity[0].toolName).toBe("Bash");
-    expect(activity[0].summary).toMatch(/^❌/);
+    expect(activity[0].summary).toMatch(/^✗/);
   });
 
   it("should not ingest tool_failure into task store", () => {
